@@ -151,14 +151,14 @@ public class OpeningGameEvaluator implements BoardEvaluator {
               piece.getPieceType() == Piece.PieceType.BISHOP) {
 
         if ((isWhite && pieceRank != 7) || (!isWhite && pieceRank != 0)) {
-          score += 15;
+          score += 8;
           developedMinorPieces++;
 
           if (isCentralPosition(piece.getPiecePosition(), piece.getPieceType())) {
-            score += 8;
+            score += 4;
           }
         } else {
-          score -= 20;
+          score -= 10;
           undevelopedMinorPieces++;
         }
       }
@@ -175,23 +175,23 @@ public class OpeningGameEvaluator implements BoardEvaluator {
     }
 
     if (queenSortied) {
-      score -= undevelopedMinorPieces * 20;
+      score -= undevelopedMinorPieces * 10;
 
       if (queenPastMidline) {
-        score -= undevelopedMinorPieces * 15;
+        score -= undevelopedMinorPieces * 8;
       }
     }
 
     if (castled) {
-      score += 100;
+      score += 50;
     } else if (canCastle(player)) {
-      score += 25;
+      score += 12;
     } else if (!canCastle(player)) {
-      score -= 60;
+      score -= 30;
     }
 
     if (developedMinorPieces >= 3 && castled && !queenSortied) {
-      score += 20;
+      score += 10;
     }
 
     return score;
@@ -260,12 +260,12 @@ public class OpeningGameEvaluator implements BoardEvaluator {
       for (int centralSquare : centralSquares) {
         if (position == centralSquare) {
           if (piece.getPieceType() == Piece.PieceType.PAWN) {
-            score += 80;
+            score += 40;
           } else if (piece.getPieceType() == Piece.PieceType.KNIGHT ||
                   piece.getPieceType() == Piece.PieceType.BISHOP) {
-            score += 40;
-          } else {
             score += 20;
+          } else {
+            score += 10;
           }
         }
       }
@@ -273,9 +273,9 @@ public class OpeningGameEvaluator implements BoardEvaluator {
       for (int extendedSquare : extendedCenterSquares) {
         if (position == extendedSquare) {
           if (piece.getPieceType() == Piece.PieceType.PAWN) {
-            score += 30;
-          } else {
             score += 15;
+          } else {
+            score += 8;
           }
         }
       }
@@ -287,11 +287,11 @@ public class OpeningGameEvaluator implements BoardEvaluator {
     }
 
     for (int centralSquare : centralSquares) {
-      score += controlledSquares[centralSquare] * 15;
+      score += controlledSquares[centralSquare] * 8;
     }
 
     for (int extendedSquare : extendedCenterSquares) {
-      score += controlledSquares[extendedSquare] * 5;
+      score += controlledSquares[extendedSquare] * 3;
     }
 
     return score;
