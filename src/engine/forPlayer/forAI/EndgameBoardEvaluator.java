@@ -25,6 +25,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** Singleton instance of the EndgameBoardEvaluator. */
   private static final EndgameBoardEvaluator Instance = new EndgameBoardEvaluator();
 
+  /** The fraction of a threatened piece's value charged against the side that owns it. */
+  private static final double THREAT_FRACTION = 0.25;
+
   /** Private constructor to prevent instantiation outside of class. */
   private EndgameBoardEvaluator() {}
 
@@ -1523,46 +1526,51 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Evaluates piece safety in endgame positions where piece coordination becomes critical.
-   * In endgames, losing material is often decisive, so hanging pieces are penalized severely.
+   * Evaluates piece safety by charging the player for the single most valuable piece the opponent
+   * threatens. A piece is threatened when the opponent attacks its square more times than the
+   * player defends it, or when it is worth more than a pawn and stands on a square an opposing
+   * pawn attacks. Only the largest such threat is charged, at {@link #THREAT_FRACTION} of the
+   * threatened piece's value, so the score this term can produce is bounded by a quarter of a
+   * queen. The king is not scored.
    *
    * @param player The player whose piece safety is being evaluated.
    * @param board The current chess board state.
    * @return The piece safety evaluation score.
    */
   private double pieceSafetyEvaluation(final Player player, final Board board) {
-    double safetyScore = 0;
+    double largestThreat = 0;
     final Collection<Piece> playerPieces = player.getActivePieces();
     final Collection<Move> opponentMoves = player.getOpponent().getLegalMoves();
 
-    int[] attackCount = new int[BoardUtils.NUM_TILES];
+    final int[] attackCount = new int[BoardUtils.NUM_TILES];
+    final int[] pawnAttackCount = new int[BoardUtils.NUM_TILES];
 
     for (final Move move : opponentMoves) {
-      attackCount[move.getDestinationCoordinate()]++;
+      final int destination = move.getDestinationCoordinate();
+      attackCount[destination]++;
+
+      if (move.getMovedPiece().getPieceType() == Piece.PieceType.PAWN) {
+        pawnAttackCount[destination]++;
+      }
     }
 
     for (final Piece piece : playerPieces) {
       if (piece.getPieceType() == Piece.PieceType.KING) continue;
 
       final int position = piece.getPiecePosition();
-      final int attacks = attackCount[position];
-      final int defenses = countDefenders(playerPieces, position, board);
+      final int pieceValue = piece.getPieceValue();
 
-      if (attacks > 0) {
-        if (defenses == 0) {
-          switch (piece.getPieceType()) {
-            case QUEEN -> safetyScore -= 900;
-            case ROOK -> safetyScore -= 520;
-            case BISHOP, KNIGHT -> safetyScore -= 340;
-            case PAWN -> safetyScore -= 110;
-          }
-        } else if (attacks > defenses) {
-          safetyScore -= piece.getPieceValue() * 0.9;
-        }
+      final boolean harriedByPawn = pawnAttackCount[position] > 0
+              && pieceValue > Piece.PieceType.PAWN.getPieceValue();
+      final boolean outnumbered = attackCount[position] > 0
+              && attackCount[position] > countDefenders(playerPieces, position, board);
+
+      if (outnumbered || harriedByPawn) {
+        largestThreat = Math.max(largestThreat, pieceValue * THREAT_FRACTION);
       }
     }
 
-    return safetyScore;
+    return -largestThreat;
   }
 
   /**
