@@ -1310,6 +1310,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /**
    * Implements quiescence search to handle tactical sequences involving captures
    * and checks to avoid the horizon effect in evaluation.
+   * <p>
+   * A checkmate is scored as a mate by the evasion search this node delegates to when the side to
+   * move is in check. A stalemate is not detected here and scores as the static evaluation.
    *
    * @param board The current board position.
    * @param alpha The alpha bound.
@@ -1348,10 +1351,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       if (alpha >= beta) {
         return entryScore;
       }
-    }
-
-    if (BoardUtils.isEndOfGame(board)) {
-      return terminalScore(board, ply);
     }
 
     // A side that is in check cannot decline to move, so the static score is not a bound on what
