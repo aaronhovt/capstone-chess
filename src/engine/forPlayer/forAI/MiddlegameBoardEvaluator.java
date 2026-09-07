@@ -27,6 +27,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /** Singleton instance of the MiddlegameBoardEvaluator. */
   private static final MiddlegameBoardEvaluator Instance = new MiddlegameBoardEvaluator();
 
+  /** The fraction of a threatened piece's value charged against the side that owns it. */
+  private static final double THREAT_FRACTION = 0.25;
+
   /**
    * Private constructor to prevent instantiation outside of the class.
    * Enforces the singleton pattern.
@@ -1197,19 +1200,23 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Evaluates how well pieces protect each other and heavily penalizes hanging pieces.
-   * This version includes comprehensive piece safety analysis with severe penalties
-   * for undefended valuable pieces that can be captured.
+   * Evaluates how well pieces protect each other and charges the player for the single most
+   * valuable piece the opponent threatens. A piece is threatened when the opponent attacks its
+   * square more times than the player defends it, or when it is worth more than a pawn and stands
+   * on a square an opposing pawn attacks. Only the largest such threat is charged, at
+   * {@link #THREAT_FRACTION} of the threatened piece's value, so the penalty this term can produce
+   * is bounded by a third of a queen.
    *
    * @param playerPieces The player's pieces.
    * @param board The current chess board state.
    * @param opponentStatistics The statistics of the opposing player's legal move list.
-   * @return The enhanced piece protection evaluation score.
+   * @return The piece protection evaluation score.
    */
   private double evaluatePieceProtection(final Collection<Piece> playerPieces,
                                          final Board board,
                                          final MoveStatistics opponentStatistics) {
     double protectionScore = 0;
+    double largestThreat = 0;
 
     final int[] squareAttackCount = opponentStatistics.destinationCount();
     final int[] squarePawnAttackCount = opponentStatistics.pawnDestinationCount();
@@ -1225,23 +1232,15 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       final int position = piece.getPiecePosition();
       final int protectionCount = defenderCount[position];
       final int attackCount = squareAttackCount[position];
+      final int pieceValue = piece.getPieceValue();
 
-      if (attackCount > 0) {
-        if (protectionCount == 0) {
-          switch (piece.getPieceType()) {
-            case QUEEN -> protectionScore -= 850;
-            case ROOK -> protectionScore -= 480;
-            case BISHOP -> protectionScore -= 320;
-            case KNIGHT -> protectionScore -= 300;
-            case PAWN -> protectionScore -= 95;
-          }
-        } else if (attackCount > protectionCount) {
-          double penalty = piece.getPieceValue() * 0.8 * (attackCount - protectionCount);
-          protectionScore -= penalty;
-        } else {
-          protectionScore += piece.getPieceValue() * 0.1;
-        }
-      } else if (protectionCount > 0) {
+      final boolean outnumbered = attackCount > protectionCount;
+      final boolean harriedByPawn = squarePawnAttackCount[position] > 0
+              && pieceValue > Piece.PieceType.PAWN.getPieceValue();
+
+      if (outnumbered || harriedByPawn) {
+        largestThreat = Math.max(largestThreat, pieceValue * THREAT_FRACTION);
+      } else if (attackCount == 0 && protectionCount > 0) {
         protectionScore += 8;
 
         if (piece.getPieceType() == Piece.PieceType.QUEEN) {
@@ -1250,15 +1249,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
           protectionScore += 4 * protectionCount;
         }
       }
-
-      if (protectionCount == 0) {
-        for (int i = 0; i < squarePawnAttackCount[position]; i++) {
-          protectionScore -= piece.getPieceValue() * 0.3;
-        }
-      }
     }
 
-    return protectionScore;
+    return protectionScore - largestThreat;
   }
 
   /**
