@@ -312,7 +312,7 @@ public class OpeningGameEvaluator implements BoardEvaluator {
     final int kingPosition = playerKing.getPiecePosition();
 
     if (playerKing.isOnCastledSquare()) {
-      score += 120;
+      score += 40;
       score += evaluatePawnShield(player, kingPosition);
     } else {
       int file = kingPosition % 8;
@@ -320,7 +320,7 @@ public class OpeningGameEvaluator implements BoardEvaluator {
 
       boolean inCenter = (file >= 2 && file <= 5);
       if (inCenter) {
-        score -= 80;
+        score -= 25;
       }
     }
 
@@ -367,13 +367,13 @@ public class OpeningGameEvaluator implements BoardEvaluator {
     }
 
     if (pawnsInShield == 3) {
-      score += 60;
+      score += 20;
     } else if (pawnsInShield == 2) {
-      score += 30;
-    } else if (pawnsInShield == 1) {
       score += 10;
+    } else if (pawnsInShield == 1) {
+      score += 4;
     } else {
-      score -= 40;
+      score -= 15;
     }
 
     return score;
