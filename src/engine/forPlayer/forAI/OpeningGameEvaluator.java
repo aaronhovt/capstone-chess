@@ -24,6 +24,9 @@ public class OpeningGameEvaluator implements BoardEvaluator {
   /** Singleton instance of the OpeningGameEvaluator. */
   private static final OpeningGameEvaluator Instance = new OpeningGameEvaluator();
 
+  /** The fraction of a threatened piece's value charged against the side that owns it. */
+  private static final double THREAT_FRACTION = 0.25;
+
   /**
    * Constructs a new OpeningGameEvaluator instance.
    * Private constructor prevents external instantiation to enforce singleton pattern.
@@ -798,10 +801,12 @@ public class OpeningGameEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Evaluates piece safety by detecting hanging pieces and losing exchanges.
-   * Heavily penalizes an attacked piece with no defender, and penalizes an attacked piece by the
-   * estimated material loss when it is attacked more times than it is defended. The king is not
-   * scored.
+   * Evaluates piece safety by charging the player for the single most valuable piece the opponent
+   * threatens. A piece is threatened when the opponent attacks its square more times than the
+   * player defends it, or when it is worth more than a pawn and stands on a square an opposing
+   * pawn attacks. Only the largest such threat is charged, at {@link #THREAT_FRACTION} of the
+   * threatened piece's value, so the score this term can produce is bounded by a quarter of a
+   * queen. The king is not scored.
    *
    * @param player The player whose piece safety is being evaluated.
    * @param board The current chess board state.
@@ -811,136 +816,37 @@ public class OpeningGameEvaluator implements BoardEvaluator {
   private double pieceSafetyScore(final Player player,
                                   final Board board,
                                   final int[] defenderCounts) {
-    double safetyScore = 0;
+    double largestThreat = 0;
     final Collection<Piece> playerPieces = player.getActivePieces();
     final Collection<Move> opponentMoves = player.getOpponent().getLegalMoves();
 
     final int[] attackerCounts = new int[BoardUtils.NUM_TILES];
+    final int[] pawnAttackerCounts = new int[BoardUtils.NUM_TILES];
     for (final Move move : opponentMoves) {
-      attackerCounts[move.getDestinationCoordinate()]++;
+      final int destination = move.getDestinationCoordinate();
+      attackerCounts[destination]++;
+
+      if (move.getMovedPiece().getPieceType() == Piece.PieceType.PAWN) {
+        pawnAttackerCounts[destination]++;
+      }
     }
 
     for (final Piece piece : playerPieces) {
       if (piece.getPieceType() == Piece.PieceType.KING) continue;
 
       final int position = piece.getPiecePosition();
-      final int attackerCount = attackerCounts[position];
-      if (attackerCount == 0) continue;
+      final int pieceValue = piece.getPieceValue();
 
-      final int defenderCount = defenderCounts[position];
+      final boolean outnumbered = attackerCounts[position] > defenderCounts[position];
+      final boolean harriedByPawn = pawnAttackerCounts[position] > 0
+              && pieceValue > Piece.PieceType.PAWN.getPieceValue();
 
-      if (defenderCount == 0) {
-        switch (piece.getPieceType()) {
-          case QUEEN -> safetyScore -= 800;
-          case ROOK -> safetyScore -= 450;
-          case BISHOP, KNIGHT -> safetyScore -= 280;
-          case PAWN -> safetyScore -= 90;
-        }
-      } else if (attackerCount > defenderCount) {
-        final int[] attackerValues = sortedMovedPieceValues(opponentMoves, position, attackerCount);
-        final int[] defenderValues = sortedDefenderValues(playerPieces, position, board);
-        int materialLoss = calculateSimpleExchange(piece, attackerValues, defenderValues);
-        safetyScore -= materialLoss * 0.7;
+      if (outnumbered || harriedByPawn) {
+        largestThreat = Math.max(largestThreat, pieceValue * THREAT_FRACTION);
       }
     }
 
-    return safetyScore;
-  }
-
-  /**
-   * Collects the moved piece values of every move that targets a square, in ascending order.
-   *
-   * @param moves The moves to scan.
-   * @param position The targeted square.
-   * @param count The number of moves in the collection whose destination is the targeted square.
-   * @return The moved piece values in ascending order.
-   */
-  private int[] sortedMovedPieceValues(final Collection<Move> moves, final int position, final int count) {
-    final int[] values = new int[count];
-    int index = 0;
-
-    for (final Move move : moves) {
-      if (move.getDestinationCoordinate() == position) {
-        values[index++] = move.getMovedPiece().getPieceValue();
-      }
-    }
-
-    Arrays.sort(values);
-
-    return values;
-  }
-
-  /**
-   * Collects the values of the pieces in the given collection that defend the given square, in
-   * ascending order. The piece standing on the square is not included, and a piece whose line to
-   * the square is blocked by another piece is not included.
-   *
-   * @param playerPieces The pieces to test.
-   * @param square The square to test.
-   * @param board The current chess board state.
-   * @return The values of the defending pieces, in ascending order.
-   */
-  private int[] sortedDefenderValues(final Collection<Piece> playerPieces,
-                                     final int square,
-                                     final Board board) {
-    final int[] values = new int[playerPieces.size()];
-    int index = 0;
-
-    for (final Piece piece : playerPieces) {
-      if (piece.getPiecePosition() != square && piece.defendsSquare(square, board)) {
-        values[index++] = piece.getPieceValue();
-      }
-    }
-
-    final int[] defenderValues = Arrays.copyOf(values, index);
-    Arrays.sort(defenderValues);
-
-    return defenderValues;
-  }
-
-  /**
-   * Calculates the approximate material outcome of an exchange sequence.
-   * Uses simplified logic to estimate the result of a capture sequence.
-   *
-   * @param piece The piece being attacked.
-   * @param attackerValues The values of the pieces that can capture, in ascending order.
-   * @param defenderValues The values of the pieces that can defend, in ascending order.
-   * @return The estimated material loss for the defending side.
-   */
-  private int calculateSimpleExchange(final Piece piece, final int[] attackerValues, final int[] defenderValues) {
-    int materialBalance = 0;
-    int targetValue = piece.getPieceValue();
-    boolean attackerTurn = true;
-
-    materialBalance += targetValue;
-
-    int attackerIndex = 0;
-    int defenderIndex = 0;
-
-    while ((attackerTurn && defenderIndex < defenderValues.length) ||
-            (!attackerTurn && attackerIndex < attackerValues.length)) {
-
-      if (attackerTurn) {
-        if (attackerIndex < attackerValues.length) {
-          materialBalance -= attackerValues[attackerIndex];
-          attackerIndex++;
-        }
-        defenderIndex++;
-      } else {
-        if (defenderIndex < defenderValues.length) {
-          materialBalance += defenderValues[defenderIndex];
-          defenderIndex++;
-        }
-        attackerIndex++;
-      }
-
-      attackerTurn = !attackerTurn;
-
-      if (attackerTurn && materialBalance <= 0) break;
-      if (!attackerTurn && materialBalance >= 0) break;
-    }
-
-    return Math.max(0, materialBalance);
+    return -largestThreat;
   }
 
   /**
