@@ -2,7 +2,8 @@
 setlocal enabledelayedexpansion
 
 rem Compiles the engine and packages the runnable jars. Run "build" for every target or
-rem "build <target>" for one of uci, gui, perft, tactical, book, match, compare, all, or clean.
+rem "build <target>" for one of uci, gui, perft, tactical, eval, bench, book, match,
+rem compare, all, or clean.
 
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
@@ -57,6 +58,8 @@ if /i "%TARGET%"=="uci" goto :uciTarget
 if /i "%TARGET%"=="gui" goto :guiTarget
 if /i "%TARGET%"=="perft" goto :perftTarget
 if /i "%TARGET%"=="tactical" goto :tacticalTarget
+if /i "%TARGET%"=="eval" goto :evalTarget
+if /i "%TARGET%"=="bench" goto :benchTarget
 if /i "%TARGET%"=="book" goto :bookTarget
 if /i "%TARGET%"=="match" goto :matchTarget
 if /i "%TARGET%"=="compare" goto :compareTarget
@@ -69,6 +72,8 @@ call :buildUci || exit /b 1
 call :buildGui || exit /b 1
 call :buildSuite "perft" "engine.forTesting.PerftSuite" "src\engine\forTesting\PerftSuite.java" || exit /b 1
 call :buildSuite "tactical" "engine.forTesting.TacticalSuite" "src\engine\forTesting\TacticalSuite.java" || exit /b 1
+call :buildSuite "eval" "engine.forTesting.EvaluationSuite" "src\engine\forTesting\EvaluationSuite.java" || exit /b 1
+call :buildSuite "bench" "engine.forTesting.EvaluationBench" "src\engine\forTesting\EvaluationBench.java" || exit /b 1
 call :buildSuite "book" "engine.forTesting.OpeningBook" "src\engine\forTesting\OpeningBook.java" || exit /b 1
 call :buildSuite "match" "%MATCH_MAIN%" "src\engine\forTesting\SelfPlayMatch.java" || exit /b 1
 goto :done
@@ -87,6 +92,14 @@ goto :done
 
 :tacticalTarget
 call :buildSuite "tactical" "engine.forTesting.TacticalSuite" "src\engine\forTesting\TacticalSuite.java" || exit /b 1
+goto :done
+
+:evalTarget
+call :buildSuite "eval" "engine.forTesting.EvaluationSuite" "src\engine\forTesting\EvaluationSuite.java" || exit /b 1
+goto :done
+
+:benchTarget
+call :buildSuite "bench" "engine.forTesting.EvaluationBench" "src\engine\forTesting\EvaluationBench.java" || exit /b 1
 goto :done
 
 :bookTarget
@@ -115,6 +128,8 @@ echo   uci        compile the UCI engine and package %UCI_JAR%
 echo   gui        compile the interface and package %GUI_JAR%
 echo   perft      compile PerftSuite
 echo   tactical   compile TacticalSuite
+echo   eval       compile EvaluationSuite
+echo   bench      compile EvaluationBench
 echo   book       compile OpeningBook
 echo   match      compile SelfPlayMatch
 echo   compare    play one revision against another, see "build compare" for its arguments
