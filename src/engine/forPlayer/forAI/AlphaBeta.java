@@ -971,10 +971,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    if (BoardUtils.isEndOfGame(board)) {
-      return terminalScore(board, ply);
-    }
-
     final boolean inCheckAtNode = board.currentPlayer().isInCheck();
 
     if (depth == 1 && !inCheckAtNode) {
@@ -1103,6 +1099,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       movesSearched++;
     }
 
+    // No legal move was searched. The static exchange skip in the loop cannot fire until three
+    // legal moves have been counted, so this can only mean the position has no legal move.
+    if (movesSearched == 0) {
+      return terminalScore(board, ply);
+    }
+
     byte nodeType = TranspositionTable.EXACT;
     if (currentAlpha <= alpha) {
       nodeType = TranspositionTable.UPPERBOUND;
@@ -1159,10 +1161,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       if (alpha >= beta) {
         return entryScore;
       }
-    }
-
-    if (BoardUtils.isEndOfGame(board)) {
-      return terminalScore(board, ply);
     }
 
     final boolean inCheckAtNode = board.currentPlayer().isInCheck();
@@ -1290,6 +1288,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
       firstMove = false;
       movesSearched++;
+    }
+
+    // No legal move was searched. The static exchange skip in the loop cannot fire until three
+    // legal moves have been counted, so this can only mean the position has no legal move.
+    if (movesSearched == 0) {
+      return terminalScore(board, ply);
     }
 
     byte nodeType = TranspositionTable.EXACT;
