@@ -871,8 +871,8 @@ public class OpeningGameEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Counts the number of developed minor pieces for the given alliance.
-   * A piece is considered developed if it has moved from its starting rank.
+   * Counts the knights and bishops in the given collection that stand off the alliance's back
+   * rank.
    *
    * @param pieces The collection of pieces to count.
    * @param alliance The alliance of the pieces being counted.
@@ -882,9 +882,8 @@ public class OpeningGameEvaluator implements BoardEvaluator {
     int count = 0;
 
     for (Piece piece : pieces) {
-      if ((piece.getPieceType() == Piece.PieceType.KNIGHT ||
-              piece.getPieceType() == Piece.PieceType.BISHOP) &&
-              !piece.isFirstMove()) {
+      if (piece.getPieceType() == Piece.PieceType.KNIGHT ||
+              piece.getPieceType() == Piece.PieceType.BISHOP) {
 
         int rank = piece.getPiecePosition() / 8;
         if ((alliance.isWhite() && rank != 7) ||
