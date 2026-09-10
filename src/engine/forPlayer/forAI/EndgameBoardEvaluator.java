@@ -28,6 +28,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** The fraction of a threatened piece's value charged against the side that owns it. */
   private static final double THREAT_FRACTION = 0.25;
 
+  /** The number of distinct piece types. */
+  private static final int PIECE_TYPE_COUNT = Piece.PieceType.values().length;
+
   /** Private constructor to prevent instantiation outside of class. */
   private EndgameBoardEvaluator() {}
 
@@ -50,8 +53,10 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   @Override
   public double evaluate(final Board board) {
-    final PawnLists pawns = new PawnLists(getPlayerPawns(board.whitePlayer()),
-            getPlayerPawns(board.blackPlayer()));
+    final List<Piece> whitePawns = getPlayerPawns(board.whitePlayer());
+    final List<Piece> blackPawns = getPlayerPawns(board.blackPlayer());
+    final PawnLists pawns = new PawnLists(whitePawns, blackPawns,
+            PawnLists.occupancy(whitePawns), PawnLists.occupancy(blackPawns));
 
     return (score(board.whitePlayer(), board, pawns) - score(board.blackPlayer(), board, pawns));
   }
@@ -62,8 +67,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param white The tiles holding white's pawns, in board iteration order.
    * @param black The tiles holding black's pawns, in board iteration order.
+   * @param whiteOccupancy The tiles holding white's pawns, as one bit per tile.
+   * @param blackOccupancy The tiles holding black's pawns, as one bit per tile.
    */
-  private record PawnLists(List<Piece> white, List<Piece> black) {
+  private record PawnLists(List<Piece> white, List<Piece> black, long whiteOccupancy,
+                           long blackOccupancy) {
 
     /**
      * Returns the pawns belonging to the given player.
@@ -73,6 +81,32 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
      */
     private List<Piece> of(final Player player) {
       return player.getAlliance().isWhite() ? white : black;
+    }
+
+    /**
+     * Returns the tiles held by the given player's pawns, as one bit per tile.
+     *
+     * @param player The player whose pawn occupancy is requested.
+     * @return That player's pawn occupancy.
+     */
+    private long occupancyOf(final Player player) {
+      return player.getAlliance().isWhite() ? whiteOccupancy : blackOccupancy;
+    }
+
+    /**
+     * Returns the tiles held by the given pawns, as one bit per tile.
+     *
+     * @param pawns The pawns to read.
+     * @return The occupancy of those pawns.
+     */
+    private static long occupancy(final List<Piece> pawns) {
+      long occupancy = 0L;
+
+      for (final Piece pawn : pawns) {
+        occupancy |= 1L << pawn.getPiecePosition();
+      }
+
+      return occupancy;
     }
   }
 
@@ -117,8 +151,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final Collection<Piece> opponentPieces = player.getOpponent().getActivePieces();
     final boolean isEndgame = isDeepEndgame(board);
 
-    Map<Piece.PieceType, Integer> playerPieceCounts = countPieceTypes(playerPieces);
-    Map<Piece.PieceType, Integer> opponentPieceCounts = countPieceTypes(opponentPieces);
+    PieceCounts playerPieceCounts = countPieceTypes(playerPieces);
+    PieceCounts opponentPieceCounts = countPieceTypes(opponentPieces);
 
     for (final Piece piece : playerPieces) {
       switch (piece.getPieceType()) {
@@ -143,7 +177,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       }
     }
 
-    if (playerPieceCounts.getOrDefault(Piece.PieceType.BISHOP, 0) >= 2) {
+    if (playerPieceCounts.of(Piece.PieceType.BISHOP) >= 2) {
       materialScore += 50;
     }
 
@@ -163,20 +197,46 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
+   * The number of pieces of each type held by one player. The array belongs to this record and
+   * must not be modified by a caller.
+   *
+   * @param byType The number of pieces of each type, indexed by piece type ordinal.
+   * @param distinctTypes The number of piece types present at least once.
+   */
+  private record PieceCounts(int[] byType, int distinctTypes) {
+
+    /**
+     * Returns the number of pieces of the given type.
+     *
+     * @param type The piece type to read.
+     * @return The number of pieces of that type.
+     */
+    private int of(final Piece.PieceType type) {
+      return byType[type.ordinal()];
+    }
+  }
+
+  /**
    * Counts the number of each piece type in the given collection of pieces.
    *
    * @param pieces The collection of pieces to count.
-   * @return A map containing the count of each piece type.
+   * @return The counts of each piece type.
    */
-  private Map<Piece.PieceType, Integer> countPieceTypes(final Collection<Piece> pieces) {
-    Map<Piece.PieceType, Integer> pieceCounts = new HashMap<>();
+  private PieceCounts countPieceTypes(final Collection<Piece> pieces) {
+    final int[] byType = new int[PIECE_TYPE_COUNT];
+    int distinctTypes = 0;
 
     for (final Piece piece : pieces) {
-      pieceCounts.put(piece.getPieceType(),
-              pieceCounts.getOrDefault(piece.getPieceType(), 0) + 1);
+      final int ordinal = piece.getPieceType().ordinal();
+
+      if (byType[ordinal] == 0) {
+        distinctTypes++;
+      }
+
+      byType[ordinal]++;
     }
 
-    return pieceCounts;
+    return new PieceCounts(byType, distinctTypes);
   }
 
   /**
@@ -209,30 +269,30 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param opponentPieceCounts The piece counts for the opponent.
    * @return True if insufficient material exists, false otherwise.
    */
-  private boolean isInsufficientMaterial(final Map<Piece.PieceType, Integer> playerPieceCounts,
-                                         final Map<Piece.PieceType, Integer> opponentPieceCounts) {
-    boolean noPawns = playerPieceCounts.getOrDefault(Piece.PieceType.PAWN, 0) == 0 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.PAWN, 0) == 0;
+  private boolean isInsufficientMaterial(final PieceCounts playerPieceCounts,
+                                         final PieceCounts opponentPieceCounts) {
+    boolean noPawns = playerPieceCounts.of(Piece.PieceType.PAWN) == 0 &&
+            opponentPieceCounts.of(Piece.PieceType.PAWN) == 0;
 
     if (noPawns) {
-      if (playerPieceCounts.size() == 1 && opponentPieceCounts.size() == 1) {
+      if (playerPieceCounts.distinctTypes() == 1 && opponentPieceCounts.distinctTypes() == 1) {
         return true;
       }
 
-      if ((playerPieceCounts.size() == 2 && opponentPieceCounts.size() == 1) ||
-              (playerPieceCounts.size() == 1 && opponentPieceCounts.size() == 2)) {
-        int minorsCount = playerPieceCounts.getOrDefault(Piece.PieceType.KNIGHT, 0) +
-                playerPieceCounts.getOrDefault(Piece.PieceType.BISHOP, 0) +
-                opponentPieceCounts.getOrDefault(Piece.PieceType.KNIGHT, 0) +
-                opponentPieceCounts.getOrDefault(Piece.PieceType.BISHOP, 0);
+      if ((playerPieceCounts.distinctTypes() == 2 && opponentPieceCounts.distinctTypes() == 1) ||
+              (playerPieceCounts.distinctTypes() == 1 && opponentPieceCounts.distinctTypes() == 2)) {
+        int minorsCount = playerPieceCounts.of(Piece.PieceType.KNIGHT) +
+                playerPieceCounts.of(Piece.PieceType.BISHOP) +
+                opponentPieceCounts.of(Piece.PieceType.KNIGHT) +
+                opponentPieceCounts.of(Piece.PieceType.BISHOP);
 
         return minorsCount <= 1;
       }
 
-      return (playerPieceCounts.getOrDefault(Piece.PieceType.KNIGHT, 0) == 2 &&
-              playerPieceCounts.size() == 2 && opponentPieceCounts.size() == 1) ||
-              (opponentPieceCounts.getOrDefault(Piece.PieceType.KNIGHT, 0) == 2 &&
-                      opponentPieceCounts.size() == 2 && playerPieceCounts.size() == 1);
+      return (playerPieceCounts.of(Piece.PieceType.KNIGHT) == 2 &&
+              playerPieceCounts.distinctTypes() == 2 && opponentPieceCounts.distinctTypes() == 1) ||
+              (opponentPieceCounts.of(Piece.PieceType.KNIGHT) == 2 &&
+                      opponentPieceCounts.distinctTypes() == 2 && playerPieceCounts.distinctTypes() == 1);
     }
 
     return false;
@@ -248,26 +308,26 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param playerAlliance The alliance of the player being evaluated.
    * @return True if the player has a favorable material combination, false otherwise.
    */
-  private boolean evaluateSpecialMaterialCombinations(final Map<Piece.PieceType, Integer> playerPieceCounts,
-                                                      final Map<Piece.PieceType, Integer> opponentPieceCounts,
+  private boolean evaluateSpecialMaterialCombinations(final PieceCounts playerPieceCounts,
+                                                      final PieceCounts opponentPieceCounts,
                                                       final Alliance playerAlliance) {
-    if (playerPieceCounts.getOrDefault(Piece.PieceType.QUEEN, 0) > 0 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.ROOK, 0) > 0 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.QUEEN, 0) == 0) {
+    if (playerPieceCounts.of(Piece.PieceType.QUEEN) > 0 &&
+            opponentPieceCounts.of(Piece.PieceType.ROOK) > 0 &&
+            opponentPieceCounts.of(Piece.PieceType.QUEEN) == 0) {
       return true;
     }
 
-    if (playerPieceCounts.getOrDefault(Piece.PieceType.ROOK, 0) > 0 &&
-            (opponentPieceCounts.getOrDefault(Piece.PieceType.BISHOP, 0) > 0 ||
-                    opponentPieceCounts.getOrDefault(Piece.PieceType.KNIGHT, 0) > 0) &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.ROOK, 0) == 0 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.QUEEN, 0) == 0) {
+    if (playerPieceCounts.of(Piece.PieceType.ROOK) > 0 &&
+            (opponentPieceCounts.of(Piece.PieceType.BISHOP) > 0 ||
+                    opponentPieceCounts.of(Piece.PieceType.KNIGHT) > 0) &&
+            opponentPieceCounts.of(Piece.PieceType.ROOK) == 0 &&
+            opponentPieceCounts.of(Piece.PieceType.QUEEN) == 0) {
       return true;
     }
 
-    return playerPieceCounts.getOrDefault(Piece.PieceType.BISHOP, 0) >= 2 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.KNIGHT, 0) > 0 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.BISHOP, 0) == 0;
+    return playerPieceCounts.of(Piece.PieceType.BISHOP) >= 2 &&
+            opponentPieceCounts.of(Piece.PieceType.KNIGHT) > 0 &&
+            opponentPieceCounts.of(Piece.PieceType.BISHOP) == 0;
   }
 
   /**
@@ -483,13 +543,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
                                       final PawnLists pawns) {
     double passedPawnScore = 0;
     final List<Piece> playerPawns = pawns.of(player);
-    final List<Piece> opponentPawns = pawns.of(player.getOpponent());
+    final long playerPawnOccupancy = pawns.occupancyOf(player);
+    final long opponentPawnOccupancy = pawns.occupancyOf(player.getOpponent());
     final Alliance alliance = player.getAlliance();
     final King playerKing = player.getPlayerKing();
     final King opponentKing = player.getOpponent().getPlayerKing();
 
     for (final Piece pawn : playerPawns) {
-      if (isPassedPawn(pawn, opponentPawns, alliance)) {
+      if (isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
         final int pawnPosition = pawn.getPiecePosition();
         final int pawnRank = pawnPosition / 8;
         final int rankFromPromotion = alliance.isWhite() ? pawnRank : (7 - pawnRank);
@@ -512,13 +573,13 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
           passedPawnScore += 40;
         }
 
-        if (isPawnProtected(pawn, playerPawns, alliance)) {
+        if (isPawnProtected(pawn, playerPawnOccupancy, alliance)) {
           passedPawnScore += 25;
         }
       }
     }
 
-    passedPawnScore += evaluateConnectedPassedPawns(playerPawns, opponentPawns, alliance);
+    passedPawnScore += evaluateConnectedPassedPawns(playerPawns, opponentPawnOccupancy, alliance);
 
     return passedPawnScore;
   }
@@ -528,26 +589,27 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * block its path to promotion on the same file or adjacent files.
    *
    * @param pawn The pawn to check.
-   * @param opponentPawns The opponent's pawns.
+   * @param opponentPawnOccupancy The opponent's pawn occupancy, as one bit per tile.
    * @param alliance The alliance of the pawn being checked.
    * @return True if the pawn is passed, false otherwise.
    */
-  private boolean isPassedPawn(final Piece pawn, final List<Piece> opponentPawns, final Alliance alliance) {
+  private boolean isPassedPawn(final Piece pawn, final long opponentPawnOccupancy,
+                               final Alliance alliance) {
     final int pawnPosition = pawn.getPiecePosition();
     final int pawnFile = pawnPosition % 8;
     final int pawnRank = pawnPosition / 8;
     final int rankDirection = alliance.isWhite() ? -1 : 1;
 
     for (int rank = pawnRank + rankDirection; alliance.isWhite() ? (rank >= 0) : (rank < 8); rank += rankDirection) {
-      if (isPawnAtPosition(opponentPawns, rank * 8 + pawnFile)) {
+      if (isPawnAtPosition(opponentPawnOccupancy, rank * 8 + pawnFile)) {
         return false;
       }
 
-      if (pawnFile > 0 && isPawnAtPosition(opponentPawns, rank * 8 + (pawnFile - 1))) {
+      if (pawnFile > 0 && isPawnAtPosition(opponentPawnOccupancy, rank * 8 + (pawnFile - 1))) {
         return false;
       }
 
-      if (pawnFile < 7 && isPawnAtPosition(opponentPawns, rank * 8 + (pawnFile + 1))) {
+      if (pawnFile < 7 && isPawnAtPosition(opponentPawnOccupancy, rank * 8 + (pawnFile + 1))) {
         return false;
       }
     }
@@ -556,19 +618,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Checks if there is a pawn at the specified position in the given list of pawns.
+   * Checks if the given pawn occupancy holds the specified position.
    *
-   * @param pawns The list of pawns to search.
+   * @param pawnOccupancy The pawn occupancy to search, as one bit per tile.
    * @param position The position to check.
-   * @return True if a pawn exists at the position, false otherwise.
+   * @return True if a pawn stands on the position, false otherwise.
    */
-  private boolean isPawnAtPosition(final List<Piece> pawns, final int position) {
-    for (final Piece pawn : pawns) {
-      if (pawn.getPiecePosition() == position) {
-        return true;
-      }
-    }
-    return false;
+  private boolean isPawnAtPosition(final long pawnOccupancy, final int position) {
+    return ((pawnOccupancy >>> position) & 1L) != 0L;
   }
 
   /**
@@ -601,11 +658,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * Protected passed pawns are generally more valuable than unprotected ones.
    *
    * @param pawn The pawn to check for protection.
-   * @param playerPawns The list of friendly pawns.
+   * @param playerPawnOccupancy The friendly pawn occupancy, as one bit per tile.
    * @param alliance The alliance of the pawn.
    * @return True if the pawn is protected, false otherwise.
    */
-  private boolean isPawnProtected(final Piece pawn, final List<Piece> playerPawns, final Alliance alliance) {
+  private boolean isPawnProtected(final Piece pawn, final long playerPawnOccupancy,
+                                  final Alliance alliance) {
     final int pawnPosition = pawn.getPiecePosition();
     final int pawnFile = pawnPosition % 8;
     final int pawnRank = pawnPosition / 8;
@@ -615,11 +673,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       return false;
     }
 
-    if (pawnFile > 0 && isPawnAtPosition(playerPawns, rankBehind * 8 + (pawnFile - 1))) {
+    if (pawnFile > 0 && isPawnAtPosition(playerPawnOccupancy, rankBehind * 8 + (pawnFile - 1))) {
       return true;
     }
 
-    return pawnFile < 7 && isPawnAtPosition(playerPawns, rankBehind * 8 + (pawnFile + 1));
+    return pawnFile < 7 && isPawnAtPosition(playerPawnOccupancy, rankBehind * 8 + (pawnFile + 1));
   }
 
   /**
@@ -628,18 +686,18 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * support each other's advancement.
    *
    * @param playerPawns The player's pawns.
-   * @param opponentPawns The opponent's pawns.
+   * @param opponentPawnOccupancy The opponent's pawn occupancy, as one bit per tile.
    * @param alliance The alliance of the pawns being evaluated.
    * @return The connected passed pawns evaluation score.
    */
   private double evaluateConnectedPassedPawns(final List<Piece> playerPawns,
-                                              final List<Piece> opponentPawns,
+                                              final long opponentPawnOccupancy,
                                               final Alliance alliance) {
     double connectedScore = 0;
     List<Piece> passedPawns = new ArrayList<>();
 
     for (final Piece pawn : playerPawns) {
-      if (isPassedPawn(pawn, opponentPawns, alliance)) {
+      if (isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
         passedPawns.add(pawn);
       }
     }
@@ -1150,12 +1208,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
                                                      final PawnLists pawns) {
     double supportScore = 0;
     final List<Piece> playerPawns = pawns.of(player);
-    final List<Piece> opponentPawns = pawns.of(player.getOpponent());
+    final long opponentPawnOccupancy = pawns.occupancyOf(player.getOpponent());
     final Alliance alliance = player.getAlliance();
     final Collection<Piece> playerPieces = player.getActivePieces();
 
     for (final Piece pawn : playerPawns) {
-      if (isPassedPawn(pawn, opponentPawns, alliance)) {
+      if (isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
         final int pawnPosition = pawn.getPiecePosition();
         final int promotionSquare = alliance.isWhite() ?
                 (pawnPosition % 8) :
@@ -1211,11 +1269,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     final List<Piece> playerPawns = pawns.of(player);
     final List<Piece> opponentPawns = pawns.of(player.getOpponent());
+    final long playerPawnOccupancy = pawns.occupancyOf(player);
+    final long opponentPawnOccupancy = pawns.occupancyOf(player.getOpponent());
     final Alliance alliance = player.getAlliance();
 
     for (final Piece rook : playerRooks) {
       rookScore += evaluateRookOnOpenFile(rook, board);
-      rookScore += evaluateRookBehindPassedPawn(rook, playerPawns, opponentPawns, alliance);
+      rookScore += evaluateRookBehindPassedPawn(rook, playerPawns, opponentPawns,
+              playerPawnOccupancy, opponentPawnOccupancy, alliance);
       rookScore += evaluateRookOn7thRank(rook, opponentPawns, alliance);
 
       if (playerRooks.size() >= 2) {
@@ -1267,12 +1328,16 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param rook The rook to evaluate.
    * @param playerPawns The player's pawns.
    * @param opponentPawns The opponent's pawns.
+   * @param playerPawnOccupancy The player's pawn occupancy, as one bit per tile.
+   * @param opponentPawnOccupancy The opponent's pawn occupancy, as one bit per tile.
    * @param alliance The alliance of the rook.
    * @return The rook-pawn cooperation evaluation score.
    */
   private double evaluateRookBehindPassedPawn(final Piece rook,
                                               final List<Piece> playerPawns,
                                               final List<Piece> opponentPawns,
+                                              final long playerPawnOccupancy,
+                                              final long opponentPawnOccupancy,
                                               final Alliance alliance) {
     double behindPawnScore = 0;
     final int rookPosition = rook.getPiecePosition();
@@ -1281,7 +1346,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     for (final Piece pawn : playerPawns) {
       if (pawn.getPiecePosition() % 8 == rookFile &&
-              isPassedPawn(pawn, opponentPawns, alliance)) {
+              isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
         final int pawnRank = pawn.getPiecePosition() / 8;
 
         if ((alliance.isWhite() && rookRank > pawnRank) ||
@@ -1293,7 +1358,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     for (final Piece pawn : opponentPawns) {
       if (pawn.getPiecePosition() % 8 == rookFile &&
-              isPassedPawn(pawn, playerPawns, alliance.equals(Alliance.WHITE) ? Alliance.BLACK : Alliance.WHITE)) {
+              isPassedPawn(pawn, playerPawnOccupancy,
+                      alliance.equals(Alliance.WHITE) ? Alliance.BLACK : Alliance.WHITE)) {
         final int pawnRank = pawn.getPiecePosition() / 8;
 
         if ((alliance.isWhite() && rookRank > pawnRank) ||
@@ -1502,23 +1568,23 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final Collection<Piece> playerPieces = player.getActivePieces();
     final Collection<Piece> opponentPieces = player.getOpponent().getActivePieces();
 
-    Map<Piece.PieceType, Integer> playerPieceCounts = countPieceTypes(playerPieces);
-    Map<Piece.PieceType, Integer> opponentPieceCounts = countPieceTypes(opponentPieces);
+    PieceCounts playerPieceCounts = countPieceTypes(playerPieces);
+    PieceCounts opponentPieceCounts = countPieceTypes(opponentPieces);
 
     if (isInsufficientMaterial(playerPieceCounts, opponentPieceCounts)) {
       drawScore -= 800;
     }
 
     if (hasOppositeColoredBishops(playerPieces, opponentPieces) &&
-            playerPieceCounts.getOrDefault(Piece.PieceType.PAWN, 0) <= 2 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.PAWN, 0) <= 2) {
+            playerPieceCounts.of(Piece.PieceType.PAWN) <= 2 &&
+            opponentPieceCounts.of(Piece.PieceType.PAWN) <= 2) {
       drawScore -= 200;
     }
 
-    if (playerPieceCounts.getOrDefault(Piece.PieceType.ROOK, 0) == 1 &&
-            playerPieceCounts.getOrDefault(Piece.PieceType.PAWN, 0) == 1 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.ROOK, 0) == 1 &&
-            opponentPieceCounts.getOrDefault(Piece.PieceType.PAWN, 0) == 0) {
+    if (playerPieceCounts.of(Piece.PieceType.ROOK) == 1 &&
+            playerPieceCounts.of(Piece.PieceType.PAWN) == 1 &&
+            opponentPieceCounts.of(Piece.PieceType.ROOK) == 1 &&
+            opponentPieceCounts.of(Piece.PieceType.PAWN) == 0) {
       List<Piece> playerPawns = pawns.of(player);
       if (!playerPawns.isEmpty()) {
         Piece pawn = playerPawns.get(0);
