@@ -51,7 +51,13 @@ public class OpeningGameEvaluator implements BoardEvaluator {
    */
   @Override
   public double evaluate(final Board board) {
-    return (score(board.whitePlayer(), board) - score(board.blackPlayer(), board));
+    final int[] whiteDefenderCounts =
+            defenderCountsBySquare(board.whitePlayer().getActivePieces(), board);
+    final int[] blackDefenderCounts =
+            defenderCountsBySquare(board.blackPlayer().getActivePieces(), board);
+
+    return (score(board.whitePlayer(), board, whiteDefenderCounts, blackDefenderCounts) -
+            score(board.blackPlayer(), board, blackDefenderCounts, whiteDefenderCounts));
   }
 
   /**
@@ -61,12 +67,15 @@ public class OpeningGameEvaluator implements BoardEvaluator {
    *
    * @param player The player for whom the board position is being evaluated.
    * @param board The current state of the chess board.
+   * @param defenderCounts The per-square defender counts for the player's pieces.
+   * @param opponentDefenderCounts The per-square defender counts for the opponent's pieces.
    * @return The evaluation score from the perspective of the specified player.
    */
   @VisibleForTesting
-  private double score(final Player player, final Board board) {
-    final int[] defenderCounts = defenderCountsBySquare(player.getActivePieces(), board);
-
+  private double score(final Player player,
+                       final Board board,
+                       final int[] defenderCounts,
+                       final int[] opponentDefenderCounts) {
     return materialScore(player.getActivePieces()) +
             developmentScore(player, board) +
             centerControlScore(player, board) +
@@ -74,7 +83,7 @@ public class OpeningGameEvaluator implements BoardEvaluator {
             pawnStructureScore(player, board) +
             mobilityScore(player, board) +
             pieceCoordinationScore(player, board, defenderCounts) +
-            tempoScore(player, board) +
+            tempoScore(player, opponentDefenderCounts) +
             pieceSafetyScore(player, board, defenderCounts);
   }
 
@@ -82,7 +91,7 @@ public class OpeningGameEvaluator implements BoardEvaluator {
    * Counts, for each square occupied by one of the given pieces, the number of other pieces in the
    * collection that defend that square. The piece standing on the square is not counted, and a
    * piece whose line to the square is blocked by another piece is not counted. Squares occupied by
-   * a king and squares occupied by no piece in the collection hold zero.
+   * no piece in the collection hold zero.
    *
    * @param playerPieces The pieces to test.
    * @param board The current chess board state.
@@ -92,8 +101,6 @@ public class OpeningGameEvaluator implements BoardEvaluator {
     final int[] defenderCounts = new int[BoardUtils.NUM_TILES];
 
     for (final Piece occupant : playerPieces) {
-      if (occupant.getPieceType() == Piece.PieceType.KING) continue;
-
       final int square = occupant.getPiecePosition();
       for (final Piece defender : playerPieces) {
         if (defender.getPiecePosition() != square && defender.defendsSquare(square, board)) {
@@ -766,10 +773,10 @@ public class OpeningGameEvaluator implements BoardEvaluator {
    * every attack on an undefended piece, and rewards a lead in developed minor pieces.
    *
    * @param player The player whose tempo is being evaluated.
-   * @param board The current chess board state.
+   * @param opponentDefenderCounts The per-square defender counts for the opponent's pieces.
    * @return The tempo evaluation score.
    */
-  private double tempoScore(final Player player, final Board board) {
+  private double tempoScore(final Player player, final int[] opponentDefenderCounts) {
     double score = 0;
     Collection<Move> playerMoves = player.getLegalMoves();
     Collection<Piece> playerPieces = player.getActivePieces();
@@ -782,7 +789,7 @@ public class OpeningGameEvaluator implements BoardEvaluator {
 
         Piece attackedPiece = move.getAttackedPiece();
         if (attackedPiece != null &&
-                !isPieceDefended(attackedPiece, player.getOpponent(), board)) {
+                opponentDefenderCounts[attackedPiece.getPiecePosition()] == 0) {
           score += 15;
         }
       }
@@ -847,27 +854,6 @@ public class OpeningGameEvaluator implements BoardEvaluator {
     }
 
     return -largestThreat;
-  }
-
-  /**
-   * Checks if a piece is defended by another piece of the same alliance.
-   * Used to determine if attacks target undefended pieces.
-   *
-   * @param piece The piece to check for defense.
-   * @param owner The player who owns the piece.
-   * @param board The current chess board state.
-   * @return True if the piece is defended by a friendly piece.
-   */
-  private boolean isPieceDefended(Piece piece, Player owner, Board board) {
-    final int position = piece.getPiecePosition();
-
-    for (final Piece defender : owner.getActivePieces()) {
-      if (defender.getPiecePosition() != position && defender.defendsSquare(position, board)) {
-        return true;
-      }
-    }
-
-    return false;
   }
 
   /**
