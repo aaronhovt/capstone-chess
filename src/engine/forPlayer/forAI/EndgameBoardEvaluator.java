@@ -50,7 +50,30 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   @Override
   public double evaluate(final Board board) {
-    return (score(board.whitePlayer(), board) - score(board.blackPlayer(), board));
+    final PawnLists pawns = new PawnLists(getPlayerPawns(board.whitePlayer()),
+            getPlayerPawns(board.blackPlayer()));
+
+    return (score(board.whitePlayer(), board, pawns) - score(board.blackPlayer(), board, pawns));
+  }
+
+  /**
+   * The pawns of both players, read once per evaluation. The lists belong to this record and must
+   * not be modified by a caller.
+   *
+   * @param white The tiles holding white's pawns, in board iteration order.
+   * @param black The tiles holding black's pawns, in board iteration order.
+   */
+  private record PawnLists(List<Piece> white, List<Piece> black) {
+
+    /**
+     * Returns the pawns belonging to the given player.
+     *
+     * @param player The player whose pawns are requested.
+     * @return That player's pawns.
+     */
+    private List<Piece> of(final Player player) {
+      return player.getAlliance().isWhite() ? white : black;
+    }
   }
 
   /**
@@ -61,18 +84,19 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player for whom the board position is being evaluated.
    * @param board The current state of the chess board.
+   * @param pawns The pawns of both players.
    * @return The evaluation score of the board from the perspective of the specified player.
    */
   @VisibleForTesting
-  private double score(final Player player, final Board board) {
+  private double score(final Player player, final Board board, final PawnLists pawns) {
     return materialEvaluation(player, board) +
-            kingActivityEvaluation(player, board) +
-            passedPawnEvaluation(player, board) +
-            pawnStructureEvaluation(player, board) +
-            pieceCoordinationEvaluation(player, board) +
-            rookEndgameEvaluation(player, board) +
-            bishopEndgameEvaluation(player, board) +
-            drawPatternEvaluation(player, board) +
+            kingActivityEvaluation(player, board, pawns) +
+            passedPawnEvaluation(player, board, pawns) +
+            pawnStructureEvaluation(player, board, pawns) +
+            pieceCoordinationEvaluation(player, board, pawns) +
+            rookEndgameEvaluation(player, board, pawns) +
+            bishopEndgameEvaluation(player, board, pawns) +
+            drawPatternEvaluation(player, board, pawns) +
             mobilityEvaluation(player, board) +
             pieceSafetyEvaluation(player, board);
   }
@@ -310,9 +334,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose king activity is being evaluated.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The king activity evaluation score.
    */
-  private double kingActivityEvaluation(final Player player, final Board board) {
+  private double kingActivityEvaluation(final Player player, final Board board,
+                                        final PawnLists pawns) {
     double kingActivityScore = 0;
     final King playerKing = player.getPlayerKing();
     final King opponentKing = player.getOpponent().getPlayerKing();
@@ -320,7 +346,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     kingActivityScore += evaluateKingCentralization(kingPosition);
     kingActivityScore += evaluateKingProximity(kingPosition, opponentKing.getPiecePosition());
-    kingActivityScore += evaluateKingPawnDefense(player, board);
+    kingActivityScore += evaluateKingPawnDefense(player, pawns);
     kingActivityScore -= evaluateKingExposure(player, board) * 0.5;
 
     return kingActivityScore;
@@ -376,15 +402,15 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * defense and attack operations.
    *
    * @param player The player whose king-pawn cooperation is being evaluated.
-   * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The king-pawn defense evaluation score.
    */
-  private double evaluateKingPawnDefense(final Player player, final Board board) {
+  private double evaluateKingPawnDefense(final Player player, final PawnLists pawns) {
     double kingPawnDefenseScore = 0;
     final King playerKing = player.getPlayerKing();
     final int kingPosition = playerKing.getPiecePosition();
-    final List<Piece> playerPawns = getPlayerPawns(player);
-    final List<Piece> opponentPawns = getPlayerPawns(player.getOpponent());
+    final List<Piece> playerPawns = pawns.of(player);
+    final List<Piece> opponentPawns = pawns.of(player.getOpponent());
 
     for (final Piece pawn : playerPawns) {
       final int distance = calculateChebyshevDistance(kingPosition, pawn.getPiecePosition());
@@ -450,12 +476,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose passed pawns are being evaluated.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The passed pawn evaluation score.
    */
-  private double passedPawnEvaluation(final Player player, final Board board) {
+  private double passedPawnEvaluation(final Player player, final Board board,
+                                      final PawnLists pawns) {
     double passedPawnScore = 0;
-    final List<Piece> playerPawns = getPlayerPawns(player);
-    final List<Piece> opponentPawns = getPlayerPawns(player.getOpponent());
+    final List<Piece> playerPawns = pawns.of(player);
+    final List<Piece> opponentPawns = pawns.of(player.getOpponent());
     final Alliance alliance = player.getAlliance();
     final King playerKing = player.getPlayerKing();
     final King opponentKing = player.getOpponent().getPlayerKing();
@@ -647,11 +675,13 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose pawn structure is being evaluated.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The pawn structure evaluation score.
    */
-  private double pawnStructureEvaluation(final Player player, final Board board) {
-    final List<Piece> playerPawns = getPlayerPawns(player);
-    final List<Piece> opponentPawns = getPlayerPawns(player.getOpponent());
+  private double pawnStructureEvaluation(final Player player, final Board board,
+                                         final PawnLists pawns) {
+    final List<Piece> playerPawns = pawns.of(player);
+    final List<Piece> opponentPawns = pawns.of(player.getOpponent());
     final Alliance alliance = player.getAlliance();
     double pawnStructureScore = 0;
 
@@ -973,15 +1003,17 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose piece coordination is being evaluated.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The piece coordination evaluation score.
    */
-  private double pieceCoordinationEvaluation(final Player player, final Board board) {
+  private double pieceCoordinationEvaluation(final Player player, final Board board,
+                                             final PawnLists pawns) {
     double coordinationScore = 0;
     final Collection<Piece> playerPieces = player.getActivePieces();
 
-    coordinationScore += evaluateMinorPieceCoordination(playerPieces, board);
-    coordinationScore += evaluatePiecePlacement(playerPieces, getPlayerPawns(player));
-    coordinationScore += evaluatePiecesSupportingPassedPawns(player, board);
+    coordinationScore += evaluateMinorPieceCoordination(playerPieces, board, pawns);
+    coordinationScore += evaluatePiecePlacement(playerPieces, pawns.of(player));
+    coordinationScore += evaluatePiecesSupportingPassedPawns(player, board, pawns);
 
     return coordinationScore;
   }
@@ -992,9 +1024,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param playerPieces The player's pieces.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The minor piece coordination evaluation score.
    */
-  private double evaluateMinorPieceCoordination(final Collection<Piece> playerPieces, final Board board) {
+  private double evaluateMinorPieceCoordination(final Collection<Piece> playerPieces,
+                                                final Board board, final PawnLists pawns) {
     double minorPieceScore = 0;
 
     if (board.getAllPieces().stream().anyMatch(p -> p.getPieceType() == Piece.PieceType.PAWN)) {
@@ -1007,7 +1041,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       }
     }
 
-    if (getPlayerPawns(board.whitePlayer()).size() + getPlayerPawns(board.blackPlayer()).size() <= 4) {
+    if (pawns.white().size() + pawns.black().size() <= 4) {
       long knightCount = playerPieces.stream()
               .filter(p -> p.getPieceType() == Piece.PieceType.KNIGHT)
               .count();
@@ -1109,12 +1143,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose piece support is being evaluated.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The piece support evaluation score.
    */
-  private double evaluatePiecesSupportingPassedPawns(final Player player, final Board board) {
+  private double evaluatePiecesSupportingPassedPawns(final Player player, final Board board,
+                                                     final PawnLists pawns) {
     double supportScore = 0;
-    final List<Piece> playerPawns = getPlayerPawns(player);
-    final List<Piece> opponentPawns = getPlayerPawns(player.getOpponent());
+    final List<Piece> playerPawns = pawns.of(player);
+    final List<Piece> opponentPawns = pawns.of(player.getOpponent());
     final Alliance alliance = player.getAlliance();
     final Collection<Piece> playerPieces = player.getActivePieces();
 
@@ -1159,9 +1195,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose rook endgame factors are being evaluated.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The rook endgame evaluation score.
    */
-  private double rookEndgameEvaluation(final Player player, final Board board) {
+  private double rookEndgameEvaluation(final Player player, final Board board,
+                                       final PawnLists pawns) {
     double rookScore = 0;
     final List<Piece> playerRooks = player.getActivePieces().stream()
             .filter(p -> p.getPieceType() == Piece.PieceType.ROOK)
@@ -1171,8 +1209,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       return 0;
     }
 
-    final List<Piece> playerPawns = getPlayerPawns(player);
-    final List<Piece> opponentPawns = getPlayerPawns(player.getOpponent());
+    final List<Piece> playerPawns = pawns.of(player);
+    final List<Piece> opponentPawns = pawns.of(player.getOpponent());
     final Alliance alliance = player.getAlliance();
 
     for (final Piece rook : playerRooks) {
@@ -1331,9 +1369,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose bishop endgame factors are being evaluated.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The bishop endgame evaluation score.
    */
-  private double bishopEndgameEvaluation(final Player player, final Board board) {
+  private double bishopEndgameEvaluation(final Player player, final Board board,
+                                         final PawnLists pawns) {
     double bishopScore = 0;
     final List<Piece> playerBishops = player.getActivePieces().stream()
             .filter(p -> p.getPieceType() == Piece.PieceType.BISHOP)
@@ -1343,7 +1383,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       return 0;
     }
 
-    bishopScore += evaluateColorComplexControl(playerBishops, board);
+    bishopScore += evaluateColorComplexControl(playerBishops, pawns);
 
     for (final Piece bishop : playerBishops) {
       final Collection<Move> bishopMoves = bishop.calculateLegalMoves(board);
@@ -1359,7 +1399,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
             .toList();
 
     if (!playerBishops.isEmpty() && !opponentKnights.isEmpty() && playerKnights.isEmpty()) {
-      bishopScore += evaluateBishopVsKnight(board);
+      bishopScore += evaluateBishopVsKnight(pawns);
     }
 
     return bishopScore;
@@ -1371,10 +1411,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * generally more effective.
    *
    * @param playerBishops The player's bishops.
-   * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The color complex control evaluation score.
    */
-  private double evaluateColorComplexControl(final List<Piece> playerBishops, final Board board) {
+  private double evaluateColorComplexControl(final List<Piece> playerBishops,
+                                             final PawnLists pawns) {
     double colorScore = 0;
     boolean hasLightSquareBishop = false;
     boolean hasDarkSquareBishop = false;
@@ -1395,21 +1436,19 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       return colorScore;
     }
 
-    final List<Piece> allPawns = new ArrayList<>();
-    allPawns.addAll(getPlayerPawns(board.whitePlayer()));
-    allPawns.addAll(getPlayerPawns(board.blackPlayer()));
-
     int lightSquarePawns = 0;
     int darkSquarePawns = 0;
 
-    for (final Piece pawn : allPawns) {
-      final int position = pawn.getPiecePosition();
-      final boolean isLightSquare = ((position / 8) + (position % 8)) % 2 == 0;
+    for (final List<Piece> sidePawns : List.of(pawns.white(), pawns.black())) {
+      for (final Piece pawn : sidePawns) {
+        final int position = pawn.getPiecePosition();
+        final boolean isLightSquare = ((position / 8) + (position % 8)) % 2 == 0;
 
-      if (isLightSquare) {
-        lightSquarePawns++;
-      } else {
-        darkSquarePawns++;
+        if (isLightSquare) {
+          lightSquarePawns++;
+        } else {
+          darkSquarePawns++;
+        }
       }
     }
 
@@ -1432,13 +1471,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * Evaluates bishop versus knight dynamics in specific positions.
    * Bishops are generally better in open positions while knights prefer closed positions.
    *
-   * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The bishop versus knight evaluation score.
    */
-  private double evaluateBishopVsKnight(final Board board) {
+  private double evaluateBishopVsKnight(final PawnLists pawns) {
     double dynamicScore = 0;
-    final int pawnCount = getPlayerPawns(board.whitePlayer()).size() +
-            getPlayerPawns(board.blackPlayer()).size();
+    final int pawnCount = pawns.white().size() + pawns.black().size();
 
     if (pawnCount <= 5) {
       dynamicScore += 20;
@@ -1455,9 +1493,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose draw patterns are being evaluated.
    * @param board The current chess board state.
+   * @param pawns The pawns of both players.
    * @return The draw pattern evaluation score.
    */
-  private double drawPatternEvaluation(final Player player, final Board board) {
+  private double drawPatternEvaluation(final Player player, final Board board,
+                                       final PawnLists pawns) {
     double drawScore = 0;
     final Collection<Piece> playerPieces = player.getActivePieces();
     final Collection<Piece> opponentPieces = player.getOpponent().getActivePieces();
@@ -1479,7 +1519,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
             playerPieceCounts.getOrDefault(Piece.PieceType.PAWN, 0) == 1 &&
             opponentPieceCounts.getOrDefault(Piece.PieceType.ROOK, 0) == 1 &&
             opponentPieceCounts.getOrDefault(Piece.PieceType.PAWN, 0) == 0) {
-      List<Piece> playerPawns = getPlayerPawns(player);
+      List<Piece> playerPawns = pawns.of(player);
       if (!playerPawns.isEmpty()) {
         Piece pawn = playerPawns.get(0);
         int pawnRank = pawn.getPiecePosition() / 8;
