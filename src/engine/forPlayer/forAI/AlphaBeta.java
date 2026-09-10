@@ -688,17 +688,16 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * Retrieves a cached board evaluation or computes a new evaluation if not found in cache.
    *
    * @param board The board position to evaluate.
-   * @param depth The search depth the cache entry is keyed under.
    * @return The evaluation score for the board position.
    */
-  private double getCachedEvaluation(Board board, int depth) {
-    Double cachedScore = this.evaluationCache.probe(board, depth);
+  private double getCachedEvaluation(Board board) {
+    Double cachedScore = this.evaluationCache.probe(board);
     if (cachedScore != null) {
       return cachedScore;
     }
 
     double score = this.evaluator.evaluate(board);
-    this.evaluationCache.store(board, depth, score);
+    this.evaluationCache.store(board, score);
     return score;
   }
 
@@ -948,11 +947,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       return 0;
     } if (searchStopped) {
       return depth <= 0 ? quiescenceSearch(board, alpha, beta, ply, true) :
-              getCachedEvaluation(board, depth);
+              getCachedEvaluation(board);
     } if (depth <= 0) {
       return quiescenceSearch(board, alpha, beta, ply, true);
     } if (ply >= MAX_PLY) {
-      return getCachedEvaluation(board, depth);
+      return getCachedEvaluation(board);
     }
 
     long zobristHash = board.getZobristHash();
@@ -974,14 +973,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final boolean inCheckAtNode = board.currentPlayer().isInCheck();
 
     if (depth == 1 && !inCheckAtNode) {
-      double eval = getCachedEvaluation(board, depth);
+      double eval = getCachedEvaluation(board);
       if (eval + RAZOR_MARGIN < alpha) {
         return quiescenceSearch(board, alpha, beta, ply, true);
       }
     }
 
     if (depth < FUTILITY_PRUNING_DEPTH && !inCheckAtNode) {
-      double eval = getCachedEvaluation(board, depth);
+      double eval = getCachedEvaluation(board);
       if (eval >= beta + (depth * 100)) {
         return eval;
       }
@@ -1140,11 +1139,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       return 0;
     } if (searchStopped) {
       return depth <= 0 ? quiescenceSearch(board, alpha, beta, ply, false) :
-              getCachedEvaluation(board, depth);
+              getCachedEvaluation(board);
     } if (depth <= 0) {
       return quiescenceSearch(board, alpha, beta, ply, false);
     } if (ply >= MAX_PLY) {
-      return getCachedEvaluation(board, depth);
+      return getCachedEvaluation(board);
     }
 
     long zobristHash = board.getZobristHash();
@@ -1166,14 +1165,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final boolean inCheckAtNode = board.currentPlayer().isInCheck();
 
     if (depth == 1 && !inCheckAtNode) {
-      double eval = getCachedEvaluation(board, depth);
+      double eval = getCachedEvaluation(board);
       if (eval - RAZOR_MARGIN > beta) {
         return quiescenceSearch(board, alpha, beta, ply, false);
       }
     }
 
     if (depth < FUTILITY_PRUNING_DEPTH && !inCheckAtNode) {
-      double eval = getCachedEvaluation(board, depth);
+      double eval = getCachedEvaluation(board);
       if (eval <= alpha - (depth * 100)) {
         return eval;
       }
@@ -1329,11 +1328,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     }
 
     if (searchStopped) {
-      return getCachedEvaluation(board, 0);
+      return getCachedEvaluation(board);
     }
 
     if (stats.quiescenceCount >= MAX_QUIESCENCE || ply >= MAX_PLY) {
-      return getCachedEvaluation(board, 0);
+      return getCachedEvaluation(board);
     }
     stats.quiescenceCount++;
 
@@ -1365,7 +1364,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final double originalAlpha = alpha;
     final double originalBeta = beta;
 
-    double standPat = getCachedEvaluation(board, 0);
+    double standPat = getCachedEvaluation(board);
 
     if (maximizing) {
       if (standPat >= beta) {

@@ -2,23 +2,25 @@ package engine.forPlayer.forAI;
 
 import engine.forBoard.Board;
 
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The EvaluationCache class provides a thread-safe cache for chess board evaluations to avoid redundant calculations
- * during search operations. It uses Zobrist hashing combined with search depth as the cache key for efficient and
- * accurate lookups. The cache automatically manages its size by evicting entries when it reaches capacity limits.
+ * during search operations. It uses a board's Zobrist hash as the cache key, so one entry serves every lookup of a
+ * position however deep in the search the position is reached. The cache automatically manages its size by evicting
+ * entries when it reaches capacity limits.
  * <p>
- * Each cache belongs to the engine that constructed it, so two engines running at the same time neither share entries
- * nor clear one another's. Cache statistics are maintained to monitor hit rates and performance characteristics.
+ * Entries hold the scores of whichever evaluator produced them, so a cache must be cleared whenever the evaluator in
+ * use changes. Each cache belongs to the engine that constructed it, so two engines running at the same time neither
+ * share entries nor clear one another's. Cache statistics are maintained to monitor hit rates and performance
+ * characteristics.
  *
  * @author Aaron Ho
  */
 public class EvaluationCache {
 
-  /** The concurrent hash map storing cached evaluation scores indexed by cache keys. */
-  private final ConcurrentHashMap<CacheKey, Double> cache;
+  /** The concurrent hash map storing cached evaluation scores indexed by Zobrist hash. */
+  private final ConcurrentHashMap<Long, Double> cache;
 
   /** The maximum number of entries allowed in the cache before eviction occurs. */
   private static final int MAX_SIZE = 1_000_000;
@@ -37,33 +39,29 @@ public class EvaluationCache {
   }
 
   /**
-   * Stores an evaluation score in the cache for the specified board position and search depth.
+   * Stores an evaluation score in the cache for the specified board position.
    * If the cache is at capacity, entries are automatically evicted before storing the new value.
    *
    * @param board The chess board position being evaluated.
-   * @param depth The search depth used for the evaluation.
    * @param score The evaluation score to cache.
    */
-  public void store(Board board, int depth, double score) {
+  public void store(Board board, double score) {
     if (cache.size() >= MAX_SIZE) {
       clearSomeEntries();
     }
 
-    CacheKey key = new CacheKey(board.getZobristHash(), depth);
-    cache.put(key, score);
+    cache.put(board.getZobristHash(), score);
   }
 
   /**
-   * Retrieves a cached evaluation score for the specified board position and search depth.
+   * Retrieves a cached evaluation score for the specified board position.
    * Updates cache statistics based on whether the lookup was successful.
    *
    * @param board The chess board position to look up.
-   * @param depth The search depth used for the evaluation.
    * @return The cached evaluation score, or null if not found in cache.
    */
-  public Double probe(Board board, int depth) {
-    CacheKey key = new CacheKey(board.getZobristHash(), depth);
-    Double result = cache.get(key);
+  public Double probe(Board board) {
+    Double result = cache.get(board.getZobristHash());
 
     if (result != null) {
       hits++;
@@ -106,60 +104,10 @@ public class EvaluationCache {
     int toRemove = MAX_SIZE / 2;
 
     int removed = 0;
-    for (CacheKey key : cache.keySet()) {
+    for (Long key : cache.keySet()) {
       cache.remove(key);
       removed++;
       if (removed >= toRemove) break;
-    }
-  }
-
-  /**
-   * The CacheKey class represents a composite key for the evaluation cache, combining a board's
-   * Zobrist hash value with the evaluation depth. This ensures that evaluations are only retrieved
-   * for identical board positions at the same search depth.
-   */
-  private static class CacheKey {
-
-    /** The Zobrist hash value of the board position. */
-    private final long zobristHash;
-
-    /** The search depth used for the evaluation. */
-    private final int depth;
-
-    /**
-     * Constructs a new CacheKey with the specified Zobrist hash and search depth.
-     *
-     * @param zobristHash The Zobrist hash value of the board position.
-     * @param depth The search depth used for the evaluation.
-     */
-    public CacheKey(long zobristHash, int depth) {
-      this.zobristHash = zobristHash;
-      this.depth = depth;
-    }
-
-    /**
-     * Compares this CacheKey with another object for equality.
-     * Two CacheKey objects are equal if they have the same Zobrist hash and depth.
-     *
-     * @param o The object to compare with this CacheKey.
-     * @return True if the objects are equal, false otherwise.
-     */
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) return true;
-      if (o == null || getClass() != o.getClass()) return false;
-      CacheKey cacheKey = (CacheKey) o;
-      return zobristHash == cacheKey.zobristHash && depth == cacheKey.depth;
-    }
-
-    /**
-     * Returns a hash code for this CacheKey based on the Zobrist hash and depth values.
-     *
-     * @return The hash code for this CacheKey.
-     */
-    @Override
-    public int hashCode() {
-      return Objects.hash(zobristHash, depth);
     }
   }
 }
