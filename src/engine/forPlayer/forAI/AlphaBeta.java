@@ -492,9 +492,13 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     this.searchStopped = false;
     this.boardsEvaluated.set(0);
     this.transpositionTable.incrementAge();
-    this.evaluator = determineGameState(board);
 
-    this.evaluationCache.clear();
+    final BoardEvaluator previousEvaluator = this.evaluator;
+    this.evaluator = determineGameState(board);
+    if (this.evaluator != previousEvaluator) {
+      this.evaluationCache.clear();
+    }
+    this.evaluationCache.resetStatistics();
 
     final Board mainBoard = board.copy();
     final long rootHash = mainBoard.getZobristHash();
@@ -691,13 +695,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * @return The evaluation score for the board position.
    */
   private double getCachedEvaluation(Board board) {
-    Double cachedScore = this.evaluationCache.probe(board);
-    if (cachedScore != null) {
+    final long zobristHash = board.getZobristHash();
+    final double cachedScore = this.evaluationCache.probe(zobristHash);
+    if (!Double.isNaN(cachedScore)) {
       return cachedScore;
     }
 
     double score = this.evaluator.evaluate(board);
-    this.evaluationCache.store(board, score);
+    this.evaluationCache.store(zobristHash, score);
     return score;
   }
 
