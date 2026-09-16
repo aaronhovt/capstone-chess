@@ -11,9 +11,10 @@ import java.util.List;
 
 /**
  * The EvaluationSuite class measures the engine's evaluators against a fixed set of positions and
- * reports three quantities: the raw score of each position, the residual left when a position is
- * compared with its colour-mirrored twin, and the difference between evaluating a position with
- * white to move and with black to move.
+ * reports four quantities: the raw score of each position, the spread between the highest and
+ * lowest score any evaluator gives a position, the residual left when a position is compared with
+ * its colour-mirrored twin, and the difference between evaluating a position with white to move
+ * and with black to move.
  * <p>
  * No search is run. Every evaluator is called directly rather than through
  * {@link engine.forPlayer.forAI.GameStateDetector}, so each number is attributable to a named
@@ -21,10 +22,10 @@ import java.util.List;
  * every position, including positions of a phase it would not normally be given, so that a defect
  * can be located in one evaluator or seen to be shared.
  * <p>
- * Only the mirror check carries a verdict. A balance score and a side to move difference are
- * reported without judgement, since no threshold has been established for either. The mirror check
- * is compared against a tolerance rather than for exact equality, because a mirrored position sums
- * the same terms in a different order.
+ * Only the mirror check carries a verdict. A balance score, an agreement spread, and a side to move
+ * difference are reported without judgement, since no threshold has been established for any of
+ * them. The mirror check is compared against a tolerance rather than for exact equality, because a
+ * mirrored position sums the same terms in a different order.
  * <p>
  * This class is designed to be run from the command line and its entry point returns a non-zero
  * exit status when any position fails the mirror check or cannot be prepared.
@@ -81,6 +82,12 @@ public class EvaluationSuite {
 
   /** The format of a table header naming the three evaluator columns. */
   private static final String HEADER_FORMAT = "  %-32s%12s%12s%12s%n";
+
+  /** The format of a table header naming a single value column. */
+  private static final String AGREEMENT_HEADER_FORMAT = "  %-32s%12s%n";
+
+  /** The format of a table row carrying the spread between the highest and lowest evaluator score. */
+  private static final String AGREEMENT_ROW_FORMAT = "  %-32s%12.2f%n";
 
   /** The format of a table row carrying a number for each of the three evaluators. */
   private static final String SCORE_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f%n";
@@ -165,6 +172,7 @@ public class EvaluationSuite {
     }
 
     reportBalance(prepared, verbose);
+    reportAgreement(prepared, verbose);
     final int symmetric = reportMirrorSymmetry(prepared, verbose);
     reportSideToMove(prepared, verbose);
 
@@ -191,6 +199,44 @@ public class EvaluationSuite {
       printScoreRow(position.name(), scores(position.board()));
       if (verbose) {
         System.out.printf(DETAIL_FORMAT, position.fen());
+      }
+    }
+    System.out.println();
+  }
+
+  /**
+   * Prints the spread between the highest and lowest score any evaluator gives each position. The
+   * three evaluators are not calibrated onto a common scale, so this number is the size of that
+   * miscalibration at the position rather than a defect in any one evaluator. No verdict is
+   * reached, since no threshold has been established for how far the evaluators may agree.
+   *
+   * @param prepared The positions to report on.
+   * @param verbose Whether to print which evaluator gave the highest and lowest score.
+   */
+  private static void reportAgreement(final List<PreparedPosition> prepared, final boolean verbose) {
+    System.out.println("Agreement, the spread between the highest and lowest evaluator score");
+    System.out.printf(AGREEMENT_HEADER_FORMAT, "position", "spread");
+    for (final PreparedPosition position : prepared) {
+      if (position.board() == null) {
+        System.out.printf(NOTE_ROW_FORMAT, position.name(), position.note());
+        continue;
+      }
+      final double[] values = scores(position.board());
+      int highest = 0;
+      int lowest = 0;
+      for (int index = 1; index < values.length; index++) {
+        if (values[index] > values[highest]) {
+          highest = index;
+        }
+        if (values[index] < values[lowest]) {
+          lowest = index;
+        }
+      }
+      System.out.printf(AGREEMENT_ROW_FORMAT, position.name(), values[highest] - values[lowest]);
+      if (verbose) {
+        System.out.printf(DETAIL_FORMAT, String.format("%s %.2f, %s %.2f",
+                EVALUATORS.get(highest).name(), values[highest],
+                EVALUATORS.get(lowest).name(), values[lowest]));
       }
     }
     System.out.println();
@@ -461,11 +507,13 @@ public class EvaluationSuite {
               EvaluationSuite [--verbose]
               EvaluationSuite --help                   print this message
 
-            Three checks are reported. Balance prints the score every evaluator gives each
-            position. Mirror symmetry prints the residual left when a position is added to its
-            colour-mirrored twin, which is zero for an evaluation that treats both colours alike.
-            Side to move prints the difference between evaluating one piece placement with white
-            to move and with black to move, which is the size of the side to move term.
+            Four checks are reported. Balance prints the score every evaluator gives each
+            position. Agreement prints the spread between the highest and lowest of those scores,
+            which is the size of the evaluators' miscalibration at the position. Mirror symmetry
+            prints the residual left when a position is added to its colour-mirrored twin, which is
+            zero for an evaluation that treats both colours alike. Side to move prints the
+            difference between evaluating one piece placement with white to move and with black to
+            move, which is the size of the side to move term.
 
             Only the mirror check carries a verdict. The verbose flag adds the notation of every
             position and variant along with the scores the mirror check compares.
