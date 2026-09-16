@@ -1,6 +1,7 @@
 package engine.forPlayer;
 
 import engine.Alliance;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
 import engine.forPiece.King;
@@ -34,9 +35,6 @@ public abstract class Player {
   /** The king piece belonging to this player. */
   protected final King playerKing;
 
-  /** The opponent's active pieces, used to test check and castling safety. */
-  protected final Collection<Piece> opponentPieces;
-
   /**
    * The collection of legal moves available to this player on the current board state. Null
    * until {@link #getLegalMoves()} is first called, at which point it is computed once and
@@ -48,19 +46,19 @@ public abstract class Player {
   protected final boolean isInCheck;
 
   /**
-   * Constructs a Player with the specified board and the opponent's active pieces. Establishes
-   * the player's king and determines check status directly against the opponent's pieces. This
-   * player's legal moves, including castling, are not computed here; they are computed lazily by
-   * {@link #getLegalMoves()} the first time something actually asks for them.
+   * Constructs a Player with the specified board. Establishes the player's king and determines
+   * check status by scanning outward from the king's square. This player's legal moves, including
+   * castling, are not computed here; they are computed lazily by {@link #getLegalMoves()} the
+   * first time something actually asks for them.
    *
    * @param board The chessboard associated with this player.
-   * @param opponentPieces The opponent's active pieces, used to test check and castling safety.
    */
-  Player(final Board board, final Collection<Piece> opponentPieces) {
+  Player(final Board board) {
     this.board = board;
-    this.opponentPieces = opponentPieces;
     this.playerKing = establishKing();
-    this.isInCheck = isSquareAttacked(this.playerKing.getPiecePosition(), opponentPieces, board);
+    final Alliance opponentAlliance = getAlliance().isWhite() ? Alliance.BLACK : Alliance.WHITE;
+    this.isInCheck = AttackDetector.isSquareAttacked(
+            this.playerKing.getPiecePosition(), opponentAlliance, board);
   }
 
   /**
@@ -176,7 +174,7 @@ public abstract class Player {
    */
   private Collection<Move> calculateLegalMoves() {
     final List<Move> playerLegals = new ArrayList<>(this.board.calculateLegalMoves(getActivePieces()));
-    playerLegals.addAll(calculateKingCastles(playerLegals, this.opponentPieces));
+    playerLegals.addAll(calculateKingCastles(playerLegals));
     return Collections.unmodifiableList(playerLegals);
   }
 
@@ -191,25 +189,6 @@ public abstract class Player {
     return moves.stream()
             .filter(move -> move.getDestinationCoordinate() == tile)
             .collect(collectingAndThen(Collectors.toList(), Collections::unmodifiableList));
-  }
-
-  /**
-   * Determines whether any piece in the given collection attacks the given square on the given
-   * board, using {@link Piece#attacksSquare(int, Board)} rather than generating and filtering a
-   * full move list, since only a yes/no answer for one square is needed here.
-   *
-   * @param square The square to test.
-   * @param attackers The candidate attacking pieces.
-   * @param board The current board.
-   * @return True if any piece in attackers attacks square, false otherwise.
-   */
-  public static boolean isSquareAttacked(final int square, final Collection<Piece> attackers, final Board board) {
-    for (final Piece piece : attackers) {
-      if (piece.attacksSquare(square, board)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /**
@@ -241,10 +220,9 @@ public abstract class Player {
    * Must be implemented by concrete subclasses to handle alliance-specific castling rules.
    *
    * @param playerLegals The legal moves available to this player.
-   * @param opponentPieces The opposing player's pieces.
    * @return A collection of possible castling moves.
    */
-  protected abstract Collection<Move> calculateKingCastles(Collection<Move> playerLegals, Collection<Piece> opponentPieces);
+  protected abstract Collection<Move> calculateKingCastles(Collection<Move> playerLegals);
 
   /**
    * Determines whether this player has any castling opportunities available.

@@ -1,10 +1,10 @@
 package engine.forBoard;
 
+import engine.Alliance;
 import engine.forPiece.Piece;
 import engine.forPlayer.Player;
 
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.List;
 
 /**
@@ -197,10 +197,10 @@ public enum BoardUtils {
   public static boolean kingThreat(final Move move, final Board board) {
     final Player mover = board.currentPlayer();
     final int opponentKingSquare = mover.getOpponent().getPlayerKing().getPiecePosition();
-    final Collection<Piece> moverPieces = mover.getActivePieces();
+    final Alliance moverAlliance = mover.getAlliance();
     final UndoState undo = move.makeMove(board);
     try {
-      return Player.isSquareAttacked(opponentKingSquare, moverPieces, board);
+      return AttackDetector.isSquareAttacked(opponentKingSquare, moverAlliance, board);
     } finally {
       move.unmakeMove(board, undo);
     }

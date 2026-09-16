@@ -1,6 +1,7 @@
 package engine.forPlayer;
 
 import engine.Alliance;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
 import engine.forPiece.Piece;
@@ -28,16 +29,14 @@ import static engine.forPiece.Piece.PieceType.ROOK;
 public final class WhitePlayer extends Player {
 
   /**
-   * Constructs a WhitePlayer object with the given chessboard and black's active pieces. The
-   * player is initialized with access to the current board state and uses black's pieces
-   * directly to test check and castling safety. This player's legal moves are computed lazily
-   * by {@link Player#getLegalMoves()} rather than here.
+   * Constructs a WhitePlayer object with the given chessboard. The player is initialized with
+   * access to the current board state. This player's legal moves are computed lazily by
+   * {@link Player#getLegalMoves()} rather than here.
    *
    * @param board The current chess board state.
-   * @param blackPieces A collection of black's active pieces, used to test check and castling safety.
    */
-  public WhitePlayer(final Board board, final Collection<Piece> blackPieces) {
-    super(board, blackPieces);
+  public WhitePlayer(final Board board) {
+    super(board);
   }
 
   /**
@@ -50,12 +49,10 @@ public final class WhitePlayer extends Player {
    * Queen-side castling requires the king to move from e1 to c1 and the rook from a1 to d1.
    *
    * @param playerLegals A collection of legal moves for the white player.
-   * @param opponentPieces A collection of pieces for the black player.;
    * @return A collection of possible castling moves for the white player, which may be empty.
    */
   @Override
-  protected Collection<Move> calculateKingCastles(final Collection<Move> playerLegals,
-                                                  final Collection<Piece> opponentPieces) {
+  protected Collection<Move> calculateKingCastles(final Collection<Move> playerLegals) {
     if(!hasCastleOpportunities()) {
       return Collections.emptyList();
     } final List<Move> kingCastles = new ArrayList<>();
@@ -63,8 +60,8 @@ public final class WhitePlayer extends Player {
       if(this.board.getPiece(61) == null && this.board.getPiece(62) == null) {
         final Piece kingSideRook = this.board.getPiece(63);
         if(kingSideRook != null && kingSideRook.isFirstMove()) {
-          if(!Player.isSquareAttacked(61, opponentPieces, this.board) &&
-                  !Player.isSquareAttacked(62, opponentPieces, this.board) &&
+          if(!AttackDetector.isSquareAttacked(61, Alliance.BLACK, this.board) &&
+                  !AttackDetector.isSquareAttacked(62, Alliance.BLACK, this.board) &&
                   kingSideRook.getPieceType() == ROOK) {
             kingCastles.add(new Move.KingSideCastleMove(this.board, this.playerKing, 62, (Rook) kingSideRook, kingSideRook.getPiecePosition(), 61));
           }
@@ -73,8 +70,8 @@ public final class WhitePlayer extends Player {
               this.board.getPiece(57) == null) {
         final Piece queenSideRook = this.board.getPiece(56);
         if(queenSideRook != null && queenSideRook.isFirstMove()) {
-          if(!Player.isSquareAttacked(58, opponentPieces, this.board) &&
-                  !Player.isSquareAttacked(59, opponentPieces, this.board) && queenSideRook.getPieceType() == ROOK) {
+          if(!AttackDetector.isSquareAttacked(58, Alliance.BLACK, this.board) &&
+                  !AttackDetector.isSquareAttacked(59, Alliance.BLACK, this.board) && queenSideRook.getPieceType() == ROOK) {
             kingCastles.add(new Move.QueenSideCastleMove(this.board, this.playerKing, 58, (Rook) queenSideRook, queenSideRook.getPiecePosition(), 59));
           }
         }

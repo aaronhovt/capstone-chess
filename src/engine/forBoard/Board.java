@@ -161,8 +161,8 @@ public final class Board {
     this.blackPieces = new ArrayList<>(calculateActivePieces(builder, Alliance.BLACK));
     establishKings();
     this.enPassantPawn = builder.enPassantPawn;
-    this.whitePlayer = new WhitePlayer(this, this.blackPieces);
-    this.blackPlayer = new BlackPlayer(this, this.whitePieces);
+    this.whitePlayer = new WhitePlayer(this);
+    this.blackPlayer = new BlackPlayer(this);
     this.currentPlayer = builder.nextMoveMaker.choosePlayerByAlliance(this.whitePlayer, this.blackPlayer);
     this.transitionMove = getNullMove();
     this.zobristHash = builder.zobristHash != 0 ? builder.zobristHash :
@@ -597,12 +597,12 @@ public final class Board {
    */
   public boolean isLegal(final Move move) {
     final Player mover = this.currentPlayer;
-    final Collection<Piece> opponentPieces = mover.getOpponent().getActivePieces();
+    final Alliance opponentAlliance = mover.getOpponent().getAlliance();
     final int kingSquare = move.getMovedPiece().getPieceType() == Piece.PieceType.KING ?
             move.getDestinationCoordinate() : mover.getPlayerKing().getPiecePosition();
     final UndoState undo = move.makeMove(this);
     try {
-      return !Player.isSquareAttacked(kingSquare, opponentPieces, this);
+      return !AttackDetector.isSquareAttacked(kingSquare, opponentAlliance, this);
     } finally {
       move.unmakeMove(this, undo);
     }
@@ -623,8 +623,8 @@ public final class Board {
    * @param moveMaker The alliance to move in the resulting position.
    */
   private void refreshPlayers(final Alliance moveMaker) {
-    this.whitePlayer = new WhitePlayer(this, this.blackPieces);
-    this.blackPlayer = new BlackPlayer(this, this.whitePieces);
+    this.whitePlayer = new WhitePlayer(this);
+    this.blackPlayer = new BlackPlayer(this);
     this.currentPlayer = moveMaker.choosePlayerByAlliance(this.whitePlayer, this.blackPlayer);
   }
 
