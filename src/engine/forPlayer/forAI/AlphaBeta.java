@@ -36,9 +36,6 @@ import static engine.forBoard.Move.MoveFactory;
  */
 public class AlphaBeta extends Observable implements MoveStrategy {
 
-  /** The evaluator used to assess board positions, selected at the start of each search. */
-  private volatile BoardEvaluator evaluator;
-
   /** The depth used by {@link #execute(Board)} when a caller supplies no depth of its own. */
   private final int maxDepth;
 
@@ -492,12 +489,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     this.searchStopped = false;
     this.boardsEvaluated.set(0);
     this.transpositionTable.incrementAge();
-
-    final BoardEvaluator previousEvaluator = this.evaluator;
-    this.evaluator = determineGameState(board);
-    if (this.evaluator != previousEvaluator) {
-      this.evaluationCache.clear();
-    }
     this.evaluationCache.resetStatistics();
 
     final Board mainBoard = board.copy();
@@ -689,7 +680,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Retrieves a cached board evaluation or computes a new evaluation if not found in cache.
+   * Retrieves a cached board evaluation or computes a new evaluation if not found in cache. The
+   * evaluator is chosen fresh from this exact board's own game phase, not from the phase of the
+   * search's root, so a leaf reached after the position has moved into a different phase than the
+   * root is scored by the evaluator that actually applies to it.
    *
    * @param board The board position to evaluate.
    * @return The evaluation score for the board position.
@@ -701,7 +695,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       return cachedScore;
     }
 
-    double score = this.evaluator.evaluate(board);
+    double score = determineGameState(board).evaluate(board);
     this.evaluationCache.store(zobristHash, score);
     return score;
   }
@@ -1511,11 +1505,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Determines the appropriate board evaluator based on the current game state.
-   * Uses game phase detection to select between opening, middlegame, and endgame evaluators.
+   * Determines the appropriate board evaluator for the given board's own game phase. Called once
+   * per position evaluated, since a position reached partway through a search may be in a
+   * different phase than the position the search started from.
    *
-   * @param board The current board position.
-   * @return The appropriate board evaluator for the game state.
+   * @param board The board position to select an evaluator for.
+   * @return The appropriate board evaluator for that position's game phase.
    */
   @VisibleForTesting
   private BoardEvaluator determineGameState(final Board board) {
