@@ -42,32 +42,40 @@ public abstract class Player {
    */
   protected Collection<Move> legalMoves;
 
-  /** Flag indicating whether this player is currently in check. */
-  protected final boolean isInCheck;
+  /**
+   * Whether this player is currently in check. Null until {@link #isInCheck()} is first called,
+   * at which point it is computed once and cached here.
+   */
+  private Boolean inCheck;
 
   /**
-   * Constructs a Player with the specified board. Establishes the player's king and determines
-   * check status by scanning outward from the king's square. This player's legal moves, including
-   * castling, are not computed here; they are computed lazily by {@link #getLegalMoves()} the
-   * first time something actually asks for them.
+   * Constructs a Player with the specified board, establishing the player's king. Neither this
+   * player's check status nor its legal moves, including castling, are computed here; they are
+   * computed lazily by {@link #isInCheck()} and {@link #getLegalMoves()} the first time something
+   * actually asks for them.
    *
    * @param board The chessboard associated with this player.
    */
   Player(final Board board) {
     this.board = board;
     this.playerKing = establishKing();
-    final Alliance opponentAlliance = getAlliance().isWhite() ? Alliance.BLACK : Alliance.WHITE;
-    this.isInCheck = AttackDetector.isSquareAttacked(
-            this.playerKing.getPiecePosition(), opponentAlliance, board);
   }
 
   /**
-   * Determines whether this player is currently in check.
+   * Determines whether this player is currently in check, computing and caching it on the first
+   * call by scanning outward from the king's square. Callers that only ever ask one side of a
+   * position this question, such as a search testing whether the move just played was legal, pay
+   * for that side alone.
    *
    * @return True if the player is in check, false otherwise.
    */
   public boolean isInCheck() {
-    return this.isInCheck;
+    if (this.inCheck == null) {
+      final Alliance opponentAlliance = getAlliance().isWhite() ? Alliance.BLACK : Alliance.WHITE;
+      this.inCheck = AttackDetector.isSquareAttacked(
+              this.playerKing.getPiecePosition(), opponentAlliance, this.board);
+    }
+    return this.inCheck;
   }
 
   /**
@@ -77,7 +85,7 @@ public abstract class Player {
    * @return True if the player is in checkmate, false otherwise.
    */
   public boolean isInCheckMate() {
-    return this.isInCheck && !hasEscapeMoves();
+    return isInCheck() && !hasEscapeMoves();
   }
 
   /**
@@ -87,7 +95,7 @@ public abstract class Player {
    * @return True if the player is in stalemate, false otherwise.
    */
   public boolean isInStaleMate() {
-    return !this.isInCheck && !hasEscapeMoves();
+    return !isInCheck() && !hasEscapeMoves();
   }
 
   /**
@@ -232,7 +240,7 @@ public abstract class Player {
    * @return True if castling opportunities exist, false otherwise.
    */
   protected boolean hasCastleOpportunities() {
-    return !this.isInCheck || !this.playerKing.isCastled() ||
+    return !isInCheck() || !this.playerKing.isCastled() ||
             (this.playerKing.isKingSideCastleCapable() && this.playerKing.isQueenSideCastleCapable());
   }
 }
