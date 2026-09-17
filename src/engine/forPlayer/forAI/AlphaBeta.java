@@ -73,6 +73,15 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    */
   private final int[][][] historyHeuristic = new int[2][64][64];
 
+  /**
+   * The largest score the history heuristic table holds. Entries saturate here rather than growing
+   * without bound, which keeps the score a packed ordering key subtracts from Integer.MAX_VALUE
+   * inside the 32 bits that key reserves for it. The limit sits far above what a single search
+   * accumulates, so it is the halving between searches rather than this limit that keeps recent
+   * evidence in front.
+   */
+  private static final int HISTORY_MAX = 1 << 24;
+
   /** Killer moves table storing good non-capture moves for each search ply. */
   private final ThreadLocal<Move[][]> killerMoves = ThreadLocal.withInitial(() ->
           new Move[2][MAX_SEARCH_DEPTH]);
@@ -202,7 +211,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         // not have so that a move having it sorts first, and is completed by the capture rank so
         // that a good capture outranks a quiet move and a quiet move outranks a bad capture. Bits
         // 10 through 41 hold the static exchange score of a capture or the history score of a
-        // quiet move, negated against Integer.MAX_VALUE so that higher scores sort first. Bits 0
+        // quiet move, negated against Integer.MAX_VALUE so that higher scores sort first. A
+        // history score never leaves the range zero through HISTORY_MAX, so that difference stays
+        // within those bits instead of carrying into the tier above them. Bits 0
         // through 9 hold the source index, so equal keys keep move generation order and a list of
         // more than ORDER_INDEX_MASK moves cannot be packed. Every key is non-negative, so sorting
         // the packed values ascending yields the intended move order.
@@ -498,6 +509,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     this.boardsEvaluated.set(0);
     this.transpositionTable.incrementAge();
     this.evaluationCache.resetStatistics();
+    halveHistoryHeuristic();
 
     final Board mainBoard = board.copy();
     final long rootHash = mainBoard.getZobristHash();
@@ -524,7 +536,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         bestScore = result.score();
         bestDepth = currentDepth;
 
-        updateHistoryHeuristic(mainBoard, bestMove, currentDepth);
+        recordHistory(mainBoard, bestMove, currentDepth);
 
         final long evaluatedPositions = this.boardsEvaluated.get() + stats.boardsEvaluated;
         final long executionTime = System.currentTimeMillis() - startTime;
@@ -1090,8 +1102,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
               killers[1][ply] = killers[0][ply];
               killers[0][ply] = move;
             }
-            historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()]
-                    [move.getDestinationCoordinate()] += depth * depth;
+            recordHistory(board, move, depth);
           }
 
           recordCounterMove(board, move);
@@ -1282,8 +1293,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
               killers[1][ply] = killers[0][ply];
               killers[0][ply] = move;
             }
-            historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()]
-                    [move.getDestinationCoordinate()] += depth * depth;
+            recordHistory(board, move, depth);
           }
 
           recordCounterMove(board, move);
@@ -1514,17 +1524,35 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Updates the history heuristic table with information about a good move
-   * to improve move ordering in future searches.
+   * Credits a move that was found to be good in the history heuristic table, so that later
+   * searches order it earlier. The entry saturates at HISTORY_MAX rather than growing past it.
+   * Does nothing if the move is null or the null move.
    *
    * @param board The position the move is played from, whose side to move plays it.
    * @param move The move to record in the history heuristic.
    * @param depth The depth at which this move was found to be good.
    */
-  private void updateHistoryHeuristic(final Board board, Move move, int depth) {
-    if (move != null && move != MoveFactory.getNullMove()) {
-      historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()]
-              [move.getDestinationCoordinate()] += depth * depth;
+  private void recordHistory(final Board board, final Move move, final int depth) {
+    if (move == null || move == MoveFactory.getNullMove()) {
+      return;
+    }
+    final int[] destinations = historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()];
+    final int destination = move.getDestinationCoordinate();
+    destinations[destination] = Math.min(destinations[destination] + depth * depth, HISTORY_MAX);
+  }
+
+  /**
+   * Halves every score in the history heuristic table, which is how evidence gathered earlier in
+   * the game gives way to evidence from the position being searched now. Called at the start of a
+   * search, before any helper thread of that search is started.
+   */
+  private void halveHistoryHeuristic() {
+    for (final int[][] origins : historyHeuristic) {
+      for (final int[] destinations : origins) {
+        for (int destination = 0; destination < destinations.length; destination++) {
+          destinations[destination] >>= 1;
+        }
+      }
     }
   }
 
