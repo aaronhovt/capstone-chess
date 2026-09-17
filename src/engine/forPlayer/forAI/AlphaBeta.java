@@ -74,13 +74,28 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   private final int[][][] historyHeuristic = new int[2][64][64];
 
   /**
-   * The largest score the history heuristic table holds. Entries saturate here rather than growing
-   * without bound, which keeps the score a packed ordering key subtracts from Integer.MAX_VALUE
-   * inside the 32 bits that key reserves for it. The limit sits far above what a single search
-   * accumulates, so it is the halving between searches rather than this limit that keeps recent
-   * evidence in front.
+   * The bound on the magnitude of a history heuristic score. An entry approaches this value, and
+   * its negation, without passing either, because each update moves the entry by an amount scaled
+   * down by how little headroom it has left in the direction it is moving. The bound sits within
+   * reach of what a single search accumulates, which is what makes that scaling take effect. It
+   * also keeps the score a packed ordering key subtracts from Integer.MAX_VALUE inside the 32 bits
+   * that key reserves for it.
    */
-  private static final int HISTORY_MAX = 1 << 24;
+  private static final int HISTORY_MAX = 1 << 10;
+
+  /**
+   * The number of quiet moves searched at one node that are held for penalizing. A node that cuts
+   * off after searching more quiet moves than this leaves the ones past the limit unpenalized.
+   */
+  private static final int MAX_TRACKED_QUIETS = 64;
+
+  /**
+   * The quiet moves searched so far at each ply, held so that a cutoff can penalize the quiet
+   * moves that were searched before it. A ply's entries are meaningful only up to the count kept
+   * by the node searching at that ply.
+   */
+  private final ThreadLocal<Move[][]> searchedQuiets = ThreadLocal.withInitial(() ->
+          new Move[MAX_SEARCH_DEPTH][MAX_TRACKED_QUIETS]);
 
   /** Killer moves table storing good non-capture moves for each search ply. */
   private final ThreadLocal<Move[][]> killerMoves = ThreadLocal.withInitial(() ->
@@ -212,8 +227,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         // that a good capture outranks a quiet move and a quiet move outranks a bad capture. Bits
         // 10 through 41 hold the static exchange score of a capture or the history score of a
         // quiet move, negated against Integer.MAX_VALUE so that higher scores sort first. A
-        // history score never leaves the range zero through HISTORY_MAX, so that difference stays
-        // within those bits instead of carrying into the tier above them. Bits 0
+        // history score never leaves the range negative HISTORY_MAX through HISTORY_MAX, so that
+        // difference stays within those bits instead of carrying into the tier above them. Bits 0
         // through 9 hold the source index, so equal keys keep move generation order and a list of
         // more than ORDER_INDEX_MASK moves cannot be packed. Every key is non-negative, so sorting
         // the packed values ascending yields the intended move order.
@@ -1036,6 +1051,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     Move bestFoundMove = null;
     Move[][] killers = killerMoves.get();
     int movesSearched = 0;
+    final Move[] quietsSearched = searchedQuiets.get()[ply];
+    int quietCount = 0;
 
     Collection<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
 
@@ -1105,6 +1122,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
               killers[0][ply] = move;
             }
             recordHistory(board, move, depth);
+            penalizeSearchedQuiets(board, quietsSearched, quietCount, depth);
           }
 
           recordCounterMove(board, move);
@@ -1113,6 +1131,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                   TranspositionTable.LOWERBOUND, bestFoundMove);
           return beta;
         }
+      }
+
+      if (!move.isAttack() && quietCount < MAX_TRACKED_QUIETS) {
+        quietsSearched[quietCount++] = move;
       }
 
       firstMove = false;
@@ -1230,6 +1252,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     Move bestFoundMove = null;
     Move[][] killers = killerMoves.get();
     int movesSearched = 0;
+    final Move[] quietsSearched = searchedQuiets.get()[ply];
+    int quietCount = 0;
 
     Collection<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
 
@@ -1298,6 +1322,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
               killers[0][ply] = move;
             }
             recordHistory(board, move, depth);
+            penalizeSearchedQuiets(board, quietsSearched, quietCount, depth);
           }
 
           recordCounterMove(board, move);
@@ -1306,6 +1331,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                   TranspositionTable.UPPERBOUND, bestFoundMove);
           return alpha;
         }
+      }
+
+      if (!move.isAttack() && quietCount < MAX_TRACKED_QUIETS) {
+        quietsSearched[quietCount++] = move;
       }
 
       firstMove = false;
@@ -1529,32 +1558,68 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
   /**
    * Credits a move that was found to be good in the history heuristic table, so that later
-   * searches order it earlier. The entry saturates at HISTORY_MAX rather than growing past it.
-   * Does nothing if the move is null or the null move.
+   * searches order it earlier.
    *
    * @param board The position the move is played from, whose side to move plays it.
    * @param move The move to record in the history heuristic.
    * @param depth The depth at which this move was found to be good.
    */
   private void recordHistory(final Board board, final Move move, final int depth) {
+    addHistory(board, move, depth * depth);
+  }
+
+  /**
+   * Penalizes in the history heuristic table each of the given quiet moves, which were searched at
+   * a node that a later quiet move cut off, so that later searches order them after the quiet
+   * moves that have yet to be refuted.
+   *
+   * @param board The position the moves are played from, whose side to move plays them.
+   * @param quiets The quiet moves searched at the node before the move that cut it off.
+   * @param count The number of leading entries of quiets that hold such a move.
+   * @param depth The depth at which those moves were searched.
+   */
+  private void penalizeSearchedQuiets(final Board board, final Move[] quiets, final int count,
+                                      final int depth) {
+    final int malus = -depth * depth;
+    for (int i = 0; i < count; i++) {
+      addHistory(board, quiets[i], malus);
+    }
+  }
+
+  /**
+   * Adds the given amount to a move's score in the history heuristic table, less that amount's
+   * share of the distance the entry has already travelled toward the bound it is moving toward.
+   * An entry near the bound therefore barely moves further, while one at the opposite bound takes
+   * the amount close to whole, so a move that has been passed over many times can still be
+   * rehabilitated by the cutoffs it does produce. The amount is clamped to HISTORY_MAX first,
+   * which is what holds an entry within HISTORY_MAX of zero. Does nothing if the move is null or
+   * the null move.
+   *
+   * @param board The position the move is played from, whose side to move plays it.
+   * @param move The move whose history score is changing.
+   * @param bonus The amount to add, negative to penalize the move.
+   */
+  private void addHistory(final Board board, final Move move, final int bonus) {
     if (move == null || move == MoveFactory.getNullMove()) {
       return;
     }
     final int[] destinations = historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()];
     final int destination = move.getDestinationCoordinate();
-    destinations[destination] = Math.min(destinations[destination] + depth * depth, HISTORY_MAX);
+    final int change = Math.max(-HISTORY_MAX, Math.min(bonus, HISTORY_MAX));
+    final int score = destinations[destination];
+    destinations[destination] = score + change - score * Math.abs(change) / HISTORY_MAX;
   }
 
   /**
-   * Halves every score in the history heuristic table, which is how evidence gathered earlier in
-   * the game gives way to evidence from the position being searched now. Called at the start of a
-   * search, before any helper thread of that search is started.
+   * Halves every score in the history heuristic table toward zero, which is how evidence gathered
+   * earlier in the game gives way to evidence from the position being searched now. Called at the
+   * start of a search, before any helper thread of that search is started.
    */
   private void halveHistoryHeuristic() {
     for (final int[][] origins : historyHeuristic) {
       for (final int[] destinations : origins) {
         for (int destination = 0; destination < destinations.length; destination++) {
-          destinations[destination] >>= 1;
+          destinations[destination] /= 2;
         }
       }
     }
