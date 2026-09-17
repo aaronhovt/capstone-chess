@@ -22,10 +22,9 @@ public class TranspositionTable {
   private TranspositionTable() {}
 
   /**
-   * The Entry class represents a single record in the transposition table containing
-   * all necessary information about a previously evaluated chess position. Each entry
-   * stores the position hash, evaluation score, search depth, node classification,
-   * best move, and age information for efficient retrieval and replacement strategies.
+   * The Entry class holds the values of one transposition table slot, as returned by a probe.
+   * Each entry carries the position hash, evaluation score, search depth, node classification,
+   * best move, and age of the slot it was read from. Changing an entry does not change the table.
    */
   static class Entry {
 
@@ -50,7 +49,7 @@ public class TranspositionTable {
     /**
      * Constructs a new Entry with default values for all fields.
      * Initializes the entry with zero values for the hash key, score, depth,
-     * node type, and age, and a null move, representing an empty or uninitialized table slot.
+     * node type, and age, and a null move.
      */
     Entry() {
       this.key = 0L;

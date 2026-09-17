@@ -1537,8 +1537,18 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * using striped locking to reduce contention in parallel search operations.
    */
   private static class StripedTranspositionTable {
-    /** The hash table storing transposition table entries. */
-    private final TranspositionTable.Entry[] table;
+    /** The Zobrist hash key held in each slot, zero for an empty slot. */
+    private final long[] keys;
+    /** The evaluation score held in each slot. */
+    private final double[] scores;
+    /** The search depth held in each slot. */
+    private final short[] depths;
+    /** The node type held in each slot. */
+    private final byte[] nodeTypes;
+    /** The age held in each slot. */
+    private final byte[] ages;
+    /** The best move held in each slot, or null if none was recorded. */
+    private final Move[] moves;
     /** The bit mask for indexing into the hash table. */
     private final int mask;
     /** The current age counter for entry replacement decisions. */
@@ -1558,17 +1568,18 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       int entryCount = (int) (bytes / 24);
       int size = Integer.highestOneBit(entryCount);
 
-      table = new TranspositionTable.Entry[size];
+      keys = new long[size];
+      scores = new double[size];
+      depths = new short[size];
+      nodeTypes = new byte[size];
+      ages = new byte[size];
+      moves = new Move[size];
       mask = size - 1;
       currentAge = 0;
 
       locks = new ReentrantReadWriteLock[LOCK_COUNT];
       for (int i = 0; i < LOCK_COUNT; i++) {
         locks[i] = new ReentrantReadWriteLock();
-      }
-
-      for (int i = 0; i < size; i++) {
-        table[i] = new TranspositionTable.Entry();
       }
 
       System.out.println("Transposition Table created with " + size +
@@ -1599,7 +1610,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      * Retrieves a transposition table entry for the given board hash.
      *
      * @param zobristHash The Zobrist hash of the board position.
-     * @return The transposition table entry if found, null otherwise.
+     * @return A new entry holding the values of the matching slot, or null if no slot matches.
      */
     public TranspositionTable.Entry get(long zobristHash) {
       int index = (int) (zobristHash & mask) & ~1;
@@ -1607,14 +1618,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       ReadWriteLock lock = getLock(zobristHash);
       lock.readLock().lock();
       try {
-        TranspositionTable.Entry entry = table[index];
-        if (entry.key == zobristHash && entry.key != 0) {
-          return copyOf(entry);
+        if (keys[index] == zobristHash && keys[index] != 0) {
+          return entryAt(index);
         }
 
-        TranspositionTable.Entry entry2 = table[index + 1];
-        if (entry2.key == zobristHash && entry2.key != 0) {
-          return copyOf(entry2);
+        if (keys[index + 1] == zobristHash && keys[index + 1] != 0) {
+          return entryAt(index + 1);
         }
 
         return null;
@@ -1624,21 +1633,21 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     }
 
     /**
-     * Returns a copy of the given entry. Probing threads receive copies, because storing threads
-     * reuse the table's entries in place.
+     * Returns a new entry holding the values of the given slot. The caller must hold the slot's
+     * lock.
      *
-     * @param entry The entry to copy.
-     * @return A new entry holding the same values.
+     * @param slot The index of the slot to read.
+     * @return A new entry holding the slot's values.
      */
-    private static TranspositionTable.Entry copyOf(final TranspositionTable.Entry entry) {
-      TranspositionTable.Entry copy = new TranspositionTable.Entry();
-      copy.key = entry.key;
-      copy.score = entry.score;
-      copy.depth = entry.depth;
-      copy.nodeType = entry.nodeType;
-      copy.age = entry.age;
-      copy.move = entry.move;
-      return copy;
+    private TranspositionTable.Entry entryAt(final int slot) {
+      TranspositionTable.Entry entry = new TranspositionTable.Entry();
+      entry.key = keys[slot];
+      entry.score = scores[slot];
+      entry.depth = depths[slot];
+      entry.nodeType = nodeTypes[slot];
+      entry.age = ages[slot];
+      entry.move = moves[slot];
+      return entry;
     }
 
     /**
@@ -1655,51 +1664,45 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       ReadWriteLock lock = getLock(zobristHash);
       lock.writeLock().lock();
       try {
-        TranspositionTable.Entry entry = table[index];
-        TranspositionTable.Entry entry2 = table[index + 1];
+        int target = shouldReplace(index, depth, nodeType) ? index : index + 1;
 
-        boolean useFirst = shouldReplace(entry, entry2, depth, nodeType);
-        TranspositionTable.Entry target = useFirst ? entry : entry2;
-
-        target.key = zobristHash;
-        target.score = score;
-        target.depth = (short) depth;
-        target.nodeType = nodeType;
-        target.age = currentAge;
-        target.move = bestMove;
+        keys[target] = zobristHash;
+        scores[target] = score;
+        depths[target] = (short) depth;
+        nodeTypes[target] = nodeType;
+        ages[target] = currentAge;
+        moves[target] = bestMove;
       } finally {
         lock.writeLock().unlock();
       }
     }
 
     /**
-     * Determines which transposition table entry should be replaced based on
-     * depth, node type, and age criteria.
+     * Determines which slot of a bucket should be replaced based on
+     * depth, node type, and age criteria. The caller must hold the bucket's lock.
      *
-     * @param entry1 The first entry candidate for replacement.
-     * @param entry2 The second entry candidate for replacement.
+     * @param first The index of the bucket's first slot; the second slot follows it.
      * @param depth The depth of the new entry.
      * @param nodeType The node type of the new entry.
-     * @return True if the first entry should be replaced, false for the second.
+     * @return True if the first slot should be replaced, false for the second.
      */
-    private boolean shouldReplace(TranspositionTable.Entry entry1,
-                                  TranspositionTable.Entry entry2,
-                                  int depth, byte nodeType) {
-      if (entry1.key == 0) return true;
-      if (entry2.key == 0) return false;
+    private boolean shouldReplace(int first, int depth, byte nodeType) {
+      int second = first + 1;
+      if (keys[first] == 0) return true;
+      if (keys[second] == 0) return false;
 
-      if (entry1.depth < entry2.depth) return true;
-      if (entry1.depth > entry2.depth) return false;
+      if (depths[first] < depths[second]) return true;
+      if (depths[first] > depths[second]) return false;
 
-      boolean isExact1 = entry1.nodeType == TranspositionTable.EXACT;
-      boolean isExact2 = entry2.nodeType == TranspositionTable.EXACT;
+      boolean isExact1 = nodeTypes[first] == TranspositionTable.EXACT;
+      boolean isExact2 = nodeTypes[second] == TranspositionTable.EXACT;
       boolean newIsExact = nodeType == TranspositionTable.EXACT;
 
       if (!isExact1 && isExact2) return false;
       if (isExact1 && !isExact2) return true;
       if (!isExact1 && newIsExact) return true;
 
-      return entry1.age <= entry2.age;
+      return ages[first] <= ages[second];
     }
   }
 }
