@@ -29,6 +29,9 @@ import static java.util.stream.Collectors.collectingAndThen;
  */
 public abstract class Player {
 
+  /** The initial capacity of the list a player's legal moves are generated into. */
+  private static final int LEGAL_MOVE_LIST_CAPACITY = 48;
+
   /** The chessboard associated with this player. */
   protected final Board board;
 
@@ -181,7 +184,7 @@ public abstract class Player {
    * @return An unmodifiable collection of this player's legal moves.
    */
   private Collection<Move> calculateLegalMoves() {
-    final List<Move> playerLegals = new ArrayList<>();
+    final List<Move> playerLegals = new ArrayList<>(LEGAL_MOVE_LIST_CAPACITY);
     for (final Piece piece : getActivePieces()) {
       piece.addLegalMoves(this.board, playerLegals);
     }
