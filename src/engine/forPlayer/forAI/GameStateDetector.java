@@ -74,83 +74,101 @@ public class GameStateDetector {
    * @return The detected game phase.
    */
   public GamePhase detectGamePhase(final Board board) {
-    int materialScore = calculateMaterialScore(board);
-    int developmentScore = calculateDevelopmentScore(board);
+    final PieceTally tally = new PieceTally();
+    tally.add(board.getWhitePieces());
+    tally.add(board.getBlackPieces());
+
+    int materialScore = tally.material;
+    int developmentScore = calculateDevelopmentScore(tally, board);
     int moveCount = calculateMoveCount(board);
-    int pieceCount = board.getAllPieces().size();
-    int pawnStructureScore = evaluatePawnStructure(board);
+    int pieceCount = tally.pieceCount;
+    int pawnStructureScore = evaluatePawnStructure(tally);
     int kingActivityScore = evaluateKingActivity(board);
 
     GamePhase phase = determinePhaseFromIndicators(
             materialScore, developmentScore, moveCount,
-            pieceCount, pawnStructureScore, kingActivityScore, board);
+            pieceCount, pawnStructureScore, kingActivityScore, tally, board);
 
     return phase;
   }
 
   /**
-   * Calculates a material-based score for phase detection.
-   * Lower scores indicate progression toward endgame.
-   *
-   * @param board The current chess board.
-   * @return A material score for phase detection.
+   * The piece counts that phase detection reads, gathered in a single pass over each side's
+   * pieces.
    */
-  private int calculateMaterialScore(final Board board) {
-    int materialScore = 0;
-    int queenCount = 0;
-    int minorPieceCount = 0;
-    int majorPieceCount = 0;
+  private static final class PieceTally {
+    /** The number of pieces of both sides, kings and pawns included. */
+    int pieceCount;
+    /** The combined value of every piece that is neither a pawn nor a king. */
+    int material;
+    /** The number of pieces that are neither pawns nor kings. */
+    int nonPawnPieceCount;
+    /** The number of knights and bishops that have moved and stand off their starting rank. */
+    int developedMinorPieces;
+    /** The number of knights and bishops that have not moved. */
+    int undevelopedMinorPieces;
+    /** The number of pawns. */
+    int pawnCount;
+    /** The number of pawns on their side's sixth rank or beyond. */
+    int advancedPawnCount;
+    /** Whether white has a queen. */
+    boolean whiteQueenPresent;
+    /** Whether black has a queen. */
+    boolean blackQueenPresent;
 
-    for (final Piece piece : board.getAllPieces()) {
-      if (piece.getPieceType() != Piece.PieceType.KING &&
-              piece.getPieceType() != Piece.PieceType.PAWN) {
-        materialScore += piece.getPieceValue();
-
-        switch (piece.getPieceType()) {
-          case QUEEN:
-            queenCount++;
-            majorPieceCount++;
-            break;
-          case ROOK:
-            majorPieceCount++;
-            break;
-          case BISHOP:
-          case KNIGHT:
-            minorPieceCount++;
-            break;
+    /**
+     * Adds the given pieces to this tally.
+     *
+     * @param pieces The pieces to count.
+     */
+    void add(final Collection<Piece> pieces) {
+      for (final Piece piece : pieces) {
+        this.pieceCount++;
+        final Piece.PieceType pieceType = piece.getPieceType();
+        final boolean isWhite = piece.getPieceAllegiance().isWhite();
+        final int rank = piece.getPiecePosition() / 8;
+        switch (pieceType) {
+          case PAWN -> {
+            this.pawnCount++;
+            if ((isWhite && rank <= 2) || (!isWhite && rank >= 5)) {
+              this.advancedPawnCount++;
+            }
+          }
+          case KING -> {
+          }
+          default -> {
+            this.material += piece.getPieceValue();
+            this.nonPawnPieceCount++;
+            if (pieceType == Piece.PieceType.QUEEN) {
+              if (isWhite) {
+                this.whiteQueenPresent = true;
+              } else {
+                this.blackQueenPresent = true;
+              }
+            } else if (pieceType == Piece.PieceType.KNIGHT
+                    || pieceType == Piece.PieceType.BISHOP) {
+              if (piece.isFirstMove()) {
+                this.undevelopedMinorPieces++;
+              } else if ((isWhite && rank != 7) || (!isWhite && rank != 0)) {
+                this.developedMinorPieces++;
+              }
+            }
+          }
         }
       }
     }
-
-    return materialScore;
   }
 
   /**
    * Calculates a development score for phase detection.
    * Higher scores indicate more development which suggests middlegame.
    *
+   * @param tally The piece counts of the current board.
    * @param board The current chess board.
    * @return A development score for phase detection.
    */
-  private int calculateDevelopmentScore(final Board board) {
-    int developmentScore = 0;
-    int developedMinorPieces = 0;
-
-    for (final Piece piece : board.getAllPieces()) {
-      if ((piece.getPieceType() == Piece.PieceType.KNIGHT ||
-              piece.getPieceType() == Piece.PieceType.BISHOP) &&
-              !piece.isFirstMove()) {
-
-        int rank = piece.getPiecePosition() / 8;
-        boolean isOffStartingRank = (piece.getPieceAllegiance().isWhite() && rank != 7) ||
-                (!piece.getPieceAllegiance().isWhite() && rank != 0);
-
-        if (isOffStartingRank) {
-          developedMinorPieces++;
-          developmentScore += 10;
-        }
-      }
-    }
+  private int calculateDevelopmentScore(final PieceTally tally, final Board board) {
+    int developmentScore = tally.developedMinorPieces * 10;
 
     if (board.whitePlayer().isCastled()) {
       developmentScore += 20;
@@ -175,28 +193,11 @@ public class GameStateDetector {
   /**
    * Evaluates pawn structure to help determine game phase.
    *
-   * @param board The current chess board.
+   * @param tally The piece counts of the current board.
    * @return A pawn structure score for phase detection.
    */
-  private int evaluatePawnStructure(final Board board) {
-    int score = 0;
-    int totalPawns = 0;
-
-    for (final Piece piece : board.getAllPieces()) {
-      if (piece.getPieceType() == Piece.PieceType.PAWN) {
-        totalPawns++;
-
-        int rank = piece.getPiecePosition() / 8;
-        if ((piece.getPieceAllegiance().isWhite() && rank <= 2) ||
-                (!piece.getPieceAllegiance().isWhite() && rank >= 5)) {
-          score += 10;
-        }
-      }
-    }
-
-    score += (16 - totalPawns) * 5;
-
-    return score;
+  private int evaluatePawnStructure(final PieceTally tally) {
+    return tally.advancedPawnCount * 10 + (16 - tally.pawnCount) * 5;
   }
 
   /**
@@ -265,23 +266,24 @@ public class GameStateDetector {
    * @param pieceCount Total pieces remaining.
    * @param pawnStructureScore Pawn structure evaluation.
    * @param kingActivityScore King activity evaluation.
+   * @param tally The piece counts of the current board.
    * @param board The current chess board for additional checks.
    * @return The determined game phase.
    */
   private GamePhase determinePhaseFromIndicators(
           int materialScore, int developmentScore, int moveCount,
           int pieceCount, int pawnStructureScore, int kingActivityScore,
-          Board board) {
+          PieceTally tally, Board board) {
 
     int openingScore = calculateOpeningScore(
-            materialScore, developmentScore, moveCount, pieceCount, board);
+            materialScore, developmentScore, moveCount, pieceCount, tally, board);
 
     int middlegameScore = calculateMiddlegameScore(
-            materialScore, developmentScore, moveCount, pieceCount, board);
+            materialScore, developmentScore, moveCount, pieceCount, tally, board);
 
     int endgameScore = calculateEndgameScore(
             materialScore, moveCount, pieceCount,
-            pawnStructureScore, kingActivityScore, board);
+            pawnStructureScore, kingActivityScore, tally);
 
     if (endgameScore > middlegameScore && endgameScore > openingScore) {
       return GamePhase.ENDGAME;
@@ -299,12 +301,13 @@ public class GameStateDetector {
    * @param developmentScore The development score.
    * @param moveCount The number of moves made.
    * @param pieceCount The total piece count.
+   * @param tally The piece counts of the current board.
    * @param board The current chess board.
    * @return A score indicating opening characteristics.
    */
   private int calculateOpeningScore(
           int materialScore, int developmentScore, int moveCount,
-          int pieceCount, Board board) {
+          int pieceCount, PieceTally tally, Board board) {
 
     int score = 0;
 
@@ -332,8 +335,7 @@ public class GameStateDetector {
       score += 20;
     }
 
-    int undevelopedMinorPieces = countUndevelopedMinorPieces(board);
-    score += undevelopedMinorPieces * 5;
+    score += tally.undevelopedMinorPieces * 5;
 
     if (isKingOnBackRank(board.whitePlayer().getPlayerKing()) &&
             isKingOnBackRank(board.blackPlayer().getPlayerKing())) {
@@ -344,38 +346,19 @@ public class GameStateDetector {
   }
 
   /**
-   * Counts undeveloped minor pieces on the board.
-   *
-   * @param board The current chess board.
-   * @return The number of undeveloped knights and bishops.
-   */
-  private int countUndevelopedMinorPieces(Board board) {
-    int count = 0;
-
-    for (final Piece piece : board.getAllPieces()) {
-      if ((piece.getPieceType() == Piece.PieceType.KNIGHT ||
-              piece.getPieceType() == Piece.PieceType.BISHOP) &&
-              piece.isFirstMove()) {
-        count++;
-      }
-    }
-
-    return count;
-  }
-
-  /**
    * Calculates a score indicating how much the position resembles a middlegame.
    *
    * @param materialScore The material score.
    * @param developmentScore The development score.
    * @param moveCount The number of moves made.
    * @param pieceCount The total piece count.
+   * @param tally The piece counts of the current board.
    * @param board The current chess board.
    * @return A score indicating middlegame characteristics.
    */
   private int calculateMiddlegameScore(
           int materialScore, int developmentScore, int moveCount,
-          int pieceCount, Board board) {
+          int pieceCount, PieceTally tally, Board board) {
 
     int score = 0;
 
@@ -401,22 +384,9 @@ public class GameStateDetector {
       score += 20;
     }
 
-    boolean whiteQueenPresent = false;
-    boolean blackQueenPresent = false;
-
-    for (final Piece piece : board.getAllPieces()) {
-      if (piece.getPieceType() == Piece.PieceType.QUEEN) {
-        if (piece.getPieceAllegiance().isWhite()) {
-          whiteQueenPresent = true;
-        } else {
-          blackQueenPresent = true;
-        }
-      }
-    }
-
-    if (whiteQueenPresent && blackQueenPresent) {
+    if (tally.whiteQueenPresent && tally.blackQueenPresent) {
       score += 40;
-    } else if (whiteQueenPresent || blackQueenPresent) {
+    } else if (tally.whiteQueenPresent || tally.blackQueenPresent) {
       score += 20;
     }
 
@@ -435,12 +405,12 @@ public class GameStateDetector {
    * @param pieceCount The total piece count.
    * @param pawnStructureScore The pawn structure score.
    * @param kingActivityScore The king activity score.
-   * @param board The current chess board.
+   * @param tally The piece counts of the current board.
    * @return A score indicating endgame characteristics.
    */
   private int calculateEndgameScore(
           int materialScore, int moveCount, int pieceCount,
-          int pawnStructureScore, int kingActivityScore, Board board) {
+          int pawnStructureScore, int kingActivityScore, PieceTally tally) {
 
     int score = 0;
 
@@ -465,55 +435,20 @@ public class GameStateDetector {
     score += pawnStructureScore;
     score += kingActivityScore;
 
-    boolean queensPresent = false;
-    for (final Piece piece : board.getAllPieces()) {
-      if (piece.getPieceType() == Piece.PieceType.QUEEN) {
-        queensPresent = true;
-        break;
-      }
-    }
-
-    if (!queensPresent) {
+    if (!tally.whiteQueenPresent && !tally.blackQueenPresent) {
       score += 50;
     }
 
-    if (hasPawnPromotionPotential(board)) {
+    if (tally.advancedPawnCount > 0) {
       score += 30;
     }
 
-    int nonPawnPieceCount = 0;
-    for (final Piece piece : board.getAllPieces()) {
-      if (piece.getPieceType() != Piece.PieceType.PAWN &&
-              piece.getPieceType() != Piece.PieceType.KING) {
-        nonPawnPieceCount++;
-      }
-    }
-
-    if (nonPawnPieceCount <= 6) {
+    if (tally.nonPawnPieceCount <= 6) {
       score += 40;
-    } else if (nonPawnPieceCount <= 10) {
+    } else if (tally.nonPawnPieceCount <= 10) {
       score += 20;
     }
 
     return score;
-  }
-
-  /**
-   * Checks if there are pawns with promotion potential.
-   *
-   * @param board The current chess board.
-   * @return True if pawns are close to promotion, false otherwise.
-   */
-  private boolean hasPawnPromotionPotential(final Board board) {
-    for (final Piece piece : board.getAllPieces()) {
-      if (piece.getPieceType() == Piece.PieceType.PAWN) {
-        final int rank = piece.getPiecePosition() / 8;
-        if ((piece.getPieceAllegiance().isWhite() && rank <= 2) ||
-                (!piece.getPieceAllegiance().isWhite() && rank >= 5)) {
-          return true;
-        }
-      }
-    }
-    return false;
   }
 }
