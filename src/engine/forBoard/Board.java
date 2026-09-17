@@ -118,7 +118,7 @@ public final class Board {
   /**
    * How many null moves applied through {@link #makeNullMove()} have not yet been unmade. While
    * this is greater than zero, {@link #makeMove(Move)} and {@link #unmakeMove()} leave
-   * {@link #positionCounts} alone and {@link #repetitionCount()} reports one, so no position
+   * {@link #positionHistory} alone and {@link #repetitionCount()} reports one, so no position
    * below a null move is counted toward or scored as a repetition.
    */
   private int nullMoveDepth;
@@ -136,13 +136,19 @@ public final class Board {
   private record PlayerState(WhitePlayer whitePlayer, BlackPlayer blackPlayer) {
   }
 
+  /** The initial capacity of {@link #positionHistory}. */
+  private static final int POSITION_HISTORY_CAPACITY = 256;
+
   /**
-   * A running count of how many times each Zobrist hash has been reached along the current
-   * make/unmake path, maintained by {@link #makeMove(Move)} and {@link #unmakeMove()} for
-   * threefold repetition detection. This tracks repetition only along this board instance's own
-   * make/unmake path, not a full game history supplied from outside it.
+   * The Zobrist hash of every position reached along this board instance's own make/unmake path,
+   * oldest first, held in the first {@link #positionHistorySize} entries. Appended to by
+   * {@link #makeMove(Move)} and truncated by {@link #unmakeMove()}, for threefold repetition
+   * detection. Grown by replacement when full.
    */
-  private final Map<Long, Integer> positionCounts = new HashMap<>();
+  private long[] positionHistory;
+
+  /** The number of entries of {@link #positionHistory} in use. */
+  private int positionHistorySize;
 
   /**
    * A pre-constructed standard chess board configuration representing the starting position.
@@ -169,7 +175,9 @@ public final class Board {
             ZobristHashing.calculateBoardHash(this);
     this.halfMoveClock = builder.halfMoveClock;
     this.plyCount = builder.plyCount;
-    this.positionCounts.put(this.zobristHash, 1);
+    this.positionHistory = new long[POSITION_HISTORY_CAPACITY];
+    this.positionHistory[0] = this.zobristHash;
+    this.positionHistorySize = 1;
   }
 
   /**
@@ -178,7 +186,7 @@ public final class Board {
    * other. The pieces themselves are safe to share because they are immutable.
    * <p>
    * The copy starts with empty undo stacks, so it can only be unwound back to the position it
-   * was copied at, not past it. {@link #positionCounts} is seeded from the source so that a copy
+   * was copied at, not past it. {@link #positionHistory} is seeded from the source so that a copy
    * taken mid-game carries the repetition history that preceded it.
    * <p>
    * A {@link Move} generated from a board may be applied to a board other than the exact
@@ -204,7 +212,8 @@ public final class Board {
     this.zobristHash = source.zobristHash;
     this.halfMoveClock = source.halfMoveClock;
     this.plyCount = source.plyCount;
-    this.positionCounts.putAll(source.positionCounts);
+    this.positionHistory = source.positionHistory.clone();
+    this.positionHistorySize = source.positionHistorySize;
     refreshPlayers(source.currentPlayer.getAlliance());
   }
 
@@ -296,7 +305,8 @@ public final class Board {
   /**
    * Returns how many times the current position has been reached along this board's make and
    * unmake path, counting the present occurrence. Returns one while a null move applied through
-   * {@link #makeNullMove()} is still in effect.
+   * {@link #makeNullMove()} is still in effect. Only the positions reached since the last pawn
+   * move or capture, as given by the halfmove clock, are compared.
    *
    * @return The number of occurrences of the current position.
    */
@@ -304,7 +314,14 @@ public final class Board {
     if (this.nullMoveDepth > 0) {
       return 1;
     }
-    return this.positionCounts.getOrDefault(this.zobristHash, 1);
+    final int oldest = Math.max(0, this.positionHistorySize - 1 - this.halfMoveClock);
+    int count = 0;
+    for (int index = this.positionHistorySize - 1; index >= oldest; index--) {
+      if (this.positionHistory[index] == this.zobristHash) {
+        count++;
+      }
+    }
+    return Math.max(count, 1);
   }
 
   /**
@@ -493,7 +510,10 @@ public final class Board {
     refreshPlayers(nextMover);
     this.undoStack.push(undo);
     if (this.nullMoveDepth == 0) {
-      this.positionCounts.merge(this.zobristHash, 1, Integer::sum);
+      if (this.positionHistorySize == this.positionHistory.length) {
+        this.positionHistory = Arrays.copyOf(this.positionHistory, this.positionHistory.length * 2);
+      }
+      this.positionHistory[this.positionHistorySize++] = this.zobristHash;
     }
     this.plyCount++;
   }
@@ -509,10 +529,7 @@ public final class Board {
       throw new IllegalStateException("No move on the undo stack to unmake.");
     }
     if (this.nullMoveDepth == 0) {
-      final int remaining = this.positionCounts.merge(this.zobristHash, -1, Integer::sum);
-      if (remaining <= 0) {
-        this.positionCounts.remove(this.zobristHash);
-      }
+      this.positionHistorySize--;
     }
     final UndoState undo = this.undoStack.pop();
     final PlayerState priorPlayers = this.playerUndoStack.pop();
@@ -530,7 +547,7 @@ public final class Board {
    * resulting position and the players they replaced are pushed onto this board's null move
    * player stack.
    * <p>
-   * {@link #positionCounts} is deliberately not touched. A null move position is synthetic and
+   * {@link #positionHistory} is deliberately not touched. A null move position is synthetic and
    * was never reached in a real game, so counting it toward threefold repetition would be wrong.
    * For the same reason, positions reached by real moves made while this null move is still in
    * effect are neither counted nor reported as repetitions.
