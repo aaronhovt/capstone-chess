@@ -783,21 +783,6 @@ public final class Board {
   }
 
   /**
-   * Calculates the pseudo-legal moves for a collection of pieces on the board. Public so that
-   * {@link Player#getLegalMoves()} can call it lazily to generate its own side's moves, rather
-   * than this board generating moves for both sides eagerly on every mutation.
-   *
-   * @param pieces The collection of pieces for which to calculate legal moves.
-   * @return A collection of legal moves for the given pieces.
-   */
-  public Collection<Move> calculateLegalMoves(Collection<Piece> pieces) {
-    List<Move> legalMoves = new ArrayList<>();
-    for (Piece piece : pieces) {
-      legalMoves.addAll(piece.calculateLegalMoves(this));
-    } return legalMoves;
-  }
-
-  /**
    * Scans this board's piece configuration and records the king of each alliance. An alliance
    * with no king on the board is left with a null king.
    */

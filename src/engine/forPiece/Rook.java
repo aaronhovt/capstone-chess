@@ -96,15 +96,15 @@ public final class Rook extends Piece {
   }
 
   /**
-   * Calculates the legal moves that the rook can make on the given chess board. A rook can move horizontally or
-   * vertically across the board, capturing opponent pieces along the way until blocked by a piece or board edge.
+   * Appends the legal moves that the rook can make on the given chess board to the given list. A rook can move
+   * horizontally or vertically across the board, capturing opponent pieces along the way until blocked by a piece or
+   * board edge.
    *
    * @param board The current state of the chess board.
-   * @return A collection of legal moves that the rook can make.
+   * @param legalMoves The list to which the rook's legal moves are appended.
    */
   @Override
-  public Collection<Move> calculateLegalMoves(final Board board) {
-    final List<Move> legalMoves = new ArrayList<>();
+  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
     for (final Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
       for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
         final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
@@ -119,7 +119,6 @@ public final class Rook extends Piece {
         }
       }
     }
-    return Collections.unmodifiableList(legalMoves);
   }
   /**
    * Determines whether this rook bears on the given square, walking the same precomputed

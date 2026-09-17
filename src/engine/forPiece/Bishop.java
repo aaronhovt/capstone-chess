@@ -93,16 +93,15 @@ public final class Bishop extends Piece {
   }
 
   /**
-   * Calculates all legal moves for this bishop given the current board state.
+   * Appends all legal moves for this bishop given the current board state to the given list.
    * The method generates moves along each diagonal line until blocked by a piece
    * or the board edge. Captures are allowed if the blocking piece belongs to the opponent.
    *
    * @param board The current chess board state.
-   * @return An unmodifiable collection of legal moves for this bishop.
+   * @param legalMoves The list to which this bishop's legal moves are appended.
    */
   @Override
-  public Collection<Move> calculateLegalMoves(final Board board) {
-    final List<Move> legalMoves = new ArrayList<>();
+  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
     for (final Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
       for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
         final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
@@ -118,7 +117,6 @@ public final class Bishop extends Piece {
         }
       }
     }
-    return Collections.unmodifiableList(legalMoves);
   }
 
   /**

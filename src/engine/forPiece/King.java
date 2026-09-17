@@ -153,16 +153,15 @@ public final class King extends Piece {
   }
 
   /**
-   * Calculates and returns all legal moves for this king on the given board.
+   * Appends all legal moves for this king on the given board to the given list.
    * This includes standard one-square moves and capturing moves, but excludes
    * castling moves which are handled separately by the player classes.
    *
    * @param board The current board state.
-   * @return A collection of legal moves for this king.
+   * @param legalMoves The list to which this king's legal moves are appended.
    */
   @Override
-  public Collection<Move> calculateLegalMoves(final Board board) {
-    final List<Move> legalMoves = new ArrayList<>();
+  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
     for (final int currentCandidateOffset: PRECOMPUTED_CANDIDATES[this.piecePosition]) {
       final int candidateDestinationCoordinate = this.piecePosition + currentCandidateOffset;
       final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
@@ -176,7 +175,6 @@ public final class King extends Piece {
         }
       }
     }
-    return Collections.unmodifiableList(legalMoves);
   }
 
   /**

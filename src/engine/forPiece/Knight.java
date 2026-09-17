@@ -87,14 +87,13 @@ public final class Knight extends Piece {
   }
 
   /**
-   * Calculates the legal moves for the knight on the given board.
+   * Appends the legal moves for the knight on the given board to the given list.
    *
    * @param board The current board.
-   * @return A collection of legal moves for the knight.
+   * @param legalMoves The list to which the knight's legal moves are appended.
    */
   @Override
-  public Collection<Move> calculateLegalMoves(final Board board) {
-    final List<Move> legalMoves = new ArrayList<>();
+  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
     for (final int candidateDestinationCoordinate: PRECOMPUTED_CANDIDATES[this.piecePosition]) {
       final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
       if (pieceAtDestination == null) {
@@ -107,7 +106,6 @@ public final class Knight extends Piece {
         }
       }
     }
-    return Collections.unmodifiableList(legalMoves);
   }
 
   /**

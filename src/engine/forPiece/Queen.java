@@ -97,16 +97,15 @@ public final class Queen extends Piece {
   }
 
   /**
-   * Calculates and returns all legal moves the queen can make from its current position.
+   * Appends all legal moves the queen can make from its current position to the given list.
    * The method iterates through precomputed movement lines, checking for blocking pieces
    * and generating appropriate move or attack move instances using the move pool.
    *
    * @param board The current chess board state.
-   * @return An unmodifiable collection of legal moves for the queen.
+   * @param legalMoves The list to which the queen's legal moves are appended.
    */
   @Override
-  public Collection<Move> calculateLegalMoves(final Board board) {
-    final List<Move> legalMoves = new ArrayList<>();
+  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
     for (final MoveUtils.Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
       for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
         final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
@@ -121,7 +120,6 @@ public final class Queen extends Piece {
         }
       }
     }
-    return Collections.unmodifiableList(legalMoves);
   }
 
   /**

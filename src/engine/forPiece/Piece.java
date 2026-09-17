@@ -4,7 +4,10 @@ import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 
@@ -124,12 +127,25 @@ public abstract class Piece {
   public abstract Piece movePiece(final Move move);
 
   /**
-   * Abstract method for calculating the legal moves for the piece on the given board.
+   * Calculates the legal moves for the piece on the given board.
    *
    * @param board The current board.
-   * @return A collection of legal moves for the piece.
+   * @return An unmodifiable collection of legal moves for the piece.
    */
-  public abstract Collection < Move > calculateLegalMoves(final Board board);
+  public Collection<Move> calculateLegalMoves(final Board board) {
+    final List<Move> legalMoves = new ArrayList<>();
+    addLegalMoves(board, legalMoves);
+    return Collections.unmodifiableList(legalMoves);
+  }
+
+  /**
+   * Appends the legal moves for the piece on the given board to the given list, in the same order
+   * {@link #calculateLegalMoves(Board)} returns them.
+   *
+   * @param board The current board.
+   * @param legalMoves The list to which the piece's legal moves are appended.
+   */
+  public abstract void addLegalMoves(final Board board, final List<Move> legalMoves);
 
   /**
    * Determines whether this piece bears on the given square on the given board, without

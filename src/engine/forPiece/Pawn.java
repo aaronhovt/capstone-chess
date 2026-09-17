@@ -5,9 +5,6 @@ import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
 import engine.forBoard.Move;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -69,16 +66,15 @@ public final class Pawn extends Piece {
   }
 
   /**
-   * Calculates all legal moves for this pawn on the given board, including standard moves,
-   * two-square initial moves, diagonal captures, en passant captures, and promotion moves.
-   * Returns all possible moves that can be legally executed from the current position.
+   * Appends all legal moves for this pawn on the given board to the given list, including
+   * standard moves, two-square initial moves, diagonal captures, en passant captures, and
+   * promotion moves.
    *
    * @param board The current chess board.
-   * @return A collection of legal moves for this pawn.
+   * @param legalMoves The list to which this pawn's legal moves are appended.
    */
   @Override
-  public Collection<Move> calculateLegalMoves(final Board board) {
-    final List<Move> legalMoves = new ArrayList<>();
+  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
 
     for (final int currentCandidateOffset: CANDIDATE_MOVE_COORDINATES) {
       int candidateDestinationCoordinate =
@@ -174,7 +170,6 @@ public final class Pawn extends Piece {
         }
       }
     }
-    return Collections.unmodifiableList(legalMoves);
   }
 
   /**

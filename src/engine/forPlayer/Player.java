@@ -181,7 +181,10 @@ public abstract class Player {
    * @return An unmodifiable collection of this player's legal moves.
    */
   private Collection<Move> calculateLegalMoves() {
-    final List<Move> playerLegals = new ArrayList<>(this.board.calculateLegalMoves(getActivePieces()));
+    final List<Move> playerLegals = new ArrayList<>();
+    for (final Piece piece : getActivePieces()) {
+      piece.addLegalMoves(this.board, playerLegals);
+    }
     playerLegals.addAll(calculateKingCastles(playerLegals));
     return Collections.unmodifiableList(playerLegals);
   }
