@@ -1068,7 +1068,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       double currentValue;
       try {
         int newDepth = depth - 1;
-        if (board.currentPlayer().isInCheck()) {
+        final boolean givesCheck = board.currentPlayer().isInCheck();
+        if (givesCheck) {
           newDepth++;
         }
 
@@ -1076,7 +1077,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           currentValue = min(board, newDepth, currentAlpha, beta, ply + 1, true);
         } else {
           int reduction = 0;
-          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
+          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode
+                  && !givesCheck) {
             reduction = 1 + (movesSearched / 6);
             if (reduction > 3) reduction = 3;
           }
@@ -1260,7 +1262,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       double currentValue;
       try {
         int newDepth = depth - 1;
-        if (board.currentPlayer().isInCheck()) {
+        final boolean givesCheck = board.currentPlayer().isInCheck();
+        if (givesCheck) {
           newDepth++;
         }
 
@@ -1268,7 +1271,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           currentValue = max(board, newDepth, alpha, currentBeta, ply + 1, true);
         } else {
           int reduction = 0;
-          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
+          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode
+                  && !givesCheck) {
             reduction = 1 + (movesSearched / 6);
             if (reduction > 3) reduction = 3;
           }
