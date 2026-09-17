@@ -66,8 +66,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** Cache of board evaluations belonging to this engine, cleared at the start of each search. */
   private final EvaluationCache evaluationCache = new EvaluationCache();
 
-  /** History heuristic table for move ordering, indexed by origin and destination square. */
-  private final int[][] historyHeuristic = new int[64][64];
+  /**
+   * History heuristic table for move ordering, indexed by the side that plays the move, its
+   * origin square, and its destination square. The two sides are kept apart because a pair of
+   * squares that both sides can traverse would otherwise mix their cutoff evidence into one score.
+   */
+  private final int[][][] historyHeuristic = new int[2][64][64];
 
   /** Killer moves table storing good non-capture moves for each search ply. */
   private final ThreadLocal<Move[][]> killerMoves = ThreadLocal.withInitial(() ->
@@ -192,6 +196,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         final int count = ordered.length;
         final Move[][] killers = engine.killerMoves.get();
         final Move counter = counterMoveOf(board, engine);
+        final int historySide = historySideOf(board);
 
         // Bits 42 through 46 hold the tier, which is set for each ordering property the move does
         // not have so that a move having it sorts first, and is completed by the capture rank so
@@ -221,7 +226,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                   (move.equals(killers[0][ply]) || move.equals(killers[1][ply]) ? 0 : KILLER_TIER_BIT) +
                   (counter != null && move.equals(counter) ? 0 : COUNTER_TIER_BIT) + rank;
           final long secondary = (long) Integer.MAX_VALUE -
-                  (capture ? (long) exchangeScore : (long) historyOf(move, engine));
+                  (capture ? (long) exchangeScore : (long) historyOf(move, engine, historySide));
 
           orderKeys[i] = (tier << ORDER_TIER_SHIFT) | (secondary << ORDER_INDEX_BITS) | i;
         }
@@ -245,6 +250,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                             final AlphaBeta engine, final int ply) {
         List<Move> sortedMoves = new ArrayList<>(moves);
 
+        final int historySide = historySideOf(board);
         Map<Move, Integer> seeScores = new HashMap<>();
         Map<Move, Integer> historyScores = new HashMap<>();
         for (Move move : sortedMoves) {
@@ -252,7 +258,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
             seeScores.put(move, engine.seeEvaluator.evaluate(board, move));
           }
           historyScores.put(move, isValidPosition(move) ?
-                  engine.historyHeuristic[move.getCurrentCoordinate()][move.getDestinationCoordinate()] : 0);
+                  engine.historyHeuristic[historySide][move.getCurrentCoordinate()]
+                          [move.getDestinationCoordinate()] : 0);
         }
 
         // Whether a move gives check is resolved once per move here rather than inside the
@@ -342,9 +349,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      *
      * @param move The move to score.
      * @param engine The engine holding the history table.
+     * @param historySide The index of the side that plays the move within the history table.
      * @return The recorded history score, or zero if the move has no pair of squares in range.
      */
-    private static int historyOf(final Move move, final AlphaBeta engine) {
+    private static int historyOf(final Move move, final AlphaBeta engine, final int historySide) {
       if (move == null) {
         return 0;
       }
@@ -353,7 +361,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       if (current < 0 || current >= 64 || destination < 0 || destination >= 64) {
         return 0;
       }
-      return engine.historyHeuristic[current][destination];
+      return engine.historyHeuristic[historySide][current][destination];
     }
   }
 
@@ -516,7 +524,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         bestScore = result.score();
         bestDepth = currentDepth;
 
-        updateHistoryHeuristic(bestMove, currentDepth);
+        updateHistoryHeuristic(mainBoard, bestMove, currentDepth);
 
         final long evaluatedPositions = this.boardsEvaluated.get() + stats.boardsEvaluated;
         final long executionTime = System.currentTimeMillis() - startTime;
@@ -1082,7 +1090,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
               killers[1][ply] = killers[0][ply];
               killers[0][ply] = move;
             }
-            historyHeuristic[move.getCurrentCoordinate()][move.getDestinationCoordinate()] += depth * depth;
+            historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()]
+                    [move.getDestinationCoordinate()] += depth * depth;
           }
 
           recordCounterMove(board, move);
@@ -1273,7 +1282,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
               killers[1][ply] = killers[0][ply];
               killers[0][ply] = move;
             }
-            historyHeuristic[move.getCurrentCoordinate()][move.getDestinationCoordinate()] += depth * depth;
+            historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()]
+                    [move.getDestinationCoordinate()] += depth * depth;
           }
 
           recordCounterMove(board, move);
@@ -1492,15 +1502,29 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
+   * Returns the index within the history heuristic table of the side to move in the given
+   * position. A caller recording a move must hand this the position the move is played from, not
+   * the position it leads to.
+   *
+   * @param board The position whose side to move is being indexed.
+   * @return Zero if White is to move, one if Black is to move.
+   */
+  private static int historySideOf(final Board board) {
+    return board.currentPlayer().getAlliance().isWhite() ? 0 : 1;
+  }
+
+  /**
    * Updates the history heuristic table with information about a good move
    * to improve move ordering in future searches.
    *
+   * @param board The position the move is played from, whose side to move plays it.
    * @param move The move to record in the history heuristic.
    * @param depth The depth at which this move was found to be good.
    */
-  private void updateHistoryHeuristic(Move move, int depth) {
+  private void updateHistoryHeuristic(final Board board, Move move, int depth) {
     if (move != null && move != MoveFactory.getNullMove()) {
-      historyHeuristic[move.getCurrentCoordinate()][move.getDestinationCoordinate()] += depth * depth;
+      historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()]
+              [move.getDestinationCoordinate()] += depth * depth;
     }
   }
 
