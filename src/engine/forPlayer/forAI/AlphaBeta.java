@@ -1094,14 +1094,21 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           currentValue = min(board, newDepth, currentAlpha, beta, ply + 1, true);
         } else {
           int reduction = 0;
-          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode
-                  && !givesCheck) {
+          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
             reduction = 1 + (movesSearched / 6);
             if (reduction > 3) reduction = 3;
           }
 
           currentValue = min(board, newDepth - reduction, currentAlpha, currentAlpha + 0.1,
                   ply + 1, true);
+
+          // A reduced search that raises alpha is not evidence at this node's depth, so the move
+          // is searched again against the same window at its unreduced depth before its score is
+          // allowed to raise alpha or cut this node off. Without this the node would store a
+          // bound at its own depth on the strength of a search shallower than that depth.
+          if (reduction > 0 && currentValue > currentAlpha) {
+            currentValue = min(board, newDepth, currentAlpha, currentAlpha + 0.1, ply + 1, true);
+          }
 
           if (currentValue > currentAlpha && currentValue < beta) {
             currentValue = min(board, newDepth, currentAlpha, beta, ply + 1, true);
@@ -1295,14 +1302,21 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           currentValue = max(board, newDepth, alpha, currentBeta, ply + 1, true);
         } else {
           int reduction = 0;
-          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode
-                  && !givesCheck) {
+          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
             reduction = 1 + (movesSearched / 6);
             if (reduction > 3) reduction = 3;
           }
 
           currentValue = max(board, newDepth - reduction, currentBeta - 0.1, currentBeta,
                   ply + 1, true);
+
+          // A reduced search that lowers beta is not evidence at this node's depth, so the move
+          // is searched again against the same window at its unreduced depth before its score is
+          // allowed to lower beta or cut this node off. Without this the node would store a
+          // bound at its own depth on the strength of a search shallower than that depth.
+          if (reduction > 0 && currentValue < currentBeta) {
+            currentValue = max(board, newDepth, currentBeta - 0.1, currentBeta, ply + 1, true);
+          }
 
           if (currentValue < currentBeta && currentValue > alpha) {
             currentValue = max(board, newDepth, alpha, currentBeta, ply + 1, true);
