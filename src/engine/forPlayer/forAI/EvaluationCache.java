@@ -8,10 +8,10 @@ import java.util.Arrays;
  * lookup of a position however deep in the search the position is reached. A store overwrites whatever slot the hash
  * indexes, and a lookup that finds another position in that slot reports a miss.
  * <p>
- * The evaluator that produces the score for a position is chosen from that position alone, so an entry never goes
- * stale as the search or the game progresses and the cache is never cleared during play. Each cache belongs to the
- * engine that constructed it, so two engines running at the same time neither share entries nor clear one another's.
- * Cache statistics are maintained to monitor hit rates and performance characteristics.
+ * Entries hold the scores of whichever evaluator produced them, so a cache must be cleared whenever the evaluator in
+ * use changes. Each cache belongs to the engine that constructed it, so two engines running at the same time neither
+ * share entries nor clear one another's. Cache statistics are maintained to monitor hit rates and performance
+ * characteristics.
  * <p>
  * Reads and writes take no locks. Each slot records its score twice, once as raw bits and once combined with the
  * position's hash by exclusive or, and a lookup accepts a slot only when the two agree. A lookup that runs while
