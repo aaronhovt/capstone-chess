@@ -1697,6 +1697,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     private final ReadWriteLock[] locks;
     /** The number of locks used for striped locking. */
     private static final int LOCK_COUNT = 1024;
+    /** The value {@link #replacementSlot} returns when no slot of the bucket may be written. */
+    private static final int NO_SLOT = -1;
 
     /**
      * Constructs a new striped transposition table with the specified size.
@@ -1791,12 +1793,15 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     }
 
     /**
-     * Stores a transposition table entry for the given board position.
+     * Stores a transposition table entry for the given board position. A store for a position a
+     * slot of the bucket already holds updates that slot. The store is discarded when every slot
+     * it could take holds a deeper entry from the current search.
      *
      * @param zobristHash The Zobrist hash of the board position.
      * @param score The evaluation score for the position.
      * @param depth The search depth for the evaluation.
      * @param nodeType The type of node (exact, lower bound, upper bound).
+     * @param bestMove The best move found at the position, or null if none was found.
      */
     public void store(long zobristHash, double score, int depth, byte nodeType, Move bestMove) {
       int index = (int) (zobristHash & mask) & ~1;
@@ -1804,7 +1809,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       ReadWriteLock lock = getLock(zobristHash);
       lock.writeLock().lock();
       try {
-        int target = shouldReplace(index, depth, nodeType) ? index : index + 1;
+        int target = replacementSlot(index, zobristHash, depth);
+        if (target == NO_SLOT) {
+          return;
+        }
 
         keys[target] = zobristHash;
         scores[target] = score;
@@ -1818,31 +1826,48 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     }
 
     /**
-     * Determines which slot of a bucket should be replaced based on
-     * depth, node type, and age criteria. The caller must hold the bucket's lock.
+     * Determines which slot of a bucket a store should be written to. A slot already holding the
+     * key is taken over any other, so a key occupies at most one slot of its bucket. Otherwise an
+     * empty slot is taken, then a slot left by an earlier search, then the shallower slot, an
+     * exact entry being kept over a bound of the same depth. A slot holding a deeper entry from
+     * the current search is refused. The caller must hold the bucket's lock.
      *
      * @param first The index of the bucket's first slot; the second slot follows it.
+     * @param key The Zobrist hash of the new entry.
      * @param depth The depth of the new entry.
-     * @param nodeType The node type of the new entry.
-     * @return True if the first slot should be replaced, false for the second.
+     * @return The index of the slot to write, or {@link #NO_SLOT} if the store must be discarded.
      */
-    private boolean shouldReplace(int first, int depth, byte nodeType) {
-      int second = first + 1;
-      if (keys[first] == 0) return true;
-      if (keys[second] == 0) return false;
+    private int replacementSlot(final int first, final long key, final int depth) {
+      final int second = first + 1;
+      if (keys[first] == 0) return first;
+      if (keys[second] == 0) return second;
 
-      if (depths[first] < depths[second]) return true;
-      if (depths[first] > depths[second]) return false;
+      final int target;
+      if (keys[first] == key) {
+        target = first;
+      } else if (keys[second] == key) {
+        target = second;
+      } else {
+        final boolean firstIsStale = ages[first] != currentAge;
+        final boolean secondIsStale = ages[second] != currentAge;
+        if (firstIsStale != secondIsStale) {
+          return firstIsStale ? first : second;
+        }
 
-      boolean isExact1 = nodeTypes[first] == TranspositionTable.EXACT;
-      boolean isExact2 = nodeTypes[second] == TranspositionTable.EXACT;
-      boolean newIsExact = nodeType == TranspositionTable.EXACT;
+        final boolean firstIsExact = nodeTypes[first] == TranspositionTable.EXACT;
+        final boolean secondIsExact = nodeTypes[second] == TranspositionTable.EXACT;
+        if (depths[first] != depths[second]) {
+          target = depths[first] < depths[second] ? first : second;
+        } else if (firstIsExact != secondIsExact) {
+          target = firstIsExact ? second : first;
+        } else {
+          target = first;
+        }
 
-      if (!isExact1 && isExact2) return false;
-      if (isExact1 && !isExact2) return true;
-      if (!isExact1 && newIsExact) return true;
+        if (firstIsStale) return target;
+      }
 
-      return ages[first] <= ages[second];
+      return ages[target] != currentAge || depths[target] <= depth ? target : NO_SLOT;
     }
   }
 }
