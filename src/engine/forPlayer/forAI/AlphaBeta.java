@@ -150,7 +150,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** The reduction scale factor used in late move reductions. */
   private static final double LMR_SCALE = 0.9;
 
-  /** The evaluation margin for delta pruning in quiescence search. */
+  /**
+   * The margin added to a capture's static exchange score when testing whether the capture can
+   * raise the score of a quiescence node past its bound.
+   */
   private static final double DELTA_PRUNING_VALUE = 5;
 
   /** The evaluation margin for razoring pruning technique. */
@@ -158,9 +161,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
   /** The starting half-width of the aspiration window at the root. */
   private static final double ASPIRATION_WINDOW = 40;
-
-  /** The material threshold for delta pruning in quiescence search. */
-  private static final double DELTA_MATERIAL = 100;
 
   /** The static exchange evaluation threshold for pruning bad captures. */
   private static final int SEE_PRUNING_THRESHOLD = -20;
@@ -1454,9 +1454,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       if (standPat < beta) beta = standPat;
     }
 
-    if (maximizing && standPat < alpha - DELTA_MATERIAL) return alpha;
-    if (!maximizing && standPat > beta + DELTA_MATERIAL) return beta;
-
     final Collection<Move> legalMoves = board.currentPlayer().getLegalMoves();
 
     int captureCount = 0;
@@ -1510,8 +1507,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       final boolean givesCheck = legal && board.currentPlayer().isInCheck();
       final boolean prunedByExchange = seeScore < SEE_PRUNING_THRESHOLD &&
               !isUndefendedCapture && !givesCheck;
+      // The exchange score does not count a promotion, so a capture that promotes is never
+      // judged by it here.
+      final boolean prunedByDelta = !givesCheck && !(move instanceof Move.PawnPromotion) &&
+              (maximizing ?
+                      standPat + seeScore + DELTA_PRUNING_VALUE <= alpha :
+                      standPat - seeScore - DELTA_PRUNING_VALUE >= beta);
 
-      if (!legal || prunedByExchange) {
+      if (!legal || prunedByExchange || prunedByDelta) {
         board.unmakeMove();
         continue;
       }
