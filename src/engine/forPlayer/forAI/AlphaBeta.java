@@ -990,6 +990,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       return getCachedEvaluation(board);
     }
 
+    // Read before the transposition probe narrows the window. A zero window built by adding
+    // ZERO_WINDOW to a score can come out slightly wider than ZERO_WINDOW.
+    final boolean openWindow = beta - alpha > 2 * ZERO_WINDOW;
+
     long zobristHash = board.getZobristHash();
     TranspositionTable.Entry entry = transpositionTable.get(zobristHash);
     if (entry != null && entry.depth >= depth) {
@@ -1022,15 +1026,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    Move ttMove = entry != null ? entry.move : null;
-    if (ttMove == null && depth >= 4) {
-      max(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
-      entry = transpositionTable.get(zobristHash);
-      if (entry != null) {
-        ttMove = entry.move;
-      }
-    }
-
     if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !inCheckAtNode
             && beta < Double.MAX_VALUE && hasNonPawnMaterial(board.currentPlayer())) {
       final int R = 2 + depth / 6;
@@ -1045,6 +1040,15 @@ public class AlphaBeta extends Observable implements MoveStrategy {
               && (depth < NULL_MOVE_VERIFICATION_DEPTH
                       || max(board, depth - R, alpha, beta, ply, false) >= beta)) {
         return beta;
+      }
+    }
+
+    Move ttMove = entry != null ? entry.move : null;
+    if (ttMove == null && depth >= 4 && openWindow) {
+      max(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
+      entry = transpositionTable.get(zobristHash);
+      if (entry != null) {
+        ttMove = entry.move;
       }
     }
 
@@ -1200,6 +1204,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       return getCachedEvaluation(board);
     }
 
+    // Read before the transposition probe narrows the window. A zero window built by adding
+    // ZERO_WINDOW to a score can come out slightly wider than ZERO_WINDOW.
+    final boolean openWindow = beta - alpha > 2 * ZERO_WINDOW;
+
     long zobristHash = board.getZobristHash();
     TranspositionTable.Entry entry = transpositionTable.get(zobristHash);
     if (entry != null && entry.depth >= depth) {
@@ -1232,15 +1240,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    Move ttMove = entry != null ? entry.move : null;
-    if (ttMove == null && depth >= 4) {
-      min(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
-      entry = transpositionTable.get(zobristHash);
-      if (entry != null) {
-        ttMove = entry.move;
-      }
-    }
-
     if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !inCheckAtNode
             && alpha > -Double.MAX_VALUE && hasNonPawnMaterial(board.currentPlayer())) {
       final int R = 2 + depth / 6;
@@ -1255,6 +1254,15 @@ public class AlphaBeta extends Observable implements MoveStrategy {
               && (depth < NULL_MOVE_VERIFICATION_DEPTH
                       || min(board, depth - R, alpha, beta, ply, false) <= alpha)) {
         return alpha;
+      }
+    }
+
+    Move ttMove = entry != null ? entry.move : null;
+    if (ttMove == null && depth >= 4 && openWindow) {
+      min(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
+      entry = transpositionTable.get(zobristHash);
+      if (entry != null) {
+        ttMove = entry.move;
       }
     }
 
