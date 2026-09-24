@@ -1092,7 +1092,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       try {
         int newDepth = depth - 1;
         final boolean givesCheck = board.currentPlayer().isInCheck();
-        if (givesCheck) {
+        // A check that evades a check is not extended, so no two consecutive plies are both
+        // extended and a chain of checks by both sides loses depth.
+        if (givesCheck && !inCheckAtNode) {
           newDepth++;
         }
 
@@ -1300,7 +1302,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       try {
         int newDepth = depth - 1;
         final boolean givesCheck = board.currentPlayer().isInCheck();
-        if (givesCheck) {
+        // A check that evades a check is not extended, so no two consecutive plies are both
+        // extended and a chain of checks by both sides loses depth.
+        if (givesCheck && !inCheckAtNode) {
           newDepth++;
         }
 
