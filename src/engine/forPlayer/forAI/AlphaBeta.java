@@ -108,9 +108,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   @SuppressWarnings("unchecked")
   private final AtomicReference<Move>[][] counterMoves = new AtomicReference[64][64];
 
-  /** The maximum number of quiescence search nodes allowed per search. */
-  private static final int MAX_QUIESCENCE = 300000;
-
   /** The node limit that lets a search run to the depth it was asked for. */
   public static final long UNLIMITED_NODES = Long.MAX_VALUE;
 
@@ -544,7 +541,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     try {
       for (int currentDepth = 1; currentDepth <= searchDepth && !searchStopped; currentDepth++) {
-        stats.quiescenceCount = 0;
         stats.nodeLimit = currentDepth == 1 ? UNLIMITED_NODES : nodeLimit;
         stats.deadline = currentDepth == 1 ? NO_DEADLINE : deadline;
 
@@ -1407,10 +1403,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       return getCachedEvaluation(board);
     }
 
-    if (stats.quiescenceCount >= MAX_QUIESCENCE || ply >= MAX_PLY) {
+    if (ply >= MAX_PLY) {
       return getCachedEvaluation(board);
     }
-    stats.quiescenceCount++;
 
     long zobristHash = board.getZobristHash();
     TranspositionTable.Entry entry = transpositionTable.get(zobristHash);
@@ -1671,8 +1666,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   private static class SearchStats {
     /** The number of board positions evaluated by this thread. */
     long boardsEvaluated;
-    /** The number of quiescence search nodes explored by this thread. */
-    int quiescenceCount;
     /** The node count at which this thread stops the search. */
     long nodeLimit = UNLIMITED_NODES;
     /** The reading of {@link System#nanoTime()} at which this thread stops the search. */
