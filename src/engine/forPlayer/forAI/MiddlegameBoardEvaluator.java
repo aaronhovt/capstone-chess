@@ -31,6 +31,23 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final double THREAT_FRACTION = 0.25;
 
   /**
+   * The tiles within two ranks and two files of each tile, indexed by tile, as one bit per tile.
+   */
+  private static final long[] KING_ZONES = computeKingZones();
+
+  /**
+   * The space count a white move earns by landing on each tile, indexed by tile. A tile counts
+   * once for lying in white's forward half and once for lying in the extended centre.
+   */
+  private static final int[] WHITE_SPACE_WEIGHTS = computeSpaceWeights(Alliance.WHITE);
+
+  /**
+   * The space count a black move earns by landing on each tile, indexed by tile. A tile counts
+   * once for lying in black's forward half and once for lying in the extended centre.
+   */
+  private static final int[] BLACK_SPACE_WEIGHTS = computeSpaceWeights(Alliance.BLACK);
+
+  /**
    * Private constructor to prevent instantiation outside of the class.
    * Enforces the singleton pattern.
    */
@@ -104,8 +121,11 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   private MoveStatistics moveStatistics(final Player player) {
     final Collection<Move> playerMoves = player.getLegalMoves();
-    final Alliance alliance = player.getAlliance();
-    final int opposingKingPosition = player.getOpponent().getPlayerKing().getPiecePosition();
+    final int[] spaceWeights = player.getAlliance().isWhite() ?
+            WHITE_SPACE_WEIGHTS :
+            BLACK_SPACE_WEIGHTS;
+    final long opposingKingZone =
+            KING_ZONES[player.getOpponent().getPlayerKing().getPiecePosition()];
 
     final int[] moveCountByPieceType = new int[Piece.PieceType.values().length];
     final int[] destinationCount = new int[BoardUtils.NUM_TILES];
@@ -125,18 +145,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
         pawnDestinationCount[destination]++;
       }
 
-      final int rank = destination / 8;
-      final int file = destination % 8;
+      spaceCount += spaceWeights[destination];
 
-      if ((alliance.isWhite() && rank < 4) || (!alliance.isWhite() && rank > 3)) {
-        spaceCount++;
-      }
-
-      if (file >= 2 && file <= 5 && rank >= 2 && rank <= 5) {
-        spaceCount++;
-      }
-
-      if (isSquareNearKing(opposingKingPosition, destination)) {
+      if (((opposingKingZone >>> destination) & 1L) != 0L) {
         nearKingSquareCount++;
         nearKingCountByPieceType[pieceType.ordinal()]++;
       }
@@ -484,22 +495,6 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     }
 
     return exposureScore;
-  }
-
-  /**
-   * Determines if a square is near the king.
-   *
-   * @param kingPosition The position of the king on the board.
-   * @param square The square to check proximity to the king.
-   * @return True if the square is within 2 squares of the king, false otherwise.
-   */
-  private boolean isSquareNearKing(final int kingPosition, final int square) {
-    final int kingRank = kingPosition / 8;
-    final int kingFile = kingPosition % 8;
-    final int squareRank = square / 8;
-    final int squareFile = square % 8;
-
-    return Math.max(Math.abs(kingRank - squareRank), Math.abs(kingFile - squareFile)) <= 2;
   }
 
   /**
@@ -1385,6 +1380,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   private int countDefendingPieces(final Player player, final int kingPosition) {
     int defendingCount = 0;
+    final long kingZone = KING_ZONES[kingPosition];
 
     for (final Piece piece : player.getActivePieces()) {
       if (piece.getPieceType() == Piece.PieceType.KING) {
@@ -1393,7 +1389,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
       final int piecePosition = piece.getPiecePosition();
 
-      if (isSquareNearKing(kingPosition, piecePosition)) {
+      if (((kingZone >>> piecePosition) & 1L) != 0L) {
         defendingCount++;
       }
     }
@@ -1648,5 +1644,54 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   private static King opposingKing(final Board board, final Alliance alliance) {
     return board.getKing(alliance.isWhite() ? Alliance.BLACK : Alliance.WHITE);
+  }
+
+  /**
+   * Builds the table of tiles lying within two ranks and two files of each tile.
+   *
+   * @return The tiles near each tile, indexed by tile, as one bit per tile.
+   */
+  private static long[] computeKingZones() {
+    final long[] kingZones = new long[BoardUtils.NUM_TILES];
+
+    for (int center = 0; center < BoardUtils.NUM_TILES; center++) {
+      for (int tile = 0; tile < BoardUtils.NUM_TILES; tile++) {
+        final int rankDistance = Math.abs((center / 8) - (tile / 8));
+        final int fileDistance = Math.abs((center % 8) - (tile % 8));
+
+        if (Math.max(rankDistance, fileDistance) <= 2) {
+          kingZones[center] |= 1L << tile;
+        }
+      }
+    }
+
+    return kingZones;
+  }
+
+  /**
+   * Builds the table of the space count a move of the given alliance earns by landing on each
+   * tile. A tile counts once for lying in the alliance's forward half and once for lying in the
+   * extended centre.
+   *
+   * @param alliance The alliance whose moves the table scores.
+   * @return The space count of each tile, indexed by tile.
+   */
+  private static int[] computeSpaceWeights(final Alliance alliance) {
+    final int[] spaceWeights = new int[BoardUtils.NUM_TILES];
+
+    for (int tile = 0; tile < BoardUtils.NUM_TILES; tile++) {
+      final int rank = tile / 8;
+      final int file = tile % 8;
+
+      if ((alliance.isWhite() && rank < 4) || (!alliance.isWhite() && rank > 3)) {
+        spaceWeights[tile]++;
+      }
+
+      if (file >= 2 && file <= 5 && rank >= 2 && rank <= 5) {
+        spaceWeights[tile]++;
+      }
+    }
+
+    return spaceWeights;
   }
 }
