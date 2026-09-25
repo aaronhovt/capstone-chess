@@ -239,6 +239,16 @@ public abstract class Player {
   protected abstract Collection<Move> calculateKingCastles(Collection<Move> playerLegals);
 
   /**
+   * Returns the castling moves {@link #getLegalMoves()} includes for this player on the current
+   * board, computed afresh on every call and without generating any other move.
+   *
+   * @return An unmodifiable collection of this player's castling moves.
+   */
+  public Collection<Move> getCastleMoves() {
+    return calculateKingCastles(Collections.emptyList());
+  }
+
+  /**
    * Determines whether this player has any castling opportunities available.
    * A player has castling opportunities if they are not in check, have not already castled,
    * and retain either kingside or queenside castling capabilities.

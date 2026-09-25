@@ -120,6 +120,26 @@ public final class Knight extends Piece {
   }
 
   /**
+   * Returns the destination squares of this knight's legal moves on the given board, being every
+   * square a knight's jump away that is empty or holds an opposing piece.
+   *
+   * @param board The current chess board.
+   * @return The destination squares, as one bit per square.
+   */
+  @Override
+  public long legalDestinations(final Board board) {
+    long destinations = 0L;
+    for (final int candidateDestinationCoordinate: PRECOMPUTED_CANDIDATES[this.piecePosition]) {
+      final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
+      if (pieceAtDestination == null ||
+              this.pieceAlliance != pieceAtDestination.getPieceAllegiance()) {
+        destinations |= 1L << candidateDestinationCoordinate;
+      }
+    }
+    return destinations;
+  }
+
+  /**
    * Determines whether this knight bears on the given square, using the same precomputed
    * offsets as {@link #calculateLegalMoves(Board)} but without allocating any moves. Occupancy
    * of the target square is disregarded.

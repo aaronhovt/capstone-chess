@@ -173,6 +173,74 @@ public final class Pawn extends Piece {
   }
 
   /**
+   * Returns the destination squares of this pawn's legal moves on the given board, being the
+   * single and two-square advances, the diagonal captures, and the en passant capture. A
+   * destination on the promotion rank appears once, although one move per promotion piece is
+   * generated for it.
+   *
+   * @param board The current chess board.
+   * @return The destination squares, as one bit per square.
+   */
+  @Override
+  public long legalDestinations(final Board board) {
+    long destinations = 0L;
+
+    for (final int currentCandidateOffset: CANDIDATE_MOVE_COORDINATES) {
+      final int candidateDestinationCoordinate =
+              this.piecePosition + (this.pieceAlliance.getDirection() * currentCandidateOffset);
+      if (!BoardUtils.isValidTileCoordinate(candidateDestinationCoordinate)) {
+        continue;
+      }
+
+      if (currentCandidateOffset == 8 && board.getPiece(candidateDestinationCoordinate) == null) {
+        destinations |= 1L << candidateDestinationCoordinate;
+      }
+      else if (currentCandidateOffset == 16 && this.isFirstMove() &&
+              ((BoardUtils.Instance.SecondRow.get(this.piecePosition) && this.pieceAlliance.isBlack()) ||
+                      (BoardUtils.SeventhRow.get(this.piecePosition) && this.pieceAlliance.isWhite()))) {
+        final int behindCandidateDestinationCoordinate =
+                this.piecePosition + (this.pieceAlliance.getDirection() * 8);
+        if (board.getPiece(candidateDestinationCoordinate) == null &&
+                board.getPiece(behindCandidateDestinationCoordinate) == null) {
+          destinations |= 1L << candidateDestinationCoordinate;
+        }
+      }
+      else if (currentCandidateOffset == 7 &&
+              !((BoardUtils.Instance.EighthColumn.get(this.piecePosition) && this.pieceAlliance.isWhite()) ||
+                      (BoardUtils.Instance.FirstColumn.get(this.piecePosition) && this.pieceAlliance.isBlack()))) {
+        final Piece pieceOnCandidate = board.getPiece(candidateDestinationCoordinate);
+        if (pieceOnCandidate != null) {
+          if (this.pieceAlliance != pieceOnCandidate.getPieceAllegiance()) {
+            destinations |= 1L << candidateDestinationCoordinate;
+          }
+        } else if (board.getEnPassantPawn() != null && board.getEnPassantPawn().getPiecePosition() ==
+                (this.piecePosition + (this.pieceAlliance.getOppositeDirection()))) {
+          if (this.pieceAlliance != board.getEnPassantPawn().getPieceAllegiance()) {
+            destinations |= 1L << candidateDestinationCoordinate;
+          }
+        }
+      }
+      else if (currentCandidateOffset == 9 &&
+              !((BoardUtils.Instance.FirstColumn.get(this.piecePosition) && this.pieceAlliance.isWhite()) ||
+                      (BoardUtils.Instance.EighthColumn.get(this.piecePosition) && this.pieceAlliance.isBlack()))) {
+        final Piece pieceOnCandidate = board.getPiece(candidateDestinationCoordinate);
+        if (pieceOnCandidate != null) {
+          if (this.pieceAlliance != pieceOnCandidate.getPieceAllegiance()) {
+            destinations |= 1L << candidateDestinationCoordinate;
+          }
+        } else if (board.getEnPassantPawn() != null && board.getEnPassantPawn().getPiecePosition() ==
+                (this.piecePosition - (this.pieceAlliance.getOppositeDirection()))) {
+          if (this.pieceAlliance != board.getEnPassantPawn().getPieceAllegiance()) {
+            destinations |= 1L << candidateDestinationCoordinate;
+          }
+        }
+      }
+    }
+
+    return destinations;
+  }
+
+  /**
    * Determines whether this pawn bears on the given square, which is either of the two squares
    * diagonally ahead of it. Occupancy of the target square is disregarded.
    *

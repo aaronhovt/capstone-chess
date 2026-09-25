@@ -120,6 +120,32 @@ public final class Rook extends Piece {
       }
     }
   }
+
+  /**
+   * Returns the destination squares of this rook's legal moves on the given board, being every
+   * square along each line up to the first piece, and that piece's square when it is opposing.
+   *
+   * @param board The current chess board.
+   * @return The destination squares, as one bit per square.
+   */
+  @Override
+  public long legalDestinations(final Board board) {
+    long destinations = 0L;
+    for (final Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
+      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
+        final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
+        if (pieceAtDestination == null) {
+          destinations |= 1L << candidateDestinationCoordinate;
+        } else {
+          if (this.pieceAlliance != pieceAtDestination.getPieceAllegiance()) {
+            destinations |= 1L << candidateDestinationCoordinate;
+          }
+          break;
+        }
+      }
+    }
+    return destinations;
+  }
   /**
    * Determines whether this rook bears on the given square, walking the same precomputed
    * lines as {@link #calculateLegalMoves(Board)} but without allocating any moves. Occupancy of

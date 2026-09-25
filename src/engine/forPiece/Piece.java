@@ -148,6 +148,17 @@ public abstract class Piece {
   public abstract void addLegalMoves(final Board board, final List<Move> legalMoves);
 
   /**
+   * Returns the destination squares of the moves {@link #addLegalMoves(Board, List)} appends for
+   * this piece on the given board, without allocating any {@link Move} objects. A pawn move onto
+   * the promotion rank appears once here, although one move per promotion piece is appended for
+   * it. No other square is the destination of more than one of this piece's moves.
+   *
+   * @param board The current board.
+   * @return The destination squares, as one bit per square.
+   */
+  public abstract long legalDestinations(final Board board);
+
+  /**
    * Determines whether this piece bears on the given square on the given board, without
    * allocating any {@link Move} objects. Whatever occupies the target square is disregarded, so
    * a square held by a piece of this piece's own alliance is still defended. A sliding piece is
