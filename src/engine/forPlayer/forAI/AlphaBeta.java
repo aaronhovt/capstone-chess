@@ -174,14 +174,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** The bit position at which a packed standard ordering key holds its tier. */
   private static final int ORDER_TIER_SHIFT = ORDER_INDEX_BITS + 32;
 
-  /** The tier bit a packed standard ordering key sets when its move is not an undefended capture. */
-  private static final long UNDEFENDED_TIER_BIT = 16;
+  /** The bit position within a packed standard ordering key's tier that holds the capture rank. */
+  private static final int ORDER_RANK_SHIFT = 2;
 
-  /** The tier bit a packed standard ordering key sets when its move is not a killer move. */
-  private static final long KILLER_TIER_BIT = 8;
+  /** The tier bit a packed standard ordering key sets when its quiet move is not a killer move. */
+  private static final long KILLER_TIER_BIT = 2;
 
-  /** The tier bit a packed standard ordering key sets when its move is not a countermove. */
-  private static final long COUNTER_TIER_BIT = 4;
+  /** The tier bit a packed standard ordering key sets when its quiet move is not a countermove. */
+  private static final long COUNTER_TIER_BIT = 1;
 
   /** The tier rank of a capture whose static exchange score is not negative. */
   private static final long GOOD_CAPTURE_RANK = 0;
@@ -222,10 +222,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         final Move counter = counterMoveOf(board, engine);
         final int historySide = historySideOf(board);
 
-        // Bits 42 through 46 hold the tier, which is set for each ordering property the move does
-        // not have so that a move having it sorts first, and is completed by the capture rank so
-        // that a good capture outranks a quiet move and a quiet move outranks a bad capture. Bits
-        // 10 through 41 hold the static exchange score of a capture or the history score of a
+        // Bits 42 through 45 hold the tier. Its upper bits hold the capture rank, so that a good
+        // capture outranks a quiet move and a quiet move outranks a bad capture. Its two lowest
+        // bits are set on a quiet move that is not a killer move and on one that is not the
+        // countermove, so that among quiet moves a killer move sorts first and a countermove
+        // next. Bits 10 through 41 hold the static exchange score of a capture or the history score of a
         // quiet move, negated against Integer.MAX_VALUE so that higher scores sort first. A
         // history score never leaves the range negative HISTORY_MAX through HISTORY_MAX, so that
         // difference stays within those bits instead of carrying into the tier above them. Bits 0
@@ -237,20 +238,15 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           final Move move = ordered[i];
           final boolean capture = move.isAttack();
 
-          int exchangeScore = 0;
-          boolean undefended = false;
-          if (capture) {
-            exchangeScore = engine.seeEvaluator.evaluate(board, move);
-            final Piece attackedPiece = move.getAttackedPiece();
-            undefended = attackedPiece != null &&
-                    !engine.seeEvaluator.isPieceDefended(attackedPiece, board);
-          }
+          final int exchangeScore = capture ? engine.seeEvaluator.evaluate(board, move) : 0;
 
           final long rank = capture ? (exchangeScore >= 0 ? GOOD_CAPTURE_RANK : BAD_CAPTURE_RANK) :
                   QUIET_RANK;
-          final long tier = (undefended ? 0 : UNDEFENDED_TIER_BIT) +
-                  (move.equals(killers[0][ply]) || move.equals(killers[1][ply]) ? 0 : KILLER_TIER_BIT) +
-                  (counter != null && move.equals(counter) ? 0 : COUNTER_TIER_BIT) + rank;
+          long tier = rank << ORDER_RANK_SHIFT;
+          if (!capture) {
+            tier += (move.equals(killers[0][ply]) || move.equals(killers[1][ply]) ? 0 : KILLER_TIER_BIT) +
+                    (counter != null && move.equals(counter) ? 0 : COUNTER_TIER_BIT);
+          }
           final long secondary = (long) Integer.MAX_VALUE -
                   (capture ? (long) exchangeScore : (long) historyOf(move, engine, historySide));
 
@@ -856,12 +852,16 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Records a move as a countermove response to the last opponent move for move ordering.
+   * Records a quiet move as a countermove response to the last opponent move for move ordering.
+   * A capture is not recorded.
    *
    * @param board The current board position.
    * @param move The move to record as a countermove.
    */
   private void recordCounterMove(Board board, Move move) {
+    if (move.isAttack()) {
+      return;
+    }
     Move lastMove = board.getTransitionMove();
     if (lastMove != null && lastMove != MoveFactory.getNullMove()) {
       counterMoves[lastMove.getCurrentCoordinate()][lastMove.getDestinationCoordinate()].set(move);
@@ -1470,35 +1470,30 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    // Both ordering keys are resolved once per capture here. Each of these evaluator calls walks
-    // every piece on the board, so reading them from inside a comparator costs O(n log n) board
-    // scans per node, and the loop below would then scan a third time for every key it uses.
+    // The static exchange score is resolved once per capture here. Each evaluator call walks every
+    // piece on the board, so reading it from inside a comparator costs O(n log n) board scans per
+    // node, and the loop below would then scan again for every capture it searches.
     final Move[] captures = new Move[captureCount];
     final int[] captureSeeScores = new int[captureCount];
-    final boolean[] captureUndefended = new boolean[captureCount];
 
     int captureIndex = 0;
     for (Move move : legalMoves) {
       if (!move.isAttack()) {
         continue;
       }
-      final Piece attackedPiece = move.getAttackedPiece();
       captures[captureIndex] = move;
       captureSeeScores[captureIndex] = seeEvaluator.evaluate(board, move);
-      captureUndefended[captureIndex] = attackedPiece != null &&
-              !seeEvaluator.isPieceDefended(attackedPiece, board);
       captureIndex++;
     }
 
-    // Bit 62 holds the defended flag so undefended captures sort first, bits 30 through 61 hold
-    // the static exchange score negated against Integer.MAX_VALUE so higher scores sort first, and
-    // bits 0 through 29 hold the source index so equal keys keep move generation order. Every key
-    // is non-negative, so sorting the packed values ascending yields the intended move order.
+    // Bits 30 through 61 hold the static exchange score negated against Integer.MAX_VALUE so higher
+    // scores sort first, and bits 0 through 29 hold the source index so equal keys keep move
+    // generation order. Every key is non-negative, so sorting the packed values ascending yields
+    // the intended move order.
     final long[] orderKeys = new long[captureCount];
     for (int i = 0; i < captureCount; i++) {
-      final long defendedBit = captureUndefended[i] ? 0L : 1L;
       final long descendingSee = (long) Integer.MAX_VALUE - (long) captureSeeScores[i];
-      orderKeys[i] = (defendedBit << 62) | (descendingSee << 30) | i;
+      orderKeys[i] = (descendingSee << 30) | i;
     }
     Arrays.sort(orderKeys);
 
@@ -1506,14 +1501,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       final int index = (int) (orderKey & INDEX_MASK);
       final Move move = captures[index];
       final int seeScore = captureSeeScores[index];
-      final boolean isUndefendedCapture = captureUndefended[index];
 
       board.makeMove(move);
 
       final boolean legal = !board.currentPlayer().getOpponent().isInCheck();
       final boolean givesCheck = legal && board.currentPlayer().isInCheck();
-      final boolean prunedByExchange = seeScore < SEE_PRUNING_THRESHOLD &&
-              !isUndefendedCapture && !givesCheck;
+      final boolean prunedByExchange = seeScore < SEE_PRUNING_THRESHOLD && !givesCheck;
       // The exchange score does not count a promotion, so a capture that promotes is never
       // judged by it here.
       final boolean prunedByDelta = !givesCheck && !(move instanceof Move.PawnPromotion) &&
