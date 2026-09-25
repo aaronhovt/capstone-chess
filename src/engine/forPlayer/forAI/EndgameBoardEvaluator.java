@@ -63,38 +63,45 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final List<Piece> blackPawns = getPlayerPawns(board.blackPlayer());
     final PawnLists pawns = new PawnLists(whitePawns, blackPawns,
             PawnLists.occupancy(whitePawns), PawnLists.occupancy(blackPawns));
-    final int nonPawnPieceCount = countNonPawnPieces(board);
+    final Collection<Piece> whitePieces = board.whitePlayer().getActivePieces();
+    final Collection<Piece> blackPieces = board.blackPlayer().getActivePieces();
+    final Material material = new Material(countPieceTypes(whitePieces),
+            countPieceTypes(blackPieces), hasOppositeColoredBishops(whitePieces, blackPieces));
     final MoveTargets whiteTargets = moveTargets(board, board.whitePlayer());
     final MoveTargets blackTargets = moveTargets(board, board.blackPlayer());
 
-    return (score(board.whitePlayer(), board, pawns, nonPawnPieceCount, whiteTargets, blackTargets) -
-            score(board.blackPlayer(), board, pawns, nonPawnPieceCount, blackTargets, whiteTargets));
+    return (score(board.whitePlayer(), board, pawns, material, whiteTargets, blackTargets) -
+            score(board.blackPlayer(), board, pawns, material, blackTargets, whiteTargets));
   }
 
   /**
-   * Counts the pieces of both players that are neither pawns nor kings.
+   * The piece counts of both players, read once per evaluation.
    *
-   * @param board The current state of the chess board.
-   * @return The number of such pieces on the board.
+   * @param white The number of white's pieces of each type.
+   * @param black The number of black's pieces of each type.
+   * @param oppositeColoredBishops Whether each player holds exactly one bishop and the two bishops
+   *                               stand on squares of different colours.
    */
-  private static int countNonPawnPieces(final Board board) {
-    int nonPawnPieceCount = 0;
+  private record Material(PieceCounts white, PieceCounts black, boolean oppositeColoredBishops) {
 
-    for (final Piece piece : board.getWhitePieces()) {
-      if (piece.getPieceType() != Piece.PieceType.PAWN &&
-              piece.getPieceType() != Piece.PieceType.KING) {
-        nonPawnPieceCount++;
-      }
+    /**
+     * Returns the piece counts of the given player.
+     *
+     * @param player The player whose piece counts are requested.
+     * @return That player's piece counts.
+     */
+    private PieceCounts of(final Player player) {
+      return player.getAlliance().isWhite() ? white : black;
     }
 
-    for (final Piece piece : board.getBlackPieces()) {
-      if (piece.getPieceType() != Piece.PieceType.PAWN &&
-              piece.getPieceType() != Piece.PieceType.KING) {
-        nonPawnPieceCount++;
-      }
+    /**
+     * Returns the number of pieces of both players that are neither pawns nor kings.
+     *
+     * @return The number of such pieces on the board.
+     */
+    private int nonPawnPieceCount() {
+      return white.nonPawnPieceCount() + black.nonPawnPieceCount();
     }
-
-    return nonPawnPieceCount;
   }
 
   /**
@@ -213,24 +220,24 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param player The player for whom the board position is being evaluated.
    * @param board The current state of the chess board.
    * @param pawns The pawns of both players.
-   * @param nonPawnPieceCount The number of pieces of both players that are neither pawns nor kings.
+   * @param material The piece counts of both players.
    * @param playerTargets The destinations of the player's legal moves.
    * @param opponentTargets The destinations of the opponent's legal moves.
    * @return The evaluation score of the board from the perspective of the specified player.
    */
   @VisibleForTesting
   private double score(final Player player, final Board board, final PawnLists pawns,
-                       final int nonPawnPieceCount, final MoveTargets playerTargets,
+                       final Material material, final MoveTargets playerTargets,
                        final MoveTargets opponentTargets) {
-    return materialEvaluation(player, nonPawnPieceCount) +
+    return materialEvaluation(player, material) +
             kingActivityEvaluation(player, pawns, opponentTargets) +
             passedPawnEvaluation(player, board, pawns) +
             pawnStructureEvaluation(player, board, pawns) +
-            pieceCoordinationEvaluation(player, board, pawns) +
+            pieceCoordinationEvaluation(player, board, pawns, material) +
             rookEndgameEvaluation(player, board, pawns) +
-            bishopEndgameEvaluation(player, board, pawns) +
-            drawPatternEvaluation(player, board, pawns) +
-            mobilityEvaluation(player, nonPawnPieceCount, playerTargets) +
+            bishopEndgameEvaluation(player, board, pawns, material) +
+            drawPatternEvaluation(player, pawns, material) +
+            mobilityEvaluation(player, material, playerTargets) +
             pieceSafetyEvaluation(player, board, opponentTargets);
   }
 
@@ -241,40 +248,22 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * material combinations.
    *
    * @param player The player whose material is being evaluated.
-   * @param nonPawnPieceCount The number of pieces of both players that are neither pawns nor kings.
+   * @param material The piece counts of both players.
    * @return The material evaluation score for the player.
    */
-  private double materialEvaluation(final Player player, final int nonPawnPieceCount) {
+  private double materialEvaluation(final Player player, final Material material) {
     double materialScore = 0;
-    final Collection<Piece> playerPieces = player.getActivePieces();
-    final Collection<Piece> opponentPieces = player.getOpponent().getActivePieces();
-    final boolean isEndgame = isDeepEndgame(nonPawnPieceCount);
+    final boolean isEndgame = isDeepEndgame(material.nonPawnPieceCount());
 
-    PieceCounts playerPieceCounts = countPieceTypes(playerPieces);
-    PieceCounts opponentPieceCounts = countPieceTypes(opponentPieces);
+    final PieceCounts playerPieceCounts = material.of(player);
+    final PieceCounts opponentPieceCounts = material.of(player.getOpponent());
 
-    for (final Piece piece : playerPieces) {
-      switch (piece.getPieceType()) {
-        case PAWN:
-          materialScore += 100;
-          break;
-        case KNIGHT:
-          materialScore += isEndgame ? 290 : 310;
-          break;
-        case BISHOP:
-          materialScore += isEndgame ? 330 : 320;
-          break;
-        case ROOK:
-          materialScore += isEndgame ? 530 : 500;
-          break;
-        case QUEEN:
-          materialScore += 900;
-          break;
-        case KING:
-          materialScore += 10000;
-          break;
-      }
-    }
+    materialScore += playerPieceCounts.of(Piece.PieceType.PAWN) * 100;
+    materialScore += playerPieceCounts.of(Piece.PieceType.KNIGHT) * (isEndgame ? 290 : 310);
+    materialScore += playerPieceCounts.of(Piece.PieceType.BISHOP) * (isEndgame ? 330 : 320);
+    materialScore += playerPieceCounts.of(Piece.PieceType.ROOK) * (isEndgame ? 530 : 500);
+    materialScore += playerPieceCounts.of(Piece.PieceType.QUEEN) * 900;
+    materialScore += playerPieceCounts.of(Piece.PieceType.KING) * 10000;
 
     if (playerPieceCounts.of(Piece.PieceType.BISHOP) >= 2) {
       materialScore += 50;
@@ -288,7 +277,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       materialScore += 100;
     }
 
-    if (hasOppositeColoredBishops(playerPieces, opponentPieces)) {
+    if (material.oppositeColoredBishops()) {
       materialScore -= 50;
     }
 
@@ -312,6 +301,16 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
      */
     private int of(final Piece.PieceType type) {
       return byType[type.ordinal()];
+    }
+
+    /**
+     * Returns the number of pieces that are neither pawns nor kings.
+     *
+     * @return The number of such pieces.
+     */
+    private int nonPawnPieceCount() {
+      return of(Piece.PieceType.KNIGHT) + of(Piece.PieceType.BISHOP) +
+              of(Piece.PieceType.ROOK) + of(Piece.PieceType.QUEEN);
     }
   }
 
@@ -1149,14 +1148,15 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param player The player whose piece coordination is being evaluated.
    * @param board The current chess board state.
    * @param pawns The pawns of both players.
+   * @param material The piece counts of both players.
    * @return The piece coordination evaluation score.
    */
   private double pieceCoordinationEvaluation(final Player player, final Board board,
-                                             final PawnLists pawns) {
+                                             final PawnLists pawns, final Material material) {
     double coordinationScore = 0;
     final Collection<Piece> playerPieces = player.getActivePieces();
 
-    coordinationScore += evaluateMinorPieceCoordination(playerPieces, pawns);
+    coordinationScore += evaluateMinorPieceCoordination(material.of(player), pawns);
     coordinationScore += evaluatePiecePlacement(playerPieces, pawns.of(player));
     coordinationScore += evaluatePiecesSupportingPassedPawns(player, board, pawns);
 
@@ -1167,30 +1167,22 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * Evaluates minor piece coordination in endgames, including bishop pair
    * advantages and knight positioning relative to remaining pawns.
    *
-   * @param playerPieces The player's pieces.
+   * @param playerPieceCounts The piece counts for the player.
    * @param pawns The pawns of both players.
    * @return The minor piece coordination evaluation score.
    */
-  private double evaluateMinorPieceCoordination(final Collection<Piece> playerPieces,
+  private double evaluateMinorPieceCoordination(final PieceCounts playerPieceCounts,
                                                 final PawnLists pawns) {
     double minorPieceScore = 0;
 
     if (!pawns.white().isEmpty() || !pawns.black().isEmpty()) {
-      long bishopCount = playerPieces.stream()
-              .filter(p -> p.getPieceType() == Piece.PieceType.BISHOP)
-              .count();
-
-      if (bishopCount >= 2) {
+      if (playerPieceCounts.of(Piece.PieceType.BISHOP) >= 2) {
         minorPieceScore += 50;
       }
     }
 
     if (pawns.white().size() + pawns.black().size() <= 4) {
-      long knightCount = playerPieces.stream()
-              .filter(p -> p.getPieceType() == Piece.PieceType.KNIGHT)
-              .count();
-
-      minorPieceScore -= knightCount * 10;
+      minorPieceScore -= playerPieceCounts.of(Piece.PieceType.KNIGHT) * 10;
     }
 
     return minorPieceScore;
@@ -1518,10 +1510,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param player The player whose bishop endgame factors are being evaluated.
    * @param board The current chess board state.
    * @param pawns The pawns of both players.
+   * @param material The piece counts of both players.
    * @return The bishop endgame evaluation score.
    */
   private double bishopEndgameEvaluation(final Player player, final Board board,
-                                         final PawnLists pawns) {
+                                         final PawnLists pawns, final Material material) {
     double bishopScore = 0;
     final List<Piece> playerBishops = player.getActivePieces().stream()
             .filter(p -> p.getPieceType() == Piece.PieceType.BISHOP)
@@ -1537,15 +1530,10 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       bishopScore += Long.bitCount(bishop.legalDestinations(board)) * 5;
     }
 
-    final List<Piece> playerKnights = player.getActivePieces().stream()
-            .filter(p -> p.getPieceType() == Piece.PieceType.KNIGHT)
-            .toList();
+    final int playerKnightCount = material.of(player).of(Piece.PieceType.KNIGHT);
+    final int opponentKnightCount = material.of(player.getOpponent()).of(Piece.PieceType.KNIGHT);
 
-    final List<Piece> opponentKnights = player.getOpponent().getActivePieces().stream()
-            .filter(p -> p.getPieceType() == Piece.PieceType.KNIGHT)
-            .toList();
-
-    if (!playerBishops.isEmpty() && !opponentKnights.isEmpty() && playerKnights.isEmpty()) {
+    if (!playerBishops.isEmpty() && opponentKnightCount > 0 && playerKnightCount == 0) {
       bishopScore += evaluateBishopVsKnight(pawns);
     }
 
@@ -1639,24 +1627,21 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * opposite-colored bishops, and other drawish tendencies.
    *
    * @param player The player whose draw patterns are being evaluated.
-   * @param board The current chess board state.
    * @param pawns The pawns of both players.
+   * @param material The piece counts of both players.
    * @return The draw pattern evaluation score.
    */
-  private double drawPatternEvaluation(final Player player, final Board board,
-                                       final PawnLists pawns) {
+  private double drawPatternEvaluation(final Player player, final PawnLists pawns,
+                                       final Material material) {
     double drawScore = 0;
-    final Collection<Piece> playerPieces = player.getActivePieces();
-    final Collection<Piece> opponentPieces = player.getOpponent().getActivePieces();
-
-    PieceCounts playerPieceCounts = countPieceTypes(playerPieces);
-    PieceCounts opponentPieceCounts = countPieceTypes(opponentPieces);
+    final PieceCounts playerPieceCounts = material.of(player);
+    final PieceCounts opponentPieceCounts = material.of(player.getOpponent());
 
     if (isInsufficientMaterial(playerPieceCounts, opponentPieceCounts)) {
       drawScore -= 800;
     }
 
-    if (hasOppositeColoredBishops(playerPieces, opponentPieces) &&
+    if (material.oppositeColoredBishops() &&
             playerPieceCounts.of(Piece.PieceType.PAWN) <= 2 &&
             opponentPieceCounts.of(Piece.PieceType.PAWN) <= 2) {
       drawScore -= 200;
@@ -1690,21 +1675,21 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * caller forms the difference between the two players.
    *
    * @param player The player whose mobility is being evaluated.
-   * @param nonPawnPieceCount The number of pieces of both players that are neither pawns nor kings.
+   * @param material The piece counts of both players.
    * @param playerTargets The destinations of the player's legal moves.
    * @return The mobility evaluation score.
    */
-  private double mobilityEvaluation(final Player player, final int nonPawnPieceCount,
+  private double mobilityEvaluation(final Player player, final Material material,
                                     final MoveTargets playerTargets) {
     double mobilityScore = 0;
 
     double mobilityWeight = 1.0;
 
-    if (isPawnEndgame(nonPawnPieceCount)) {
+    if (isPawnEndgame(material.nonPawnPieceCount())) {
       mobilityWeight = 0.5;
     }
 
-    if (hasOppositeColoredBishops(player.getActivePieces(), player.getOpponent().getActivePieces())) {
+    if (material.oppositeColoredBishops()) {
       mobilityWeight = 1.5;
     }
 
