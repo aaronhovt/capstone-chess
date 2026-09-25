@@ -492,10 +492,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * leave in the shared transposition table. They are stopped as soon as the main search finishes,
    * and this method does not return until they have.
    * <p>
-   * A search that reaches the node limit or the time limit is stopped where it stands and the
-   * iteration it was in the middle of is discarded, so the move and score returned are those of
-   * the deepest iteration that finished. The first iteration is held to neither limit, so a
-   * finished iteration always exists.
+   * A search that reaches the node limit or the time limit is stopped where it stands. If the
+   * iteration it was in the middle of finished searching a root move whose score landed inside
+   * that iteration's window, the move and score returned are that iteration's best so far;
+   * otherwise they are those of the deepest iteration that finished. The first iteration is held
+   * to neither limit, so a finished iteration always exists.
    * <p>
    * The clock is not read at every node, so a search under a time limit runs somewhat past its
    * deadline rather than stopping on it.
@@ -544,12 +545,17 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                 searchRootAspirationWindow(mainBoard, currentDepth, bestMove, bestScore) :
                 searchRoot(mainBoard, currentDepth, -Double.MAX_VALUE, Double.MAX_VALUE, bestMove);
 
-        if (searchStopped || result.move() == MoveFactory.getNullMove()) {
+        if (result.move() == MoveFactory.getNullMove()) {
           break;
         }
 
         bestMove = result.move();
         bestScore = result.score();
+
+        if (searchStopped) {
+          break;
+        }
+
         bestDepth = currentDepth;
 
         recordHistory(mainBoard, bestMove, currentDepth);
@@ -743,8 +749,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * @param depth The current search depth.
    * @param previousBestMove The best move from the previous iteration.
    * @param previousScore The root score from the previous iteration.
-   * @return The best move found and its score, or the null move and a score of zero if the search
-   *         was stopped before an attempt finished.
+   * @return The best move found and its score. If the search was stopped, this is the best move of
+   *         the attempt that was stopped, which is the null move if no root move searched in that
+   *         attempt scored inside its window.
    */
   private RootResult searchRootAspirationWindow(final Board board, final int depth,
                                                 final Move previousBestMove, final double previousScore) {
@@ -759,7 +766,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       final RootResult result = searchRoot(board, depth, alpha, beta, previousBestMove);
 
       if (this.searchStopped) {
-        return new RootResult(MoveFactory.getNullMove(), 0);
+        return result;
       } if (result.score() > alpha && result.score() < beta) {
         return result;
       }
@@ -778,8 +785,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * Searches every legal root move on the calling thread and returns the best one with its score.
    * The move that was best in the previous iteration is searched first, and each move is searched
    * against a window narrowed to the best score found so far. A root move that leaves the mover in
-   * check is skipped. A search that is stopped part way returns the best move found up to that point,
-   * and the null move if it finished no move at all
+   * check is skipped. A search that is stopped part way returns the best of the moves whose search
+   * finished, and the null move if none of them scored inside the window. The move being searched
+   * when the stop came is not considered.
    *
    * @param board The board this search thread owns, in the root position. It is left in that
    *              position when this method returns.
@@ -826,6 +834,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                 max(board, depth - 1, alpha, bestScore, 1, true);
       } finally {
         board.unmakeMove();
+      }
+
+      if (searchStopped) {
+        break;
       }
 
       if (rootIsWhite ? score > bestScore : score < bestScore) {
