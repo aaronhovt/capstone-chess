@@ -47,6 +47,9 @@ public class StaticExchangeEvaluator {
           20000
   };
 
+  /** The most pieces a board can hold, which bounds the length of an exchange sequence. */
+  private static final int MAX_PIECES = 32;
+
   /**
    * Constructs a new StaticExchangeEvaluator instance.
    * Private constructor enforces the singleton pattern.
@@ -88,26 +91,31 @@ public class StaticExchangeEvaluator {
 
     final List<Piece> attackers = findAttackers(board, targetSquare);
     removeAttackerAt(attackers, attackingPiece.getPiecePosition());
+    revealAttackerBehind(board, targetSquare, attackingPiece.getPiecePosition(), attackers);
 
-    return swapOffValue(capturedValue, attackerValue, attackers,
+    return swapOffValue(board, targetSquare, capturedValue, attackerValue, attackers,
             board.currentPlayer().getOpponent().getAlliance());
   }
 
   /**
    * Computes the material a capture sequence leaves the side making the first capture with,
    * from that side's perspective. Each side captures with its least valuable remaining attacker,
-   * and a side that would lose material by continuing the sequence stops instead.
+   * and a side that would lose material by continuing the sequence stops instead. A slider
+   * standing behind a capturing piece on its line joins the sequence once that piece has captured.
    *
+   * @param board The current chess board state.
+   * @param targetSquare The square the exchange takes place on.
    * @param capturedValue The value of the piece taken by the first capture.
    * @param attackerValue The value of the piece making the first capture.
    * @param attackers The pieces of both alliances bearing on the square, excluding the piece
-   *                  making the first capture. This list is emptied as the sequence is walked.
+   *                  making the first capture. This list is modified as the sequence is walked.
    * @param defendingSide The alliance that recaptures first.
    * @return The material outcome of the sequence for the side making the first capture.
    */
-  private int swapOffValue(final int capturedValue, final int attackerValue,
+  private int swapOffValue(final Board board, final int targetSquare,
+                           final int capturedValue, final int attackerValue,
                            final List<Piece> attackers, final Alliance defendingSide) {
-    final int[] gain = new int[attackers.size() + 2];
+    final int[] gain = new int[MAX_PIECES];
     gain[0] = capturedValue;
 
     int depth = 0;
@@ -123,7 +131,9 @@ public class StaticExchangeEvaluator {
         break;
       }
 
-      removeAttackerAt(attackers, nextAttacker.getPiecePosition());
+      final int attackerSquare = nextAttacker.getPiecePosition();
+      removeAttackerAt(attackers, attackerSquare);
+      revealAttackerBehind(board, targetSquare, attackerSquare, attackers);
       movedValue = getPieceValue(nextAttacker.getPieceType());
       side = side.isWhite() ? Alliance.BLACK : Alliance.WHITE;
     }
@@ -152,11 +162,53 @@ public class StaticExchangeEvaluator {
   }
 
   /**
+   * Adds the slider that bears on the target square once the piece on the vacated square has
+   * captured, if there is one. The vacated square must hold the nearest piece to the target
+   * square on its queen line. The next piece beyond it on that line is added when it is a queen,
+   * a rook on a rank or file, or a bishop on a diagonal. Nothing is added when the vacated square
+   * is not on a queen line from the target square.
+   *
+   * @param board The current chess board state.
+   * @param targetSquare The square the exchange takes place on.
+   * @param vacatedSquare The square of the piece that has just captured.
+   * @param attackers The list to add the revealed slider to.
+   */
+  private void revealAttackerBehind(final Board board, final int targetSquare,
+                                    final int vacatedSquare, final List<Piece> attackers) {
+    for (final MoveUtils.Line line : Queen.linesFrom(targetSquare)) {
+      final int[] squares = line.getLineCoordinates();
+      int index = 0;
+      while (index < squares.length && squares[index] != vacatedSquare) {
+        index++;
+      }
+      if (index == squares.length) {
+        continue;
+      }
+
+      final int step = Math.abs(squares[0] - targetSquare);
+      final boolean orthogonal = step == 1 || step == 8;
+      for (index++; index < squares.length; index++) {
+        final Piece piece = board.getPiece(squares[index]);
+        if (piece != null) {
+          final Piece.PieceType type = piece.getPieceType();
+          if (type == Piece.PieceType.QUEEN ||
+                  type == (orthogonal ? Piece.PieceType.ROOK : Piece.PieceType.BISHOP)) {
+            attackers.add(piece);
+          }
+          return;
+        }
+      }
+      return;
+    }
+  }
+
+  /**
    * Finds every piece on the board that bears on a square, of either alliance. Occupancy of the
    * square is disregarded, so the result holds both the pieces that could capture on the square
    * and the pieces defending whatever stands there. The candidates are the first piece on each
    * queen line leaving the square and the pieces on the knight squares around it, and a candidate
-   * is kept when it bears on the square by {@link Piece#defendsSquare(int, Board)}.
+   * is kept when it bears on the square by {@link Piece#defendsSquare(int, Board)}. Sliders
+   * behind the first piece on a line are not included.
    *
    * @param board The current chess board state.
    * @param targetSquare The square coordinate to check for attackers.
