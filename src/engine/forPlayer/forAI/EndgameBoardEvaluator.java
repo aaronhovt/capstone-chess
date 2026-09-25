@@ -37,6 +37,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** The tiles on which a black pawn promotes, as one bit per tile. */
   private static final long BLACK_PROMOTION_TILES = computePromotionTiles(Alliance.BLACK);
 
+  /** The pawn structure scores of both players, keyed by the tiles their pawns occupy. */
+  private static final PawnStructureCache PAWN_STRUCTURE_CACHE = new PawnStructureCache();
+
   /** Private constructor to prevent instantiation outside of class. */
   private EndgameBoardEvaluator() {}
 
@@ -72,9 +75,36 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
             countPieceTypes(blackPieces), hasOppositeColoredBishops(whitePieces, blackPieces));
     final MoveTargets whiteTargets = moveTargets(board, board.whitePlayer());
     final MoveTargets blackTargets = moveTargets(board, board.blackPlayer());
+    final PawnStructureCache.Entry pawnStructure = pawnStructureScores(board, pawns);
 
-    return (score(board.whitePlayer(), board, pawns, material, whiteTargets, blackTargets) -
-            score(board.blackPlayer(), board, pawns, material, blackTargets, whiteTargets));
+    return (score(board.whitePlayer(), board, pawns, pawnStructure, material, whiteTargets,
+                    blackTargets) -
+            score(board.blackPlayer(), board, pawns, pawnStructure, material, blackTargets,
+                    whiteTargets));
+  }
+
+  /**
+   * Returns the pawn structure scores of both players, from the cache when it holds them for
+   * these pawns and otherwise computed and stored.
+   *
+   * @param board The current state of the chess board.
+   * @param pawns The pawns of both players.
+   * @return The pawn structure scores of both players.
+   */
+  private PawnStructureCache.Entry pawnStructureScores(final Board board, final PawnLists pawns) {
+    final PawnStructureCache.Entry cached =
+            PAWN_STRUCTURE_CACHE.probe(pawns.whiteOccupancy(), pawns.blackOccupancy());
+
+    if (cached != null) {
+      return cached;
+    }
+
+    final PawnStructureCache.Entry computed = new PawnStructureCache.Entry(
+            pawns.whiteOccupancy(), pawns.blackOccupancy(),
+            pawnStructureEvaluation(board.whitePlayer(), board, pawns),
+            pawnStructureEvaluation(board.blackPlayer(), board, pawns));
+    PAWN_STRUCTURE_CACHE.store(computed);
+    return computed;
   }
 
   /**
@@ -235,6 +265,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param player The player for whom the board position is being evaluated.
    * @param board The current state of the chess board.
    * @param pawns The pawns of both players.
+   * @param pawnStructure The pawn structure scores of both players.
    * @param material The piece counts of both players.
    * @param playerTargets The destinations of the player's legal moves.
    * @param opponentTargets The destinations of the opponent's legal moves.
@@ -242,12 +273,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   @VisibleForTesting
   private double score(final Player player, final Board board, final PawnLists pawns,
-                       final Material material, final MoveTargets playerTargets,
-                       final MoveTargets opponentTargets) {
+                       final PawnStructureCache.Entry pawnStructure, final Material material,
+                       final MoveTargets playerTargets, final MoveTargets opponentTargets) {
     return materialEvaluation(player, material) +
             kingActivityEvaluation(player, pawns, opponentTargets) +
             passedPawnEvaluation(player, board, pawns) +
-            pawnStructureEvaluation(player, board, pawns) +
+            pawnStructure.scoreOf(player.getAlliance()) +
             pieceCoordinationEvaluation(player, board, pawns, material) +
             rookEndgameEvaluation(player, board, pawns) +
             bishopEndgameEvaluation(player, board, pawns, material) +
