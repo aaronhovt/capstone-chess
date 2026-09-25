@@ -48,6 +48,29 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final int[] BLACK_SPACE_WEIGHTS = computeSpaceWeights(Alliance.BLACK);
 
   /**
+   * The tiles forming the pawn shield of a white king standing on each tile, indexed by tile, as
+   * one bit per tile.
+   */
+  private static final long[] WHITE_KING_SHIELDS = computeKingShields(Alliance.WHITE);
+
+  /**
+   * The tiles forming the pawn shield of a black king standing on each tile, indexed by tile, as
+   * one bit per tile.
+   */
+  private static final long[] BLACK_KING_SHIELDS = computeKingShields(Alliance.BLACK);
+
+  /**
+   * The tiles of file zero, as one bit per tile. Shifting left by a file gives that file's tiles.
+   */
+  private static final long FILE_TILES = 0x0101010101010101L;
+
+  /**
+   * The tiles of rank zero, as one bit per tile. Shifting left by eight times a rank gives that
+   * rank's tiles.
+   */
+  private static final long RANK_TILES = 0xFFL;
+
+  /**
    * Private constructor to prevent instantiation outside of the class.
    * Enforces the singleton pattern.
    */
@@ -292,9 +315,10 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
                        final PawnStructure opponentPawns) {
     return materialEvaluation(player.getActivePieces()) +
             mobilityEvaluation(playerStatistics) +
-            kingSafetyEvaluation(player, board, playerPawns, opponentStatistics) +
+            kingSafetyEvaluation(player, playerPawns, opponentStatistics) +
             pawnStructureEvaluation(player, board, playerPawns, opponentPawns) +
-            pieceCoordinationEvaluation(player, board, opponentStatistics) +
+            pieceCoordinationEvaluation(player, board, opponentStatistics,
+                    playerPawns, opponentPawns) +
             spaceControlEvaluation(playerStatistics, opponentStatistics) +
             attackingPotentialEvaluation(player, playerStatistics) +
             specialPatternsEvaluation(player, board, playerPawns, opponentPawns);
@@ -354,12 +378,11 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * open lines, and king attackers. This is a critical middlegame factor.
    *
    * @param player The player whose king safety is being evaluated.
-   * @param board The current chess board.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentStatistics The statistics of the opponent's legal move list.
    * @return The king safety evaluation score.
    */
-  private double kingSafetyEvaluation(final Player player, final Board board,
+  private double kingSafetyEvaluation(final Player player,
                                       final PawnStructure playerPawns,
                                       final MoveStatistics opponentStatistics) {
     double kingSafetyScore = 0;
@@ -370,7 +393,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       kingSafetyScore += 40;
     }
 
-    kingSafetyScore += evaluatePawnShield(player, board, kingPosition);
+    kingSafetyScore += evaluatePawnShield(player.getAlliance(), kingPosition, playerPawns);
     kingSafetyScore -= evaluateKingExposure(player, opponentStatistics);
     kingSafetyScore -= evaluateKingTropism(player, kingPosition);
     kingSafetyScore -= evaluateOpenFilesToKing(player, kingPosition, playerPawns);
@@ -381,33 +404,22 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * Evaluates the pawn shield protecting the king.
    *
-   * @param player The player whose king's pawn shield is being evaluated.
-   * @param board The current chess board.
+   * @param alliance The alliance of the king.
    * @param kingPosition The position of the king on the board.
+   * @param playerPawns The structure of the king's own pawns.
    * @return The pawn shield evaluation score.
    */
-  private double evaluatePawnShield(final Player player, final Board board, final int kingPosition) {
+  private double evaluatePawnShield(final Alliance alliance, final int kingPosition,
+                                    final PawnStructure playerPawns) {
     double shieldScore = 0;
-    final Alliance playerAlliance = player.getAlliance();
 
-    List<Integer> shieldSquares = getKingShieldSquares(kingPosition, playerAlliance);
+    final long shieldTiles = alliance.isWhite() ?
+            WHITE_KING_SHIELDS[kingPosition] :
+            BLACK_KING_SHIELDS[kingPosition];
+    final long shieldPawns = shieldTiles & playerPawns.occupancy();
 
-    int pawnsInShield = 0;
-    int intactFileCount = 0;
-    Set<Integer> shieldFiles = new HashSet<>();
-
-    for (Integer shieldSquare : shieldSquares) {
-      Piece piece = board.getPiece(shieldSquare);
-      if (piece != null && piece.getPieceType() == Piece.PieceType.PAWN &&
-              piece.getPieceAllegiance() == playerAlliance) {
-        pawnsInShield++;
-        int file = shieldSquare % 8;
-        if (!shieldFiles.contains(file)) {
-          intactFileCount++;
-          shieldFiles.add(file);
-        }
-      }
-    }
+    final int pawnsInShield = Long.bitCount(shieldPawns);
+    final int intactFileCount = Integer.bitCount(occupiedFiles(shieldPawns));
 
     if (pawnsInShield >= 3) {
       shieldScore += 35;
@@ -422,47 +434,6 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     shieldScore += intactFileCount * 10;
 
     return shieldScore;
-  }
-
-  /**
-   * Gets the squares that form a pawn shield for the king.
-   *
-   * @param kingPosition The position of the king on the board.
-   * @param alliance The alliance of the king.
-   * @return A list of coordinates representing the king's pawn shield squares.
-   */
-  private List<Integer> getKingShieldSquares(final int kingPosition, final Alliance alliance) {
-    List<Integer> shieldSquares = new ArrayList<>();
-    final int kingFile = kingPosition % 8;
-    final int kingRank = kingPosition / 8;
-
-    boolean kingSide = kingFile >= 4;
-    int shieldRank = alliance.isWhite() ? kingRank - 1 : kingRank + 1;
-
-    if (shieldRank >= 0 && shieldRank < 8) {
-      for (int file = Math.max(0, kingFile - 1); file <= Math.min(7, kingFile + 1); file++) {
-        shieldSquares.add(shieldRank * 8 + file);
-      }
-
-      if ((kingSide && (kingFile == 6 || kingFile == 5)) ||
-              (!kingSide && (kingFile == 1 || kingFile == 2))) {
-        if (alliance.isWhite()) {
-          if (kingRank == 7) {
-            for (int file = Math.max(0, kingFile - 1); file <= Math.min(7, kingFile + 1); file++) {
-              shieldSquares.add((kingRank - 2) * 8 + file);
-            }
-          }
-        } else {
-          if (kingRank == 0) {
-            for (int file = Math.max(0, kingFile - 1); file <= Math.min(7, kingFile + 1); file++) {
-              shieldSquares.add((kingRank + 2) * 8 + file);
-            }
-          }
-        }
-      }
-    }
-
-    return shieldSquares;
   }
 
   /**
@@ -1014,15 +985,19 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param player The player whose piece coordination is being evaluated.
    * @param board The current chess board.
    * @param opponentStatistics The statistics of the opponent's legal move list.
+   * @param playerPawns The structure of the player's pawns.
+   * @param opponentPawns The structure of the opponent's pawns.
    * @return The piece coordination evaluation score.
    */
   private double pieceCoordinationEvaluation(final Player player, final Board board,
-                                             final MoveStatistics opponentStatistics) {
+                                             final MoveStatistics opponentStatistics,
+                                             final PawnStructure playerPawns,
+                                             final PawnStructure opponentPawns) {
     double coordinationScore = 0;
     final Collection<Piece> playerPieces = player.getActivePieces();
 
     coordinationScore += evaluateBishopPair(playerPieces);
-    coordinationScore += evaluateRookCoordination(playerPieces, board);
+    coordinationScore += evaluateRookCoordination(playerPieces, playerPawns, opponentPawns);
     coordinationScore += evaluatePieceProtection(playerPieces, board, opponentStatistics);
     coordinationScore += evaluatePieceActivity(playerPieces);
 
@@ -1064,90 +1039,51 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * Evaluates rook coordination, including connected rooks and rooks on open and semi-open files.
    *
    * @param playerPieces The player's pieces.
-   * @param board The current chess board.
+   * @param playerPawns The structure of the player's pawns.
+   * @param opponentPawns The structure of the opponent's pawns.
    * @return The rook coordination evaluation score.
    */
-  private double evaluateRookCoordination(final Collection<Piece> playerPieces, final Board board) {
+  private double evaluateRookCoordination(final Collection<Piece> playerPieces,
+                                          final PawnStructure playerPawns,
+                                          final PawnStructure opponentPawns) {
     double rookScore = 0;
-    List<Piece> rooks = new ArrayList<>();
+    long rooks = 0L;
 
     for (final Piece piece : playerPieces) {
       if (piece.getPieceType() == Piece.PieceType.ROOK) {
-        rooks.add(piece);
+        rooks |= 1L << piece.getPiecePosition();
       }
     }
 
-    if (rooks.size() >= 2) {
-      boolean rooksConnected = false;
-      for (int i = 0; i < rooks.size() - 1; i++) {
-        for (int j = i + 1; j < rooks.size(); j++) {
-          final int rookPos1 = rooks.get(i).getPiecePosition();
-          final int rookPos2 = rooks.get(j).getPiecePosition();
+    if (Long.bitCount(rooks) >= 2) {
+      int sameRankPairs = 0;
+      int sameFilePairs = 0;
 
-          if (rookPos1 / 8 == rookPos2 / 8) {
-            rookScore += 20;
-            rooksConnected = true;
-          }
+      for (int line = 0; line < 8; line++) {
+        final int rooksOnRank = Long.bitCount(rooks & (RANK_TILES << (line * 8)));
+        final int rooksOnFile = Long.bitCount(rooks & (FILE_TILES << line));
 
-          if (rookPos1 % 8 == rookPos2 % 8) {
-            rookScore += 15;
-            rooksConnected = true;
-          }
-        }
+        sameRankPairs += rooksOnRank * (rooksOnRank - 1) / 2;
+        sameFilePairs += rooksOnFile * (rooksOnFile - 1) / 2;
       }
 
-      if (rooksConnected) {
+      rookScore += sameRankPairs * 20;
+      rookScore += sameFilePairs * 15;
+
+      if (sameRankPairs + sameFilePairs > 0) {
         rookScore += 10;
       }
     }
 
-    for (final Piece rook : rooks) {
-      final int rookFile = rook.getPiecePosition() % 8;
+    for (long remaining = rooks; remaining != 0L; remaining &= remaining - 1) {
+      final int rookFile = Long.numberOfTrailingZeros(remaining) % 8;
 
-      if (isOpenFile(rookFile, board)) {
-        rookScore += 20;
-      } else if (isSemiOpenFile(rookFile, board, rook.getPieceAllegiance())) {
-        rookScore += 10;
+      if (!isPawnOnFile(rookFile, playerPawns)) {
+        rookScore += isPawnOnFile(rookFile, opponentPawns) ? 10 : 20;
       }
     }
 
     return rookScore;
-  }
-
-  /**
-   * Checks if a file is completely open (no pawns on it).
-   *
-   * @param file The file to check (0-7).
-   * @param board The current chess board.
-   * @return True if the file is open, false otherwise.
-   */
-  private boolean isOpenFile(final int file, final Board board) {
-    for (int rank = 0; rank < 8; rank++) {
-      final Piece piece = board.getPiece(rank * 8 + file);
-      if (piece != null && piece.getPieceType() == Piece.PieceType.PAWN) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Checks if a file is semi-open (no friendly pawns on it).
-   *
-   * @param file The file to check (0-7).
-   * @param board The current chess board.
-   * @param alliance The alliance to check for absence of pawns.
-   * @return True if the file is semi-open, false otherwise.
-   */
-  private boolean isSemiOpenFile(final int file, final Board board, final Alliance alliance) {
-    for (int rank = 0; rank < 8; rank++) {
-      final Piece piece = board.getPiece(rank * 8 + file);
-      if (piece != null && piece.getPieceType() == Piece.PieceType.PAWN &&
-              piece.getPieceAllegiance() == alliance) {
-        return false;
-      }
-    }
-    return true;
   }
 
   /**
@@ -1693,5 +1629,58 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     }
 
     return spaceWeights;
+  }
+
+  /**
+   * Builds the table of the tiles forming the pawn shield of a king of the given alliance standing
+   * on each tile. The shield is the up to three tiles directly ahead of the king, and for a king on
+   * its back rank on file 1, 2, 5 or 6 also the up to three tiles one rank further ahead. A king on
+   * the rank furthest from its own side has no shield.
+   *
+   * @param alliance The alliance of the king.
+   * @return The shield tiles of each tile, indexed by tile, as one bit per tile.
+   */
+  private static long[] computeKingShields(final Alliance alliance) {
+    final long[] kingShields = new long[BoardUtils.NUM_TILES];
+
+    for (int kingPosition = 0; kingPosition < BoardUtils.NUM_TILES; kingPosition++) {
+      final int kingFile = kingPosition % 8;
+      final int kingRank = kingPosition / 8;
+      final int shieldRank = alliance.isWhite() ? kingRank - 1 : kingRank + 1;
+
+      if (shieldRank < 0 || shieldRank >= 8) {
+        continue;
+      }
+
+      final boolean onFlankFile = kingFile == 1 || kingFile == 2 || kingFile == 5 || kingFile == 6;
+      final boolean onBackRank = alliance.isWhite() ? kingRank == 7 : kingRank == 0;
+      final int secondShieldRank = alliance.isWhite() ? kingRank - 2 : kingRank + 2;
+
+      for (int file = Math.max(0, kingFile - 1); file <= Math.min(7, kingFile + 1); file++) {
+        kingShields[kingPosition] |= 1L << (shieldRank * 8 + file);
+
+        if (onFlankFile && onBackRank) {
+          kingShields[kingPosition] |= 1L << (secondShieldRank * 8 + file);
+        }
+      }
+    }
+
+    return kingShields;
+  }
+
+  /**
+   * Returns the files holding at least one of the given tiles.
+   *
+   * @param tiles The tiles, as one bit per tile.
+   * @return The files holding at least one of the tiles, as one bit per file.
+   */
+  private static int occupiedFiles(final long tiles) {
+    long files = tiles;
+
+    files |= files >>> 32;
+    files |= files >>> 16;
+    files |= files >>> 8;
+
+    return (int) (files & RANK_TILES);
   }
 }
