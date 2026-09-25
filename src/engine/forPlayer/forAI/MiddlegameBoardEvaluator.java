@@ -70,6 +70,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   private static final long RANK_TILES = 0xFFL;
 
+  /** The tiles whose rank and file sum to an even number, as one bit per tile. */
+  private static final long LIGHT_TILES = 0xAA55AA55AA55AA55L;
+
   /**
    * Private constructor to prevent instantiation outside of the class.
    * Enforces the singleton pattern.
@@ -99,11 +102,13 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final MoveStatistics blackStatistics = moveStatistics(board.blackPlayer());
     final PawnStructure whitePawns = pawnStructure(board.whitePlayer());
     final PawnStructure blackPawns = pawnStructure(board.blackPlayer());
+    final PieceLayout whiteLayout = pieceLayout(board.whitePlayer());
+    final PieceLayout blackLayout = pieceLayout(board.blackPlayer());
 
     return (score(board.whitePlayer(), board, whiteStatistics, blackStatistics,
-                    whitePawns, blackPawns) -
+                    whitePawns, blackPawns, whiteLayout, blackLayout) -
             score(board.blackPlayer(), board, blackStatistics, whiteStatistics,
-                    blackPawns, whitePawns));
+                    blackPawns, whitePawns, blackLayout, whiteLayout));
   }
 
   /**
@@ -296,6 +301,97 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
+   * The facts about the placement of one player's pieces that the scoring terms read.
+   *
+   * @param material The summed value of all the player's pieces, the king included.
+   * @param knights The tiles holding the player's knights, as one bit per tile.
+   * @param bishops The tiles holding the player's bishops, as one bit per tile.
+   * @param rooks The tiles holding the player's rooks, as one bit per tile.
+   * @param queens The tiles holding the player's queens, as one bit per tile.
+   * @param nonKingPieces The tiles holding the player's pieces other than the king, pawns
+   *                      included, as one bit per tile.
+   * @param heavyPieceFiles The files holding one of the player's rooks or queens, as one bit per
+   *                        file.
+   * @param kingTropism The tropism of the player's pieces toward the opposing king, summed in the
+   *                    order of the player's piece list. A higher value means more danger to the
+   *                    opposing king.
+   */
+  private record PieceLayout(int material,
+                             long knights,
+                             long bishops,
+                             long rooks,
+                             long queens,
+                             long nonKingPieces,
+                             int heavyPieceFiles,
+                             double kingTropism) {
+  }
+
+  /**
+   * Walks the given player's active pieces once and returns the placement facts of those pieces.
+   *
+   * @param player The player whose pieces are being read.
+   * @return The layout of that player's pieces.
+   */
+  private PieceLayout pieceLayout(final Player player) {
+    final int opposingKingPosition = player.getOpponent().getPlayerKing().getPiecePosition();
+
+    int material = 0;
+    long knights = 0L;
+    long bishops = 0L;
+    long rooks = 0L;
+    long queens = 0L;
+    long nonKingPieces = 0L;
+    int heavyPieceFiles = 0;
+    double kingTropism = 0;
+
+    for (final Piece piece : player.getActivePieces()) {
+      material += piece.getPieceValue();
+
+      if (piece.getPieceType() == Piece.PieceType.KING) {
+        continue;
+      }
+
+      final int position = piece.getPiecePosition();
+      final long tile = 1L << position;
+      nonKingPieces |= tile;
+
+      int distance = calculateChebyshevDistance(opposingKingPosition, position);
+      double pieceValue = piece.getPieceValue() / 100.0;
+
+      switch (piece.getPieceType()) {
+        case QUEEN:
+          queens |= tile;
+          heavyPieceFiles |= 1 << (position % 8);
+          kingTropism += (7 - distance) * 6 * pieceValue;
+          break;
+        case ROOK:
+          rooks |= tile;
+          heavyPieceFiles |= 1 << (position % 8);
+          kingTropism += (7 - distance) * 4 * pieceValue;
+          break;
+        case BISHOP:
+          bishops |= tile;
+          kingTropism += (7 - distance) * 3 * pieceValue;
+          break;
+        case KNIGHT:
+          knights |= tile;
+          if (distance <= 3) {
+            kingTropism += (4 - distance) * 4 * pieceValue;
+          }
+          break;
+        case PAWN:
+          if (distance <= 2) {
+            kingTropism += (3 - distance) * 2 * pieceValue;
+          }
+          break;
+      }
+    }
+
+    return new PieceLayout(material, knights, bishops, rooks, queens, nonKingPieces,
+            heavyPieceFiles, kingTropism);
+  }
+
+  /**
    * Calculates the overall score of the current board position for a given player
    * using modern chess engine evaluation principles tuned for middlegame positions.
    *
@@ -305,6 +401,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param opponentStatistics The statistics of the opponent's legal move list.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
+   * @param playerLayout The layout of the player's pieces.
+   * @param opponentLayout The layout of the opponent's pieces.
    * @return The evaluation score of the board from the perspective of the specified player.
    */
   @VisibleForTesting
@@ -312,38 +410,31 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
                        final MoveStatistics playerStatistics,
                        final MoveStatistics opponentStatistics,
                        final PawnStructure playerPawns,
-                       final PawnStructure opponentPawns) {
-    return materialEvaluation(player.getActivePieces()) +
+                       final PawnStructure opponentPawns,
+                       final PieceLayout playerLayout,
+                       final PieceLayout opponentLayout) {
+    return materialEvaluation(playerLayout) +
             mobilityEvaluation(playerStatistics) +
-            kingSafetyEvaluation(player, playerPawns, opponentStatistics) +
+            kingSafetyEvaluation(player, playerPawns, opponentStatistics, opponentLayout) +
             pawnStructureEvaluation(player, board, playerPawns, opponentPawns) +
             pieceCoordinationEvaluation(player, board, opponentStatistics,
-                    playerPawns, opponentPawns) +
+                    playerPawns, opponentPawns, playerLayout) +
             spaceControlEvaluation(playerStatistics, opponentStatistics) +
-            attackingPotentialEvaluation(player, playerStatistics) +
-            specialPatternsEvaluation(player, board, playerPawns, opponentPawns);
+            attackingPotentialEvaluation(player, playerStatistics, opponentLayout) +
+            specialPatternsEvaluation(player, board, playerPawns, opponentPawns, playerLayout);
   }
 
   /**
    * Evaluates material balance with refined piece values and contextual adjustments.
    * Modern engines use dynamic piece values based on the position.
    *
-   * @param playerPieces The collection of pieces belonging to the player.
+   * @param playerLayout The layout of the player's pieces.
    * @return The material evaluation score.
    */
-  private double materialEvaluation(final Collection<Piece> playerPieces) {
-    double materialScore = 0;
-    int numBishops = 0;
+  private double materialEvaluation(final PieceLayout playerLayout) {
+    double materialScore = playerLayout.material();
 
-    for (final Piece piece : playerPieces) {
-      materialScore += piece.getPieceValue();
-
-      if (piece.getPieceType() == Piece.PieceType.BISHOP) {
-        numBishops++;
-      }
-    }
-
-    if (numBishops >= 2) {
+    if (Long.bitCount(playerLayout.bishops()) >= 2) {
       materialScore += 45;
     }
 
@@ -380,11 +471,13 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param player The player whose king safety is being evaluated.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentStatistics The statistics of the opponent's legal move list.
+   * @param opponentLayout The layout of the opponent's pieces.
    * @return The king safety evaluation score.
    */
   private double kingSafetyEvaluation(final Player player,
                                       final PawnStructure playerPawns,
-                                      final MoveStatistics opponentStatistics) {
+                                      final MoveStatistics opponentStatistics,
+                                      final PieceLayout opponentLayout) {
     double kingSafetyScore = 0;
     final King playerKing = player.getPlayerKing();
     final int kingPosition = playerKing.getPiecePosition();
@@ -395,8 +488,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
     kingSafetyScore += evaluatePawnShield(player.getAlliance(), kingPosition, playerPawns);
     kingSafetyScore -= evaluateKingExposure(player, opponentStatistics);
-    kingSafetyScore -= evaluateKingTropism(player, kingPosition);
-    kingSafetyScore -= evaluateOpenFilesToKing(player, kingPosition, playerPawns);
+    kingSafetyScore -= opponentLayout.kingTropism();
+    kingSafetyScore -= evaluateOpenFilesToKing(kingPosition, playerPawns, opponentLayout);
 
     return kingSafetyScore;
   }
@@ -469,67 +562,24 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Evaluates king tropism - the proximity of opponent pieces to the king.
-   *
-   * @param player The player whose king is being evaluated for tropism.
-   * @param kingPosition The position of the king on the board.
-   * @return The king tropism score (higher values indicate more danger).
-   */
-  private double evaluateKingTropism(final Player player, final int kingPosition) {
-    double tropismScore = 0;
-    final Collection<Piece> opponentPieces = player.getOpponent().getActivePieces();
-
-    for (final Piece piece : opponentPieces) {
-      if (piece.getPieceType() == Piece.PieceType.KING) {
-        continue;
-      }
-
-      int distance = calculateChebyshevDistance(kingPosition, piece.getPiecePosition());
-      double pieceValue = piece.getPieceValue() / 100.0;
-
-      switch (piece.getPieceType()) {
-        case QUEEN:
-          tropismScore += (7 - distance) * 6 * pieceValue;
-          break;
-        case ROOK:
-          tropismScore += (7 - distance) * 4 * pieceValue;
-          break;
-        case BISHOP:
-          tropismScore += (7 - distance) * 3 * pieceValue;
-          break;
-        case KNIGHT:
-          if (distance <= 3) {
-            tropismScore += (4 - distance) * 4 * pieceValue;
-          }
-          break;
-        case PAWN:
-          if (distance <= 2) {
-            tropismScore += (3 - distance) * 2 * pieceValue;
-          }
-          break;
-      }
-    }
-
-    return tropismScore;
-  }
-
-  /**
    * Evaluates open files leading to the king, which can be dangerous.
    *
-   * @param player The player whose king is being evaluated for open file exposure.
    * @param kingPosition The position of the king on the board.
-   * @param playerPawns The structure of the player's pawns.
+   * @param playerPawns The structure of the king's own pawns.
+   * @param opponentLayout The layout of the opponent's pieces.
    * @return The open files evaluation score (higher values indicate more exposure).
    */
-  private double evaluateOpenFilesToKing(final Player player, final int kingPosition,
-                                         final PawnStructure playerPawns) {
+  private double evaluateOpenFilesToKing(final int kingPosition,
+                                         final PawnStructure playerPawns,
+                                         final PieceLayout opponentLayout) {
     double openFileScore = 0;
     final int kingFile = kingPosition % 8;
+    final int heavyPieceFiles = opponentLayout.heavyPieceFiles();
 
     if (!isPawnOnFile(kingFile, playerPawns)) {
       openFileScore += 25;
 
-      if (hasHeavyPieceOnFile(kingFile, player.getOpponent().getActivePieces())) {
+      if ((heavyPieceFiles & (1 << kingFile)) != 0) {
         openFileScore += 35;
       }
     }
@@ -540,7 +590,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       if (!isPawnOnFile(file, playerPawns)) {
         openFileScore += 15;
 
-        if (hasHeavyPieceOnFile(file, player.getOpponent().getActivePieces())) {
+        if ((heavyPieceFiles & (1 << file)) != 0) {
           openFileScore += 25;
         }
       }
@@ -558,24 +608,6 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   private boolean isPawnOnFile(final int file, final PawnStructure pawns) {
     return pawns.countByFile()[file] > 0;
-  }
-
-  /**
-   * Checks if there's a heavy piece (rook or queen) on the specified file.
-   *
-   * @param file The file to check for heavy pieces (0-7).
-   * @param pieces The collection of pieces to check.
-   * @return True if a heavy piece is found on the file, false otherwise.
-   */
-  private boolean hasHeavyPieceOnFile(final int file, final Collection<Piece> pieces) {
-    for (final Piece piece : pieces) {
-      if ((piece.getPieceType() == Piece.PieceType.ROOK ||
-              piece.getPieceType() == Piece.PieceType.QUEEN) &&
-              piece.getPiecePosition() % 8 == file) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /**
@@ -987,19 +1019,21 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param opponentStatistics The statistics of the opponent's legal move list.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
+   * @param playerLayout The layout of the player's pieces.
    * @return The piece coordination evaluation score.
    */
   private double pieceCoordinationEvaluation(final Player player, final Board board,
                                              final MoveStatistics opponentStatistics,
                                              final PawnStructure playerPawns,
-                                             final PawnStructure opponentPawns) {
+                                             final PawnStructure opponentPawns,
+                                             final PieceLayout playerLayout) {
     double coordinationScore = 0;
-    final Collection<Piece> playerPieces = player.getActivePieces();
 
-    coordinationScore += evaluateBishopPair(playerPieces);
-    coordinationScore += evaluateRookCoordination(playerPieces, playerPawns, opponentPawns);
-    coordinationScore += evaluatePieceProtection(playerPieces, board, opponentStatistics);
-    coordinationScore += evaluatePieceActivity(playerPieces);
+    coordinationScore += evaluateBishopPair(playerLayout.bishops());
+    coordinationScore += evaluateRookCoordination(playerLayout.rooks(), playerPawns, opponentPawns);
+    coordinationScore += evaluatePieceProtection(player.getActivePieces(), board,
+            opponentStatistics);
+    coordinationScore += evaluatePieceActivity(playerLayout);
 
     return coordinationScore;
   }
@@ -1007,26 +1041,13 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * Evaluates bishop pair bonus, which is significant in middlegame.
    *
-   * @param playerPieces The player's pieces.
+   * @param bishops The tiles holding the player's bishops, as one bit per tile.
    * @return The bishop pair evaluation score.
    */
-  private double evaluateBishopPair(final Collection<Piece> playerPieces) {
+  private double evaluateBishopPair(final long bishops) {
     double bishopPairScore = 0;
-    boolean hasLightSquareBishop = false;
-    boolean hasDarkSquareBishop = false;
-
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() == Piece.PieceType.BISHOP) {
-        final int square = piece.getPiecePosition();
-        final boolean isLightSquare = ((square / 8) + (square % 8)) % 2 == 0;
-
-        if (isLightSquare) {
-          hasLightSquareBishop = true;
-        } else {
-          hasDarkSquareBishop = true;
-        }
-      }
-    }
+    final boolean hasLightSquareBishop = (bishops & LIGHT_TILES) != 0L;
+    final boolean hasDarkSquareBishop = (bishops & ~LIGHT_TILES) != 0L;
 
     if (hasLightSquareBishop && hasDarkSquareBishop) {
       bishopPairScore += 50;
@@ -1038,22 +1059,15 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * Evaluates rook coordination, including connected rooks and rooks on open and semi-open files.
    *
-   * @param playerPieces The player's pieces.
+   * @param rooks The tiles holding the player's rooks, as one bit per tile.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
    * @return The rook coordination evaluation score.
    */
-  private double evaluateRookCoordination(final Collection<Piece> playerPieces,
+  private double evaluateRookCoordination(final long rooks,
                                           final PawnStructure playerPawns,
                                           final PawnStructure opponentPawns) {
     double rookScore = 0;
-    long rooks = 0L;
-
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() == Piece.PieceType.ROOK) {
-        rooks |= 1L << piece.getPiecePosition();
-      }
-    }
 
     if (Long.bitCount(rooks) >= 2) {
       int sameRankPairs = 0;
@@ -1089,39 +1103,38 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * Evaluates knight outposts - knights protected by pawns and in opponent's territory.
    *
-   * @param playerPieces The player's pieces.
+   * @param knights The tiles holding the player's knights, as one bit per tile.
+   * @param alliance The alliance of the player.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
    * @return The knight outposts evaluation score.
    */
-  private double evaluateKnightOutposts(final Collection<Piece> playerPieces,
+  private double evaluateKnightOutposts(final long knights,
+                                        final Alliance alliance,
                                         final PawnStructure playerPawns,
                                         final PawnStructure opponentPawns) {
     double outpostScore = 0;
 
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() == Piece.PieceType.KNIGHT) {
-        final int position = piece.getPiecePosition();
-        final int file = position % 8;
-        final int rank = position / 8;
-        final Alliance alliance = piece.getPieceAllegiance();
+    for (long remaining = knights; remaining != 0L; remaining &= remaining - 1) {
+      final int position = Long.numberOfTrailingZeros(remaining);
+      final int file = position % 8;
+      final int rank = position / 8;
 
-        boolean inOpponentTerritory = (alliance.isWhite() && rank < 4) ||
-                (!alliance.isWhite() && rank > 3);
+      boolean inOpponentTerritory = (alliance.isWhite() && rank < 4) ||
+              (!alliance.isWhite() && rank > 3);
 
-        if (inOpponentTerritory) {
-          boolean canBeAttackedByPawn = opponentPawns.attackCountBySquare()[position] > 0;
+      if (inOpponentTerritory) {
+        boolean canBeAttackedByPawn = opponentPawns.attackCountBySquare()[position] > 0;
 
-          if (!canBeAttackedByPawn) {
-            outpostScore += 20;
+        if (!canBeAttackedByPawn) {
+          outpostScore += 20;
 
-            if (playerPawns.attackCountBySquare()[position] > 0) {
-              outpostScore += 15;
-            }
+          if (playerPawns.attackCountBySquare()[position] > 0) {
+            outpostScore += 15;
+          }
 
-            if (file >= 2 && file <= 5) {
-              outpostScore += 10;
-            }
+          if (file >= 2 && file <= 5) {
+            outpostScore += 10;
           }
         }
       }
@@ -1188,14 +1201,20 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * Evaluates piece activity, particularly centralization of pieces.
    *
-   * @param playerPieces The player's pieces.
+   * @param playerLayout The layout of the player's pieces.
    * @return The piece activity evaluation score.
    */
-  private double evaluatePieceActivity(final Collection<Piece> playerPieces) {
+  private double evaluatePieceActivity(final PieceLayout playerLayout) {
     double activityScore = 0;
 
-    for (final Piece piece : playerPieces) {
-      final int position = piece.getPiecePosition();
+    final long knights = playerLayout.knights();
+    final long bishops = playerLayout.bishops();
+    final long rooks = playerLayout.rooks();
+    final long scoredPieces = knights | bishops | rooks | playerLayout.queens();
+
+    for (long remaining = scoredPieces; remaining != 0L; remaining &= remaining - 1) {
+      final int position = Long.numberOfTrailingZeros(remaining);
+      final long tile = remaining & -remaining;
       final int file = position % 8;
       final int rank = position / 8;
 
@@ -1203,19 +1222,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       int rankDistance = Math.min(Math.abs(rank - 3), Math.abs(rank - 4));
       int distanceFromCenter = fileDistance + rankDistance;
 
-      switch (piece.getPieceType()) {
-        case KNIGHT:
-          activityScore += (6 - distanceFromCenter) * 5;
-          break;
-        case BISHOP:
-          activityScore += (6 - distanceFromCenter) * 4;
-          break;
-        case ROOK:
-          activityScore += (3 - fileDistance) * 3;
-          break;
-        case QUEEN:
-          activityScore += (6 - distanceFromCenter) * 2;
-          break;
+      if ((knights & tile) != 0L) {
+        activityScore += (6 - distanceFromCenter) * 5;
+      } else if ((bishops & tile) != 0L) {
+        activityScore += (6 - distanceFromCenter) * 4;
+      } else if ((rooks & tile) != 0L) {
+        activityScore += (3 - fileDistance) * 3;
+      } else {
+        activityScore += (6 - distanceFromCenter) * 2;
       }
     }
 
@@ -1255,10 +1269,12 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    *
    * @param player The player whose attacking potential is being evaluated.
    * @param playerStatistics The statistics of the player's legal move list.
+   * @param opponentLayout The layout of the opponent's pieces.
    * @return The attacking potential evaluation score.
    */
   private double attackingPotentialEvaluation(final Player player,
-                                              final MoveStatistics playerStatistics) {
+                                              final MoveStatistics playerStatistics,
+                                              final PieceLayout opponentLayout) {
     double attackScore = 0;
     final King opponentKing = player.getOpponent().getPlayerKing();
     final int kingPosition = opponentKing.getPiecePosition();
@@ -1300,37 +1316,12 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
         attackScore += 30;
       }
 
-      final int defendingPiecesCount = countDefendingPieces(player.getOpponent(), kingPosition);
+      final int defendingPiecesCount =
+              Long.bitCount(KING_ZONES[kingPosition] & opponentLayout.nonKingPieces());
       attackScore -= defendingPiecesCount * 15;
     }
 
     return attackScore;
-  }
-
-  /**
-   * Counts pieces that can help defend the king.
-   *
-   * @param player The defending player.
-   * @param kingPosition The position of the king being defended.
-   * @return The number of pieces that can defend the king.
-   */
-  private int countDefendingPieces(final Player player, final int kingPosition) {
-    int defendingCount = 0;
-    final long kingZone = KING_ZONES[kingPosition];
-
-    for (final Piece piece : player.getActivePieces()) {
-      if (piece.getPieceType() == Piece.PieceType.KING) {
-        continue;
-      }
-
-      final int piecePosition = piece.getPiecePosition();
-
-      if (((kingZone >>> piecePosition) & 1L) != 0L) {
-        defendingCount++;
-      }
-    }
-
-    return defendingCount;
   }
 
   /**
@@ -1340,20 +1331,22 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param board The current chess board.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
+   * @param playerLayout The layout of the player's pieces.
    * @return The special patterns evaluation score.
    */
   private double specialPatternsEvaluation(final Player player, final Board board,
                                            final PawnStructure playerPawns,
-                                           final PawnStructure opponentPawns) {
+                                           final PawnStructure opponentPawns,
+                                           final PieceLayout playerLayout) {
     double patternScore = 0;
-    final Collection<Piece> playerPieces = player.getActivePieces();
     final Alliance alliance = player.getAlliance();
 
-    patternScore += evaluateRooksOn7thRank(playerPieces, board, alliance);
-    patternScore += evaluateFianchetto(playerPieces, alliance);
-    patternScore += evaluateBadBishops(playerPieces, playerPawns);
-    patternScore += evaluateKnightOutposts(playerPieces, playerPawns, opponentPawns);
-    patternScore += evaluateQueenPositioning(playerPieces, board, alliance);
+    patternScore += evaluateRooksOn7thRank(playerLayout.rooks(), board, alliance, opponentPawns);
+    patternScore += evaluateFianchetto(playerLayout.bishops(), alliance);
+    patternScore += evaluateBadBishops(playerLayout.bishops(), playerPawns);
+    patternScore += evaluateKnightOutposts(playerLayout.knights(), alliance, playerPawns,
+            opponentPawns);
+    patternScore += evaluateQueenPositioning(playerLayout, board, alliance);
 
     return patternScore;
   }
@@ -1361,46 +1354,29 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * Evaluates rooks on the 7th rank (or 2nd for black), which is often very strong.
    *
-   * @param playerPieces The player's pieces.
+   * @param rooks The tiles holding the player's rooks, as one bit per tile.
    * @param board The current chess board.
    * @param alliance The alliance of the player.
+   * @param opponentPawns The structure of the opponent's pawns.
    * @return The rooks on 7th rank evaluation score.
    */
-  private double evaluateRooksOn7thRank(final Collection<Piece> playerPieces,
+  private double evaluateRooksOn7thRank(final long rooks,
                                         final Board board,
-                                        final Alliance alliance) {
+                                        final Alliance alliance,
+                                        final PawnStructure opponentPawns) {
     double rookScore = 0;
+    final int seventhRank = alliance.isWhite() ? 1 : 6;
+    final long rooksOnSeventh = rooks & (RANK_TILES << (seventhRank * 8));
 
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() == Piece.PieceType.ROOK) {
-        final int position = piece.getPiecePosition();
-        final int rank = position / 8;
+    for (long remaining = rooksOnSeventh; remaining != 0L; remaining &= remaining - 1) {
+      rookScore += 30;
+      rookScore += 10 * Integer.bitCount(opponentPawns.filesByRank()[seventhRank]);
 
-        if ((alliance.isWhite() && rank == 1) || (!alliance.isWhite() && rank == 6)) {
-          rookScore += 30;
+      final King opponentKing = opposingKing(board, alliance);
+      final int kingRank = opponentKing.getPiecePosition() / 8;
 
-          final Collection<Piece> opponentPieces = alliance.isWhite() ?
-                  board.getBlackPieces() :
-                  board.getWhitePieces();
-
-          for (final Piece opponentPiece : opponentPieces) {
-            if (opponentPiece.getPieceType() == Piece.PieceType.PAWN) {
-              final int opponentRank = opponentPiece.getPiecePosition() / 8;
-
-              if ((alliance.isWhite() && opponentRank == 1) ||
-                      (!alliance.isWhite() && opponentRank == 6)) {
-                rookScore += 10;
-              }
-            }
-          }
-
-          final King opponentKing = opposingKing(board, alliance);
-          final int kingRank = opponentKing.getPiecePosition() / 8;
-
-          if ((alliance.isWhite() && kingRank == 0) || (!alliance.isWhite() && kingRank == 7)) {
-            rookScore += 20;
-          }
-        }
+      if ((alliance.isWhite() && kingRank == 0) || (!alliance.isWhite() && kingRank == 7)) {
+        rookScore += 20;
       }
     }
 
@@ -1411,26 +1387,22 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * Evaluates bishops standing on the fianchetto squares b2 and g2 for white, or b7 and g7 for
    * black. The supporting pawn structure is not inspected.
    *
-   * @param playerPieces The player's pieces.
+   * @param bishops The tiles holding the player's bishops, as one bit per tile.
    * @param alliance The alliance of the player.
    * @return The fianchetto evaluation score.
    */
-  private double evaluateFianchetto(final Collection<Piece> playerPieces, final Alliance alliance) {
+  private double evaluateFianchetto(final long bishops, final Alliance alliance) {
     double fianchettoScore = 0;
 
     final int kingsideBishopPosition = alliance.isWhite() ? 54 : 14;
     final int queensideBishopPosition = alliance.isWhite() ? 49 : 9;
 
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() == Piece.PieceType.BISHOP) {
-        final int position = piece.getPiecePosition();
+    if (((bishops >>> kingsideBishopPosition) & 1L) != 0L) {
+      fianchettoScore += 20;
+    }
 
-        if (position == kingsideBishopPosition) {
-          fianchettoScore += 20;
-        } else if (position == queensideBishopPosition) {
-          fianchettoScore += 15;
-        }
-      }
+    if (((bishops >>> queensideBishopPosition) & 1L) != 0L) {
+      fianchettoScore += 15;
     }
 
     return fianchettoScore;
@@ -1439,23 +1411,22 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * Evaluates bad bishops - bishops blocked by their own pawns.
    *
-   * @param playerPieces The player's pieces.
+   * @param bishops The tiles holding the player's bishops, as one bit per tile.
    * @param playerPawns The structure of the player's pawns.
    * @return The bad bishops evaluation score.
    */
-  private double evaluateBadBishops(final Collection<Piece> playerPieces,
+  private double evaluateBadBishops(final long bishops,
                                     final PawnStructure playerPawns) {
     double badBishopScore = 0;
 
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() == Piece.PieceType.BISHOP) {
-        int pawnsOnSameColor = getPawnsOnSameColor(playerPawns, piece);
+    for (long remaining = bishops; remaining != 0L; remaining &= remaining - 1) {
+      int pawnsOnSameColor =
+              getPawnsOnSameColor(playerPawns, Long.numberOfTrailingZeros(remaining));
 
-        if (pawnsOnSameColor >= 3) {
-          badBishopScore -= 20;
-        } else if (pawnsOnSameColor == 2) {
-          badBishopScore -= 10;
-        }
+      if (pawnsOnSameColor >= 3) {
+        badBishopScore -= 20;
+      } else if (pawnsOnSameColor == 2) {
+        badBishopScore -= 10;
       }
     }
 
@@ -1466,11 +1437,10 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * Counts the number of pawns on the same colored squares as the bishop.
    *
    * @param playerPawns The structure of the player's pawns.
-   * @param piece The bishop piece.
+   * @param position The tile holding the bishop.
    * @return The number of pawns on the same colored squares.
    */
-  private static int getPawnsOnSameColor(PawnStructure playerPawns, Piece piece) {
-    final int position = piece.getPiecePosition();
+  private static int getPawnsOnSameColor(final PawnStructure playerPawns, final int position) {
     final boolean isLightSquare = ((position / 8) + (position % 8)) % 2 == 0;
 
     return isLightSquare ? playerPawns.lightSquareCount() : playerPawns.darkSquareCount();
@@ -1479,50 +1449,48 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * Evaluates queen positioning in the middlegame.
    *
-   * @param playerPieces The player's pieces.
+   * @param playerLayout The layout of the player's pieces.
    * @param board The current chess board.
    * @param alliance The alliance of the player.
    * @return The queen positioning evaluation score.
    */
-  private double evaluateQueenPositioning(final Collection<Piece> playerPieces,
+  private double evaluateQueenPositioning(final PieceLayout playerLayout,
                                           final Board board,
                                           final Alliance alliance) {
     double queenScore = 0;
 
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() == Piece.PieceType.QUEEN) {
-        final int position = piece.getPiecePosition();
-        final int rank = position / 8;
-        final int file = position % 8;
+    for (long remaining = playerLayout.queens(); remaining != 0L; remaining &= remaining - 1) {
+      final int position = Long.numberOfTrailingZeros(remaining);
+      final int rank = position / 8;
+      final int file = position % 8;
 
-        if (file >= 2 && file <= 5 && rank >= 2 && rank <= 5) {
-          queenScore += 10;
+      if (file >= 2 && file <= 5 && rank >= 2 && rank <= 5) {
+        queenScore += 10;
+      }
+
+      boolean queenTooAdvanced = false;
+      if (alliance.isWhite() && rank < 2) {
+        queenTooAdvanced = true;
+      } else if (!alliance.isWhite() && rank > 5) {
+        queenTooAdvanced = true;
+      }
+
+      if (queenTooAdvanced) {
+        int supportingPieces = getSupportingPieces(playerLayout, alliance, rank);
+
+        if (supportingPieces < 2) {
+          queenScore -= 25;
         }
+      }
 
-        boolean queenTooAdvanced = false;
-        if (alliance.isWhite() && rank < 2) {
-          queenTooAdvanced = true;
-        } else if (!alliance.isWhite() && rank > 5) {
-          queenTooAdvanced = true;
-        }
+      final King opponentKing = opposingKing(board, alliance);
+      final int kingPosition = opponentKing.getPiecePosition();
 
-        if (queenTooAdvanced) {
-          int supportingPieces = getSupportingPieces(playerPieces, alliance, rank);
-
-          if (supportingPieces < 2) {
-            queenScore -= 25;
-          }
-        }
-
-        final King opponentKing = opposingKing(board, alliance);
-        final int kingPosition = opponentKing.getPiecePosition();
-
-        final int distance = calculateChebyshevDistance(position, kingPosition);
-        if (distance <= 2) {
-          queenScore += 20;
-        } else if (distance == 3) {
-          queenScore += 10;
-        }
+      final int distance = calculateChebyshevDistance(position, kingPosition);
+      if (distance <= 2) {
+        queenScore += 20;
+      } else if (distance == 3) {
+        queenScore += 10;
       }
     }
 
@@ -1530,28 +1498,22 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Counts the number of supporting pieces for a queen in an advanced position.
+   * Counts the player's pieces other than the king and the queens that stand on the given rank or
+   * further advanced than it.
    *
-   * @param playerPieces The player's pieces.
+   * @param playerLayout The layout of the player's pieces.
    * @param alliance The alliance of the player.
    * @param rank The rank of the queen.
    * @return The number of supporting pieces.
    */
-  private static int getSupportingPieces(Collection<Piece> playerPieces, Alliance alliance, int rank) {
-    int supportingPieces = 0;
-    for (final Piece supportPiece : playerPieces) {
-      if (supportPiece.getPieceType() != Piece.PieceType.QUEEN &&
-              supportPiece.getPieceType() != Piece.PieceType.KING) {
-        final int supportPosition = supportPiece.getPiecePosition();
-        final int supportRank = supportPosition / 8;
+  private static int getSupportingPieces(final PieceLayout playerLayout,
+                                         final Alliance alliance,
+                                         final int rank) {
+    final long ranksBehind = alliance.isWhite() ?
+            -1L >>> (64 - ((rank + 1) * 8)) :
+            -1L << (rank * 8);
 
-        if ((alliance.isWhite() && supportRank <= rank) ||
-                (!alliance.isWhite() && supportRank >= rank)) {
-          supportingPieces++;
-        }
-      }
-    }
-    return supportingPieces;
+    return Long.bitCount(playerLayout.nonKingPieces() & ~playerLayout.queens() & ranksBehind);
   }
 
   /**
