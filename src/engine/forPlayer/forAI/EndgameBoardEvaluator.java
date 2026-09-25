@@ -61,8 +61,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   public double evaluate(final Board board) {
     final List<Piece> whitePawns = getPlayerPawns(board.whitePlayer());
     final List<Piece> blackPawns = getPlayerPawns(board.blackPlayer());
-    final PawnLists pawns = new PawnLists(whitePawns, blackPawns,
-            PawnLists.occupancy(whitePawns), PawnLists.occupancy(blackPawns));
+    final long whitePawnOccupancy = PawnLists.occupancy(whitePawns);
+    final long blackPawnOccupancy = PawnLists.occupancy(blackPawns);
+    final PawnLists pawns = new PawnLists(whitePawns, blackPawns, whitePawnOccupancy,
+            blackPawnOccupancy, passedPawns(whitePawns, blackPawnOccupancy, Alliance.WHITE),
+            passedPawns(blackPawns, whitePawnOccupancy, Alliance.BLACK));
     final Collection<Piece> whitePieces = board.whitePlayer().getActivePieces();
     final Collection<Piece> blackPieces = board.blackPlayer().getActivePieces();
     final Material material = new Material(countPieceTypes(whitePieces),
@@ -112,9 +115,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param black The tiles holding black's pawns, in board iteration order.
    * @param whiteOccupancy The tiles holding white's pawns, as one bit per tile.
    * @param blackOccupancy The tiles holding black's pawns, as one bit per tile.
+   * @param whitePassed The tiles holding white's passed pawns, as one bit per tile.
+   * @param blackPassed The tiles holding black's passed pawns, as one bit per tile.
    */
   private record PawnLists(List<Piece> white, List<Piece> black, long whiteOccupancy,
-                           long blackOccupancy) {
+                           long blackOccupancy, long whitePassed, long blackPassed) {
 
     /**
      * Returns the pawns belonging to the given player.
@@ -134,6 +139,16 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
      */
     private long occupancyOf(final Player player) {
       return player.getAlliance().isWhite() ? whiteOccupancy : blackOccupancy;
+    }
+
+    /**
+     * Returns the tiles held by the given player's passed pawns, as one bit per tile.
+     *
+     * @param player The player whose passed pawns are requested.
+     * @return That player's passed pawn occupancy.
+     */
+    private long passedOf(final Player player) {
+      return player.getAlliance().isWhite() ? whitePassed : blackPassed;
     }
 
     /**
@@ -630,13 +645,13 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     double passedPawnScore = 0;
     final List<Piece> playerPawns = pawns.of(player);
     final long playerPawnOccupancy = pawns.occupancyOf(player);
-    final long opponentPawnOccupancy = pawns.occupancyOf(player.getOpponent());
+    final long passedPawns = pawns.passedOf(player);
     final Alliance alliance = player.getAlliance();
     final King playerKing = player.getPlayerKing();
     final King opponentKing = player.getOpponent().getPlayerKing();
 
     for (final Piece pawn : playerPawns) {
-      if (isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
+      if (isPawnAtPosition(passedPawns, pawn.getPiecePosition())) {
         final int pawnPosition = pawn.getPiecePosition();
         final int pawnRank = pawnPosition / 8;
         final int rankFromPromotion = alliance.isWhite() ? pawnRank : (7 - pawnRank);
@@ -665,7 +680,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       }
     }
 
-    passedPawnScore += evaluateConnectedPassedPawns(playerPawns, opponentPawnOccupancy, alliance);
+    passedPawnScore += evaluateConnectedPassedPawns(playerPawns, passedPawns, alliance);
 
     return passedPawnScore;
   }
@@ -701,6 +716,27 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     return true;
+  }
+
+  /**
+   * Returns the tiles of those given pawns that are passed.
+   *
+   * @param playerPawns The pawns to test, all of one alliance.
+   * @param opponentPawnOccupancy The opposing pawn occupancy, as one bit per tile.
+   * @param alliance The alliance of the pawns being tested.
+   * @return The tiles holding passed pawns, as one bit per tile.
+   */
+  private long passedPawns(final List<Piece> playerPawns, final long opponentPawnOccupancy,
+                           final Alliance alliance) {
+    long passedPawns = 0L;
+
+    for (final Piece pawn : playerPawns) {
+      if (isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
+        passedPawns |= 1L << pawn.getPiecePosition();
+      }
+    }
+
+    return passedPawns;
   }
 
   /**
@@ -772,18 +808,18 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * support each other's advancement.
    *
    * @param playerPawns The player's pawns.
-   * @param opponentPawnOccupancy The opponent's pawn occupancy, as one bit per tile.
+   * @param playerPassedPawns The player's passed pawn occupancy, as one bit per tile.
    * @param alliance The alliance of the pawns being evaluated.
    * @return The connected passed pawns evaluation score.
    */
   private double evaluateConnectedPassedPawns(final List<Piece> playerPawns,
-                                              final long opponentPawnOccupancy,
+                                              final long playerPassedPawns,
                                               final Alliance alliance) {
     double connectedScore = 0;
     List<Piece> passedPawns = new ArrayList<>();
 
     for (final Piece pawn : playerPawns) {
-      if (isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
+      if (isPawnAtPosition(playerPassedPawns, pawn.getPiecePosition())) {
         passedPawns.add(pawn);
       }
     }
@@ -1247,12 +1283,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
                                                      final PawnLists pawns) {
     double supportScore = 0;
     final List<Piece> playerPawns = pawns.of(player);
-    final long opponentPawnOccupancy = pawns.occupancyOf(player.getOpponent());
+    final long passedPawns = pawns.passedOf(player);
     final Alliance alliance = player.getAlliance();
     final Collection<Piece> playerPieces = player.getActivePieces();
 
     for (final Piece pawn : playerPawns) {
-      if (isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
+      if (isPawnAtPosition(passedPawns, pawn.getPiecePosition())) {
         final int pawnPosition = pawn.getPiecePosition();
         final int promotionSquare = alliance.isWhite() ?
                 (pawnPosition % 8) :
@@ -1304,14 +1340,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     final List<Piece> playerPawns = pawns.of(player);
     final List<Piece> opponentPawns = pawns.of(player.getOpponent());
-    final long playerPawnOccupancy = pawns.occupancyOf(player);
-    final long opponentPawnOccupancy = pawns.occupancyOf(player.getOpponent());
+    final long playerPassedPawns = pawns.passedOf(player);
+    final long opponentPassedPawns = pawns.passedOf(player.getOpponent());
     final Alliance alliance = player.getAlliance();
 
     for (final Piece rook : playerRooks) {
       rookScore += evaluateRookOnOpenFile(rook, board);
       rookScore += evaluateRookBehindPassedPawn(rook, playerPawns, opponentPawns,
-              playerPawnOccupancy, opponentPawnOccupancy, alliance);
+              playerPassedPawns, opponentPassedPawns, alliance);
       rookScore += evaluateRookOn7thRank(rook, opponentPawns, alliance);
 
       if (playerRooks.size() >= 2) {
@@ -1363,16 +1399,16 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param rook The rook to evaluate.
    * @param playerPawns The player's pawns.
    * @param opponentPawns The opponent's pawns.
-   * @param playerPawnOccupancy The player's pawn occupancy, as one bit per tile.
-   * @param opponentPawnOccupancy The opponent's pawn occupancy, as one bit per tile.
+   * @param playerPassedPawns The player's passed pawn occupancy, as one bit per tile.
+   * @param opponentPassedPawns The opponent's passed pawn occupancy, as one bit per tile.
    * @param alliance The alliance of the rook.
    * @return The rook-pawn cooperation evaluation score.
    */
   private double evaluateRookBehindPassedPawn(final Piece rook,
                                               final List<Piece> playerPawns,
                                               final List<Piece> opponentPawns,
-                                              final long playerPawnOccupancy,
-                                              final long opponentPawnOccupancy,
+                                              final long playerPassedPawns,
+                                              final long opponentPassedPawns,
                                               final Alliance alliance) {
     double behindPawnScore = 0;
     final int rookPosition = rook.getPiecePosition();
@@ -1381,7 +1417,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     for (final Piece pawn : playerPawns) {
       if (pawn.getPiecePosition() % 8 == rookFile &&
-              isPassedPawn(pawn, opponentPawnOccupancy, alliance)) {
+              isPawnAtPosition(playerPassedPawns, pawn.getPiecePosition())) {
         final int pawnRank = pawn.getPiecePosition() / 8;
 
         if ((alliance.isWhite() && rookRank > pawnRank) ||
@@ -1393,8 +1429,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     for (final Piece pawn : opponentPawns) {
       if (pawn.getPiecePosition() % 8 == rookFile &&
-              isPassedPawn(pawn, playerPawnOccupancy,
-                      alliance.equals(Alliance.WHITE) ? Alliance.BLACK : Alliance.WHITE)) {
+              isPawnAtPosition(opponentPassedPawns, pawn.getPiecePosition())) {
         final int pawnRank = pawn.getPiecePosition() / 8;
 
         if ((alliance.isWhite() && rookRank > pawnRank) ||
