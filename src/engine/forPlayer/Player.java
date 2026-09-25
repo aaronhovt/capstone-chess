@@ -246,7 +246,8 @@ public abstract class Player {
    * @return True if castling opportunities exist, false otherwise.
    */
   protected boolean hasCastleOpportunities() {
-    return !isInCheck() || !this.playerKing.isCastled() ||
-            (this.playerKing.isKingSideCastleCapable() && this.playerKing.isQueenSideCastleCapable());
+    return !this.playerKing.isCastled() &&
+            (this.playerKing.isKingSideCastleCapable() || this.playerKing.isQueenSideCastleCapable()) &&
+            !isInCheck();
   }
 }
