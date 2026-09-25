@@ -100,6 +100,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   private final ThreadLocal<Move[][]> searchedQuiets = ThreadLocal.withInitial(() ->
           new Move[MAX_SEARCH_DEPTH][MAX_TRACKED_QUIETS]);
 
+  /**
+   * The static exchange scores of the moves in the list the standard sorter last returned at each
+   * ply, at the same index as the move, with zero for a move that is not a capture. A ply's
+   * entries are meaningful only while the node that sorted them is searching its moves.
+   */
+  private final ThreadLocal<int[][]> sortedExchangeScores = ThreadLocal.withInitial(() ->
+          new int[MAX_SEARCH_DEPTH][(int) ORDER_INDEX_MASK + 1]);
+
   /** Killer moves table storing good non-capture moves for each search ply. */
   private final ThreadLocal<Move[][]> killerMoves = ThreadLocal.withInitial(() ->
           new Move[2][MAX_SEARCH_DEPTH]);
@@ -171,6 +179,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** The mask that recovers a move's source index from a packed standard ordering key. */
   private static final long ORDER_INDEX_MASK = (1L << ORDER_INDEX_BITS) - 1;
 
+  /**
+   * The mask that recovers the negated score from a packed standard ordering key shifted right by
+   * ORDER_INDEX_BITS.
+   */
+  private static final long ORDER_SCORE_MASK = (1L << 32) - 1;
+
   /** The bit position at which a packed standard ordering key holds its tier. */
   private static final int ORDER_TIER_SHIFT = ORDER_INDEX_BITS + 32;
 
@@ -210,12 +224,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     /**
      * Standard move sorting strategy using history heuristic, killer moves,
-     * countermoves, and static exchange evaluation for move ordering.
+     * countermoves, and static exchange evaluation for move ordering. Sorting also writes the
+     * static exchange score of each capture in the returned list to the same index of the ply's
+     * row of sortedExchangeScores, and zero for each other move.
      */
     STANDARD {
       @Override
-      Collection<Move> sort(final Collection<Move> moves, final Board board,
-                            final AlphaBeta engine, final int ply) {
+      List<Move> sort(final Collection<Move> moves, final Board board,
+                      final AlphaBeta engine, final int ply) {
         final Move[] ordered = moves.toArray(new Move[0]);
         final int count = ordered.length;
         final Move[][] killers = engine.killerMoves.get();
@@ -254,9 +270,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         }
         Arrays.sort(orderKeys);
 
+        final int[] exchangeScores = engine.sortedExchangeScores.get()[ply];
         final List<Move> sortedMoves = new ArrayList<>(count);
-        for (final long orderKey : orderKeys) {
-          sortedMoves.add(ordered[(int) (orderKey & ORDER_INDEX_MASK)]);
+        for (int i = 0; i < count; i++) {
+          final long orderKey = orderKeys[i];
+          final Move move = ordered[(int) (orderKey & ORDER_INDEX_MASK)];
+          sortedMoves.add(move);
+          exchangeScores[i] = move.isAttack() ? (int) ((long) Integer.MAX_VALUE -
+                  ((orderKey >>> ORDER_INDEX_BITS) & ORDER_SCORE_MASK)) : 0;
         }
         return sortedMoves;
       }
@@ -268,8 +289,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      */
     EXPENSIVE {
       @Override
-      Collection<Move> sort(final Collection<Move> moves, final Board board,
-                            final AlphaBeta engine, final int ply) {
+      List<Move> sort(final Collection<Move> moves, final Board board,
+                      final AlphaBeta engine, final int ply) {
         List<Move> sortedMoves = new ArrayList<>(moves);
 
         final int historySide = historySideOf(board);
@@ -343,10 +364,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      * @param board The current board position.
      * @param engine The engine instance for accessing move ordering data.
      * @param ply The current search ply for accessing ply-specific data.
-     * @return A sorted collection of moves.
+     * @return A sorted list of moves.
      */
-    abstract Collection<Move> sort(Collection<Move> moves, final Board board,
-                                   final AlphaBeta engine, final int ply);
+    abstract List<Move> sort(Collection<Move> moves, final Board board,
+                             final AlphaBeta engine, final int ply);
 
     /**
      * Returns the countermove recorded against the move that produced the given position.
@@ -901,6 +922,25 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
+   * Moves the move at the given index of a sorted move list to the front, shifting the moves
+   * ahead of it back one place, and moves the entries of the matching exchange scores the same
+   * way. Nothing changes when the index is not positive.
+   *
+   * @param moves The sorted moves.
+   * @param exchangeScores The exchange scores at the same indices as the moves.
+   * @param index The index of the move to bring to the front.
+   */
+  private static void moveToFront(final List<Move> moves, final int[] exchangeScores, final int index) {
+    if (index <= 0) {
+      return;
+    }
+    Collections.rotate(moves.subList(0, index + 1), 1);
+    final int exchangeScore = exchangeScores[index];
+    System.arraycopy(exchangeScores, 0, exchangeScores, 1, index);
+    exchangeScores[0] = exchangeScore;
+  }
+
+  /**
    * Scores a position in which the side to move has no legal moves. A checkmate scores
    * {@link #MATE_VALUE} against the mated side, reduced by the ply at which it occurs so that
    * shorter mates outrank longer ones, and a stalemate scores as a draw.
@@ -1072,26 +1112,18 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final Move[] quietsSearched = searchedQuiets.get()[ply];
     int quietCount = 0;
 
-    Collection<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
+    final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
+    final int[] exchangeScores = sortedExchangeScores.get()[ply];
 
     if (ttMove != null) {
-      List<Move> reorderedMoves = new ArrayList<>();
-      for (Move move : sortedMoves) {
-        if (move.equals(ttMove)) {
-          reorderedMoves.add(0, move);
-        } else {
-          reorderedMoves.add(move);
-        }
-      }
-      sortedMoves = reorderedMoves;
+      moveToFront(sortedMoves, exchangeScores, sortedMoves.indexOf(ttMove));
     }
 
-    for (final Move move : sortedMoves) {
-      if (move.isAttack() && depth < 3 && movesSearched > 2) {
-        int seeScore = seeEvaluator.evaluate(board, move);
-        if (seeScore < SEE_PRUNING_THRESHOLD) {
-          continue;
-        }
+    for (int moveIndex = 0; moveIndex < sortedMoves.size(); moveIndex++) {
+      final Move move = sortedMoves.get(moveIndex);
+      if (move.isAttack() && depth < 3 && movesSearched > 2 &&
+              exchangeScores[moveIndex] < SEE_PRUNING_THRESHOLD) {
+        continue;
       }
 
       board.makeMove(move);
@@ -1286,26 +1318,18 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final Move[] quietsSearched = searchedQuiets.get()[ply];
     int quietCount = 0;
 
-    Collection<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
+    final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
+    final int[] exchangeScores = sortedExchangeScores.get()[ply];
 
     if (ttMove != null) {
-      List<Move> reorderedMoves = new ArrayList<>();
-      for (Move move : sortedMoves) {
-        if (move.equals(ttMove)) {
-          reorderedMoves.add(0, move);
-        } else {
-          reorderedMoves.add(move);
-        }
-      }
-      sortedMoves = reorderedMoves;
+      moveToFront(sortedMoves, exchangeScores, sortedMoves.indexOf(ttMove));
     }
 
-    for (final Move move : sortedMoves) {
-      if (move.isAttack() && depth < 3 && movesSearched > 2) {
-        int seeScore = seeEvaluator.evaluate(board, move);
-        if (seeScore < SEE_PRUNING_THRESHOLD) {
-          continue;
-        }
+    for (int moveIndex = 0; moveIndex < sortedMoves.size(); moveIndex++) {
+      final Move move = sortedMoves.get(moveIndex);
+      if (move.isAttack() && depth < 3 && movesSearched > 2 &&
+              exchangeScores[moveIndex] < SEE_PRUNING_THRESHOLD) {
+        continue;
       }
 
       board.makeMove(move);
