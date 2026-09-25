@@ -57,8 +57,36 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final List<Piece> blackPawns = getPlayerPawns(board.blackPlayer());
     final PawnLists pawns = new PawnLists(whitePawns, blackPawns,
             PawnLists.occupancy(whitePawns), PawnLists.occupancy(blackPawns));
+    final int nonPawnPieceCount = countNonPawnPieces(board);
 
-    return (score(board.whitePlayer(), board, pawns) - score(board.blackPlayer(), board, pawns));
+    return (score(board.whitePlayer(), board, pawns, nonPawnPieceCount) -
+            score(board.blackPlayer(), board, pawns, nonPawnPieceCount));
+  }
+
+  /**
+   * Counts the pieces of both players that are neither pawns nor kings.
+   *
+   * @param board The current state of the chess board.
+   * @return The number of such pieces on the board.
+   */
+  private static int countNonPawnPieces(final Board board) {
+    int nonPawnPieceCount = 0;
+
+    for (final Piece piece : board.getWhitePieces()) {
+      if (piece.getPieceType() != Piece.PieceType.PAWN &&
+              piece.getPieceType() != Piece.PieceType.KING) {
+        nonPawnPieceCount++;
+      }
+    }
+
+    for (final Piece piece : board.getBlackPieces()) {
+      if (piece.getPieceType() != Piece.PieceType.PAWN &&
+              piece.getPieceType() != Piece.PieceType.KING) {
+        nonPawnPieceCount++;
+      }
+    }
+
+    return nonPawnPieceCount;
   }
 
   /**
@@ -119,11 +147,13 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param player The player for whom the board position is being evaluated.
    * @param board The current state of the chess board.
    * @param pawns The pawns of both players.
+   * @param nonPawnPieceCount The number of pieces of both players that are neither pawns nor kings.
    * @return The evaluation score of the board from the perspective of the specified player.
    */
   @VisibleForTesting
-  private double score(final Player player, final Board board, final PawnLists pawns) {
-    return materialEvaluation(player, board) +
+  private double score(final Player player, final Board board, final PawnLists pawns,
+                       final int nonPawnPieceCount) {
+    return materialEvaluation(player, nonPawnPieceCount) +
             kingActivityEvaluation(player, board, pawns) +
             passedPawnEvaluation(player, board, pawns) +
             pawnStructureEvaluation(player, board, pawns) +
@@ -131,7 +161,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
             rookEndgameEvaluation(player, board, pawns) +
             bishopEndgameEvaluation(player, board, pawns) +
             drawPatternEvaluation(player, board, pawns) +
-            mobilityEvaluation(player, board) +
+            mobilityEvaluation(player, nonPawnPieceCount) +
             pieceSafetyEvaluation(player, board);
   }
 
@@ -142,14 +172,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * material combinations.
    *
    * @param player The player whose material is being evaluated.
-   * @param board The current chess board state.
+   * @param nonPawnPieceCount The number of pieces of both players that are neither pawns nor kings.
    * @return The material evaluation score for the player.
    */
-  private double materialEvaluation(final Player player, final Board board) {
+  private double materialEvaluation(final Player player, final int nonPawnPieceCount) {
     double materialScore = 0;
     final Collection<Piece> playerPieces = player.getActivePieces();
     final Collection<Piece> opponentPieces = player.getOpponent().getActivePieces();
-    final boolean isEndgame = isDeepEndgame(board);
+    final boolean isEndgame = isDeepEndgame(nonPawnPieceCount);
 
     PieceCounts playerPieceCounts = countPieceTypes(playerPieces);
     PieceCounts opponentPieceCounts = countPieceTypes(opponentPieces);
@@ -243,20 +273,10 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * Checks if the position is in a deep endgame state with few pieces remaining.
    * A deep endgame is characterized by having 4 or fewer non-pawn, non-king pieces.
    *
-   * @param board The current chess board.
+   * @param nonPawnPieceCount The number of pieces of both players that are neither pawns nor kings.
    * @return True if the position is in a deep endgame, false otherwise.
    */
-  private boolean isDeepEndgame(final Board board) {
-    final Collection<Piece> allPieces = board.getAllPieces();
-    int nonPawnPieceCount = 0;
-
-    for (final Piece piece : allPieces) {
-      if (piece.getPieceType() != Piece.PieceType.PAWN &&
-              piece.getPieceType() != Piece.PieceType.KING) {
-        nonPawnPieceCount++;
-      }
-    }
-
+  private boolean isDeepEndgame(final int nonPawnPieceCount) {
     return nonPawnPieceCount <= 4;
   }
 
@@ -1069,7 +1089,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     double coordinationScore = 0;
     final Collection<Piece> playerPieces = player.getActivePieces();
 
-    coordinationScore += evaluateMinorPieceCoordination(playerPieces, board, pawns);
+    coordinationScore += evaluateMinorPieceCoordination(playerPieces, pawns);
     coordinationScore += evaluatePiecePlacement(playerPieces, pawns.of(player));
     coordinationScore += evaluatePiecesSupportingPassedPawns(player, board, pawns);
 
@@ -1081,15 +1101,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * advantages and knight positioning relative to remaining pawns.
    *
    * @param playerPieces The player's pieces.
-   * @param board The current chess board state.
    * @param pawns The pawns of both players.
    * @return The minor piece coordination evaluation score.
    */
   private double evaluateMinorPieceCoordination(final Collection<Piece> playerPieces,
-                                                final Board board, final PawnLists pawns) {
+                                                final PawnLists pawns) {
     double minorPieceScore = 0;
 
-    if (board.getAllPieces().stream().anyMatch(p -> p.getPieceType() == Piece.PieceType.PAWN)) {
+    if (!pawns.white().isEmpty() || !pawns.black().isEmpty()) {
       long bishopCount = playerPieces.stream()
               .filter(p -> p.getPieceType() == Piece.PieceType.BISHOP)
               .count();
@@ -1609,16 +1628,16 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * caller forms the difference between the two players.
    *
    * @param player The player whose mobility is being evaluated.
-   * @param board The current chess board state.
+   * @param nonPawnPieceCount The number of pieces of both players that are neither pawns nor kings.
    * @return The mobility evaluation score.
    */
-  private double mobilityEvaluation(final Player player, final Board board) {
+  private double mobilityEvaluation(final Player player, final int nonPawnPieceCount) {
     double mobilityScore = 0;
     final Collection<Move> playerMoves = player.getLegalMoves();
 
     double mobilityWeight = 1.0;
 
-    if (isPawnEndgame(board)) {
+    if (isPawnEndgame(nonPawnPieceCount)) {
       mobilityWeight = 0.5;
     }
 
@@ -1706,17 +1725,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /**
    * Checks if the position is a pawn endgame with only kings and pawns remaining.
    *
-   * @param board The current chess board state.
+   * @param nonPawnPieceCount The number of pieces of both players that are neither pawns nor kings.
    * @return True if the position is a pawn endgame, false otherwise.
    */
-  private boolean isPawnEndgame(final Board board) {
-    for (final Piece piece : board.getAllPieces()) {
-      if (piece.getPieceType() != Piece.PieceType.KING &&
-              piece.getPieceType() != Piece.PieceType.PAWN) {
-        return false;
-      }
-    }
-    return true;
+  private boolean isPawnEndgame(final int nonPawnPieceCount) {
+    return nonPawnPieceCount == 0;
   }
 
   /**
