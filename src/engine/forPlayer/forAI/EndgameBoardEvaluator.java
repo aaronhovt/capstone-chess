@@ -833,7 +833,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     pawnStructureScore += evaluateDoubledPawns(playerPawns);
     pawnStructureScore += evaluateIsolatedPawns(playerPawns, opponentPawns);
     pawnStructureScore += evaluatePawnMajorities(playerPawns, opponentPawns);
-    pawnStructureScore += evaluatePawnChains(playerPawns, alliance);
+    pawnStructureScore += evaluatePawnChains(playerPawns, pawns.occupancyOf(player), alliance);
     pawnStructureScore += evaluateBackwardPawns(playerPawns, opponentPawns, alliance);
 
     return pawnStructureScore;
@@ -1001,30 +1001,17 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * Pawn chains provide mutual support and are generally advantageous.
    *
    * @param playerPawns The player's pawns.
+   * @param playerPawnOccupancy The player's pawn occupancy, as one bit per tile.
    * @param alliance The alliance of the pawns.
    * @return The pawn chains evaluation score.
    */
-  private double evaluatePawnChains(final List<Piece> playerPawns, final Alliance alliance) {
+  private double evaluatePawnChains(final List<Piece> playerPawns, final long playerPawnOccupancy,
+                                    final Alliance alliance) {
     double pawnChainScore = 0;
-    Map<Integer, Set<Integer>> pawnsByRank = new HashMap<>();
-
-    for (final Piece pawn : playerPawns) {
-      final int rank = pawn.getPiecePosition() / 8;
-      final int file = pawn.getPiecePosition() % 8;
-
-      if (!pawnsByRank.containsKey(rank)) {
-        pawnsByRank.put(rank, new HashSet<>());
-      }
-
-      pawnsByRank.get(rank).add(file);
-    }
 
     int chainLinks = 0;
     for (final Piece pawn : playerPawns) {
-      final int rank = pawn.getPiecePosition() / 8;
-      final int file = pawn.getPiecePosition() % 8;
-
-      if (isPawnProtectingFile(pawnsByRank, rank, file, alliance)) {
+      if (isPawnProtected(pawn, playerPawnOccupancy, alliance)) {
         chainLinks++;
       }
     }
@@ -1032,32 +1019,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     pawnChainScore += chainLinks * 5;
 
     return pawnChainScore;
-  }
-
-  /**
-   * Checks if a pawn is protected by another pawn on an adjacent file. Rank indices run from zero
-   * on black's back rank to seven on white's, so a protecting pawn stands one index higher for
-   * white and one index lower for black.
-   *
-   * @param pawnsByRank A map of pawns organized by rank.
-   * @param rank The rank of the pawn being checked.
-   * @param file The file of the pawn being checked.
-   * @param alliance The alliance of the pawn being checked.
-   * @return True if the pawn is protected, false otherwise.
-   */
-  private boolean isPawnProtectingFile(final Map<Integer, Set<Integer>> pawnsByRank,
-                                       final int rank,
-                                       final int file,
-                                       final Alliance alliance) {
-    final int protectingRank = alliance.isWhite() ? rank + 1 : rank - 1;
-
-    if (pawnsByRank.containsKey(protectingRank)) {
-      final Set<Integer> filesWithPawns = pawnsByRank.get(protectingRank);
-      return (file > 0 && filesWithPawns.contains(file - 1)) ||
-              (file < 7 && filesWithPawns.contains(file + 1));
-    }
-
-    return false;
   }
 
   /**
