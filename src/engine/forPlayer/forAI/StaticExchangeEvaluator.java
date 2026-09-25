@@ -3,10 +3,12 @@ package engine.forPlayer.forAI;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
+import engine.forBoard.MoveUtils;
+import engine.forPiece.Knight;
 import engine.forPiece.Piece;
+import engine.forPiece.Queen;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 
 /**
@@ -19,8 +21,8 @@ import java.util.List;
  * It uses simplified piece values optimized for exchange calculations and considers factors such as
  * piece defense and attack sequences to determine the material outcome of captures.
  * <p>
- * Both the attacker search and the defense test are answered through
- * {@link Piece#defendsSquare(int, Board)} rather than through generated move lists. Move generation
+ * The attacker search is answered through {@link Piece#defendsSquare(int, Board)} rather than
+ * through generated move lists. Move generation
  * is pseudo-legal and never emits a move onto a square held by the moving piece's own alliance, so
  * a move list cannot report that a piece is defended, and disregarding occupancy is what an
  * exchange sequence requires.
@@ -82,10 +84,6 @@ public class StaticExchangeEvaluator {
 
     if (move instanceof Move.PawnEnPassantAttack) {
       return SEE_PIECE_VALUES[0];
-    }
-
-    if (!isPieceDefended(capturedPiece, board)) {
-      return capturedValue;
     }
 
     final List<Piece> attackers = findAttackers(board, targetSquare);
@@ -154,38 +152,11 @@ public class StaticExchangeEvaluator {
   }
 
   /**
-   * Determines whether a piece is defended by any other piece of the same alliance. A defender is
-   * a friendly piece bearing on the piece's square, whether or not it could legally move there.
-   *
-   * @param piece The piece to check for defense.
-   * @param board The current chess board state.
-   * @return True if the piece is defended by a friendly piece, false otherwise.
-   */
-  public boolean isPieceDefended(final Piece piece, final Board board) {
-    if (piece == null) {
-      return false;
-    }
-
-    final int piecePosition = piece.getPiecePosition();
-    final Collection<Piece> friendlyPieces = piece.getPieceAllegiance().isWhite() ?
-            board.getWhitePieces() : board.getBlackPieces();
-
-    for (final Piece otherPiece : friendlyPieces) {
-      if (otherPiece.getPiecePosition() == piecePosition) {
-        continue;
-      }
-      if (otherPiece.defendsSquare(piecePosition, board)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
    * Finds every piece on the board that bears on a square, of either alliance. Occupancy of the
    * square is disregarded, so the result holds both the pieces that could capture on the square
-   * and the pieces defending whatever stands there.
+   * and the pieces defending whatever stands there. The candidates are the first piece on each
+   * queen line leaving the square and the pieces on the knight squares around it, and a candidate
+   * is kept when it bears on the square by {@link Piece#defendsSquare(int, Board)}.
    *
    * @param board The current chess board state.
    * @param targetSquare The square coordinate to check for attackers.
@@ -194,14 +165,21 @@ public class StaticExchangeEvaluator {
   private List<Piece> findAttackers(final Board board, final int targetSquare) {
     final List<Piece> attackers = new ArrayList<>();
 
-    for (final Piece piece : board.getWhitePieces()) {
-      if (piece.defendsSquare(targetSquare, board)) {
-        attackers.add(piece);
+    for (final MoveUtils.Line line : Queen.linesFrom(targetSquare)) {
+      for (final int square : line.getLineCoordinates()) {
+        final Piece piece = board.getPiece(square);
+        if (piece != null) {
+          if (piece.defendsSquare(targetSquare, board)) {
+            attackers.add(piece);
+          }
+          break;
+        }
       }
     }
 
-    for (final Piece piece : board.getBlackPieces()) {
-      if (piece.defendsSquare(targetSquare, board)) {
+    for (final int square : Knight.squaresFrom(targetSquare)) {
+      final Piece piece = board.getPiece(square);
+      if (piece != null && piece.defendsSquare(targetSquare, board)) {
         attackers.add(piece);
       }
     }

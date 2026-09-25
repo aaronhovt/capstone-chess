@@ -64,6 +64,18 @@ public final class Queen extends Piece {
   }
 
   /**
+   * Returns the movement lines a queen has from the given square on an empty board, one per
+   * direction that leaves the square, each ordered outward from the square. The returned arrays
+   * are shared with move generation and must not be modified.
+   *
+   * @param square The square the lines start from.
+   * @return The movement lines from that square.
+   */
+  public static MoveUtils.Line[] linesFrom(final int square) {
+    return PRECOMPUTED_CANDIDATES[square];
+  }
+
+  /**
    * Precomputes and returns all possible movement lines for every position on the board.
    * This method calculates valid queen movements considering board boundaries and edge case
    * exclusions to optimize runtime move generation performance.

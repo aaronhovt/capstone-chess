@@ -58,6 +58,17 @@ public final class Knight extends Piece {
   }
 
   /**
+   * Returns the squares a knight on the given square reaches. The returned array is shared with
+   * move generation and must not be modified.
+   *
+   * @param square The square the knight stands on.
+   * @return The squares a knight reaches from that square.
+   */
+  public static int[] squaresFrom(final int square) {
+    return PRECOMPUTED_CANDIDATES[square];
+  }
+
+  /**
    * Computes and precomputes the legal destination squares for each tile on the board for the
    * knight. Takes edge cases to exclude illegal move offsets into consideration.
    *
