@@ -92,6 +92,12 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final long LIGHT_TILES = 0xAA55AA55AA55AA55L;
 
   /**
+   * The scores of both players' pawn structure terms that read nothing but pawns, keyed by the
+   * tiles their pawns occupy.
+   */
+  private static final PawnStructureCache PAWN_STRUCTURE_CACHE = new PawnStructureCache();
+
+  /**
    * Private constructor to prevent instantiation outside of the class.
    * Enforces the singleton pattern.
    */
@@ -122,11 +128,38 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final PawnStructure blackPawns = pawnStructure(board.blackPlayer());
     final PieceLayout whiteLayout = pieceLayout(board.whitePlayer());
     final PieceLayout blackLayout = pieceLayout(board.blackPlayer());
+    final PawnStructureCache.Entry pawnStructureScores =
+            pawnStructureScores(whitePawns, blackPawns);
 
     return (score(board.whitePlayer(), board, whiteStatistics, blackStatistics,
-                    whitePawns, blackPawns, whiteLayout, blackLayout) -
+                    whitePawns, blackPawns, pawnStructureScores, whiteLayout, blackLayout) -
             score(board.blackPlayer(), board, blackStatistics, whiteStatistics,
-                    blackPawns, whitePawns, blackLayout, whiteLayout));
+                    blackPawns, whitePawns, pawnStructureScores, blackLayout, whiteLayout));
+  }
+
+  /**
+   * Returns the scores of both players' pawn structure terms that read nothing but pawns, from
+   * the cache when it holds them for these pawns and otherwise computed and stored.
+   *
+   * @param whitePawns The structure of white's pawns.
+   * @param blackPawns The structure of black's pawns.
+   * @return The pawns-only pawn structure scores of both players.
+   */
+  private PawnStructureCache.Entry pawnStructureScores(final PawnStructure whitePawns,
+                                                       final PawnStructure blackPawns) {
+    final PawnStructureCache.Entry cached =
+            PAWN_STRUCTURE_CACHE.probe(whitePawns.occupancy(), blackPawns.occupancy());
+
+    if (cached != null) {
+      return cached;
+    }
+
+    final PawnStructureCache.Entry computed = new PawnStructureCache.Entry(
+            whitePawns.occupancy(), blackPawns.occupancy(),
+            pawnOnlyStructureEvaluation(Alliance.WHITE, whitePawns, blackPawns),
+            pawnOnlyStructureEvaluation(Alliance.BLACK, blackPawns, whitePawns));
+    PAWN_STRUCTURE_CACHE.store(computed);
+    return computed;
   }
 
   /**
@@ -441,6 +474,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param opponentStatistics The statistics of the opponent's legal move list.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
+   * @param pawnStructureScores The pawns-only pawn structure scores of both players.
    * @param playerLayout The layout of the player's pieces.
    * @param opponentLayout The layout of the opponent's pieces.
    * @return The evaluation score of the board from the perspective of the specified player.
@@ -451,12 +485,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
                        final MoveStatistics opponentStatistics,
                        final PawnStructure playerPawns,
                        final PawnStructure opponentPawns,
+                       final PawnStructureCache.Entry pawnStructureScores,
                        final PieceLayout playerLayout,
                        final PieceLayout opponentLayout) {
     return materialEvaluation(playerLayout) +
             mobilityEvaluation(playerStatistics) +
             kingSafetyEvaluation(player, playerPawns, opponentStatistics, opponentLayout) +
-            pawnStructureEvaluation(player, board, playerPawns, opponentPawns) +
+            pawnStructureEvaluation(player, board, playerPawns, opponentPawns,
+                    pawnStructureScores) +
             pieceCoordinationEvaluation(player, board, opponentStatistics,
                     playerPawns, opponentPawns, playerLayout) +
             spaceControlEvaluation(playerStatistics, opponentStatistics) +
@@ -658,41 +694,55 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param board The current state of the chess board.
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
+   * @param pawnStructureScores The pawns-only pawn structure scores of both players.
    * @return The pawn structure evaluation score.
    */
   private double pawnStructureEvaluation(final Player player, final Board board,
                                          final PawnStructure playerPawns,
-                                         final PawnStructure opponentPawns) {
-    final Player opponent = player.getOpponent();
+                                         final PawnStructure opponentPawns,
+                                         final PawnStructureCache.Entry pawnStructureScores) {
+    return pawnStructureScores.scoreOf(player.getAlliance()) +
+            evaluateUncontrolledStopSquares(playerPawns, opponentPawns,
+                    player.getOpponent().getActivePieces(), player.getAlliance(), board);
+  }
+
+  /**
+   * Evaluates the pawn structure terms that read nothing but the pawns of both players.
+   *
+   * @param alliance The alliance of the player whose pawn structure is being evaluated.
+   * @param playerPawns The structure of the player's pawns.
+   * @param opponentPawns The structure of the opponent's pawns.
+   * @return The pawns-only pawn structure evaluation score.
+   */
+  private double pawnOnlyStructureEvaluation(final Alliance alliance,
+                                             final PawnStructure playerPawns,
+                                             final PawnStructure opponentPawns) {
     double pawnStructureScore = 0;
 
-    pawnStructureScore += evaluatePassedPawns(playerPawns, opponentPawns,
-            opponent.getActivePieces(), player.getAlliance(), board);
+    pawnStructureScore += evaluatePassedPawns(playerPawns, opponentPawns, alliance);
     pawnStructureScore += evaluatePawnIslands(playerPawns);
     pawnStructureScore += evaluateDoubledPawns(playerPawns);
     pawnStructureScore += evaluateIsolatedPawns(playerPawns, opponentPawns);
-    pawnStructureScore += evaluateBackwardPawns(playerPawns, opponentPawns, player.getAlliance());
-    pawnStructureScore += evaluatePawnChains(playerPawns, player.getAlliance());
+    pawnStructureScore += evaluateBackwardPawns(playerPawns, opponentPawns, alliance);
+    pawnStructureScore += evaluatePawnChains(playerPawns, alliance);
     pawnStructureScore += evaluateCentralPawnControl(playerPawns);
 
     return pawnStructureScore;
   }
 
   /**
-   * Evaluates passed pawns, which are more valuable in the middlegame.
+   * Evaluates passed pawns, which are more valuable in the middlegame. The bonus for a passed
+   * pawn whose stop square no opponent piece controls is left to
+   * {@link #evaluateUncontrolledStopSquares}.
    *
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
-   * @param opponentPieces The opponent's pieces.
    * @param alliance The alliance of the player.
-   * @param board The current state of the chess board.
    * @return The passed pawns evaluation score.
    */
   private double evaluatePassedPawns(final PawnStructure playerPawns,
                                      final PawnStructure opponentPawns,
-                                     final Collection<Piece> opponentPieces,
-                                     final Alliance alliance,
-                                     final Board board) {
+                                     final Alliance alliance) {
     double passedPawnScore = 0;
 
     for (final int pawnPosition : playerPawns.positions()) {
@@ -705,14 +755,37 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
         if (isPawnProtected(pawnPosition, playerPawns, alliance)) {
           passedPawnScore += 15;
         }
-
-        if (!opponentControlsStopSquare(pawnPosition, alliance, opponentPieces, board)) {
-          passedPawnScore += 10;
-        }
       }
     }
 
     return passedPawnScore;
+  }
+
+  /**
+   * Evaluates the player's passed pawns whose stop square no opponent piece controls.
+   *
+   * @param playerPawns The structure of the player's pawns.
+   * @param opponentPawns The structure of the opponent's pawns.
+   * @param opponentPieces The opponent's pieces.
+   * @param alliance The alliance of the player.
+   * @param board The current state of the chess board.
+   * @return The uncontrolled stop square evaluation score.
+   */
+  private double evaluateUncontrolledStopSquares(final PawnStructure playerPawns,
+                                                 final PawnStructure opponentPawns,
+                                                 final Collection<Piece> opponentPieces,
+                                                 final Alliance alliance,
+                                                 final Board board) {
+    double stopSquareScore = 0;
+
+    for (final int pawnPosition : playerPawns.positions()) {
+      if (isPassedPawn(pawnPosition, opponentPawns, alliance) &&
+              !opponentControlsStopSquare(pawnPosition, alliance, opponentPieces, board)) {
+        stopSquareScore += 10;
+      }
+    }
+
+    return stopSquareScore;
   }
 
   /**
