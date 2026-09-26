@@ -804,9 +804,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
   /**
    * Searches every legal root move on the calling thread and returns the best one with its score.
-   * The move that was best in the previous iteration is searched first, and each move is searched
-   * against a window narrowed to the best score found so far. A root move that leaves the mover in
-   * check is skipped. A search that is stopped part way returns the best of the moves whose search
+   * The move that was best in the previous iteration is searched first. The first legal move is
+   * searched against the full window, and each later move against a zero window at the best score
+   * found so far, then again against the window from that score to the far bound if it scores
+   * strictly inside it. A root move that leaves the mover in check is skipped. A search that is stopped part way returns the best of the moves whose search
    * finished, and the null move if none of them scored inside the window. The move being searched
    * when the stop came is not considered.
    *
@@ -836,6 +837,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final boolean rootIsWhite = board.currentPlayer().getAlliance().isWhite();
     Move bestMove = MoveFactory.getNullMove();
     double bestScore = rootIsWhite ? alpha : beta;
+    boolean firstMove = true;
 
     for (final Move move : rootMoves) {
       if (searchStopped) {
@@ -850,12 +852,25 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
       double score;
       try {
-        score = rootIsWhite ?
-                min(board, depth - 1, bestScore, beta, 1, true) :
-                max(board, depth - 1, alpha, bestScore, 1, true);
+        if (firstMove) {
+          score = rootIsWhite ?
+                  min(board, depth - 1, bestScore, beta, 1, true) :
+                  max(board, depth - 1, alpha, bestScore, 1, true);
+        } else if (rootIsWhite) {
+          score = min(board, depth - 1, bestScore, bestScore + ZERO_WINDOW, 1, true);
+          if (score > bestScore && score < beta) {
+            score = min(board, depth - 1, bestScore, beta, 1, true);
+          }
+        } else {
+          score = max(board, depth - 1, bestScore - ZERO_WINDOW, bestScore, 1, true);
+          if (score < bestScore && score > alpha) {
+            score = max(board, depth - 1, alpha, bestScore, 1, true);
+          }
+        }
       } finally {
         board.unmakeMove();
       }
+      firstMove = false;
 
       if (searchStopped) {
         break;
