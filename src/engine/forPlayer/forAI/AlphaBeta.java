@@ -1093,7 +1093,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !inCheckAtNode
+    if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !openWindow && !inCheckAtNode
             && beta < MATE_THRESHOLD && getCachedEvaluation(board) >= beta
             && hasNonPawnMaterial(board.currentPlayer())) {
       final int R = 2 + depth / 6;
@@ -1300,7 +1300,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !inCheckAtNode
+    if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !openWindow && !inCheckAtNode
             && alpha > -MATE_THRESHOLD && getCachedEvaluation(board) <= alpha
             && hasNonPawnMaterial(board.currentPlayer())) {
       final int R = 2 + depth / 6;
