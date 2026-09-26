@@ -1106,7 +1106,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
       if (nullMoveScore >= beta
               && (depth < NULL_MOVE_VERIFICATION_DEPTH
-                      || max(board, depth - R, alpha, beta, ply, false) >= beta)) {
+                      || max(board, depth - R, beta - ZERO_WINDOW, beta, ply, false) >= beta)) {
         return beta;
       }
     }
@@ -1313,7 +1313,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
       if (nullMoveScore <= alpha
               && (depth < NULL_MOVE_VERIFICATION_DEPTH
-                      || min(board, depth - R, alpha, beta, ply, false) <= alpha)) {
+                      || min(board, depth - R, alpha, alpha + ZERO_WINDOW, ply, false) <= alpha)) {
         return alpha;
       }
     }
