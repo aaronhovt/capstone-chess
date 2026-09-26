@@ -66,6 +66,18 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final long[] BLACK_KING_SHIELDS = computeKingShields(Alliance.BLACK);
 
   /**
+   * The tiles ahead of a white pawn standing on each tile, on its own file and the files beside
+   * it, indexed by tile, as one bit per tile.
+   */
+  private static final long[] WHITE_FRONT_SPANS = computeFrontSpans(Alliance.WHITE);
+
+  /**
+   * The tiles ahead of a black pawn standing on each tile, on its own file and the files beside
+   * it, indexed by tile, as one bit per tile.
+   */
+  private static final long[] BLACK_FRONT_SPANS = computeFrontSpans(Alliance.BLACK);
+
+  /**
    * The tiles of file zero, as one bit per tile. Shifting left by a file gives that file's tiles.
    */
   private static final long FILE_TILES = 0x0101010101010101L;
@@ -713,26 +725,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   private boolean isPassedPawn(final int pawnPosition, final PawnStructure opponentPawns,
                                final Alliance alliance) {
-    final int pawnFile = pawnPosition % 8;
-    final int pawnRank = pawnPosition / 8;
+    final long[] frontSpans = alliance.isWhite() ? WHITE_FRONT_SPANS : BLACK_FRONT_SPANS;
 
-    final int rankDirection = alliance.isWhite() ? -1 : 1;
-
-    for (int rank = pawnRank + rankDirection; alliance.isWhite() ? (rank >= 0) : (rank < 8); rank += rankDirection) {
-      if (opponentPawns.hasPawnAt(rank * 8 + pawnFile)) {
-        return false;
-      }
-
-      if (pawnFile > 0 && opponentPawns.hasPawnAt(rank * 8 + (pawnFile - 1))) {
-        return false;
-      }
-
-      if (pawnFile < 7 && opponentPawns.hasPawnAt(rank * 8 + (pawnFile + 1))) {
-        return false;
-      }
-    }
-
-    return true;
+    return (frontSpans[pawnPosition] & opponentPawns.occupancy()) == 0L;
   }
 
   /**
@@ -1674,6 +1669,34 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     }
 
     return kingShields;
+  }
+
+  /**
+   * Builds the table of the tiles ahead of a pawn of the given alliance standing on each tile, on
+   * its own file and the files beside it, up to and including the rank furthest from its own side.
+   *
+   * @param alliance The alliance of the pawn.
+   * @return The front span of each tile, indexed by tile, as one bit per tile.
+   */
+  private static long[] computeFrontSpans(final Alliance alliance) {
+    final long[] frontSpans = new long[BoardUtils.NUM_TILES];
+
+    for (int pawnPosition = 0; pawnPosition < BoardUtils.NUM_TILES; pawnPosition++) {
+      final int pawnFile = pawnPosition % 8;
+      final int pawnRank = pawnPosition / 8;
+
+      for (int rank = 0; rank < 8; rank++) {
+        if (alliance.isWhite() ? rank >= pawnRank : rank <= pawnRank) {
+          continue;
+        }
+
+        for (int file = Math.max(0, pawnFile - 1); file <= Math.min(7, pawnFile + 1); file++) {
+          frontSpans[pawnPosition] |= 1L << (rank * 8 + file);
+        }
+      }
+    }
+
+    return frontSpans;
   }
 
   /**
