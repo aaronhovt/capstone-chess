@@ -27,6 +27,9 @@ public class OpeningGameEvaluator implements BoardEvaluator {
   /** The fraction of a threatened piece's value charged against the side that owns it. */
   private static final double THREAT_FRACTION = 0.25;
 
+  /** The pawn structure scores of both players, keyed by the tiles their pawns occupy. */
+  private static final PawnStructureCache PAWN_STRUCTURE_CACHE = new PawnStructureCache();
+
   /**
    * Constructs a new OpeningGameEvaluator instance.
    * Private constructor prevents external instantiation to enforce singleton pattern.
@@ -55,9 +58,37 @@ public class OpeningGameEvaluator implements BoardEvaluator {
             defenderCountsBySquare(board.whitePlayer().getActivePieces(), board);
     final int[] blackDefenderCounts =
             defenderCountsBySquare(board.blackPlayer().getActivePieces(), board);
+    final PawnStructureCache.Entry pawnStructure = pawnStructureScores(board);
 
-    return (score(board.whitePlayer(), board, whiteDefenderCounts, blackDefenderCounts) -
-            score(board.blackPlayer(), board, blackDefenderCounts, whiteDefenderCounts));
+    return (score(board.whitePlayer(), board, pawnStructure, whiteDefenderCounts,
+                    blackDefenderCounts) -
+            score(board.blackPlayer(), board, pawnStructure, blackDefenderCounts,
+                    whiteDefenderCounts));
+  }
+
+  /**
+   * Returns the pawn structure scores of both players, from the cache when it holds them for
+   * these pawns and otherwise computed and stored.
+   *
+   * @param board The current state of the chess board.
+   * @return The pawn structure scores of both players.
+   */
+  private PawnStructureCache.Entry pawnStructureScores(final Board board) {
+    final long whitePawnOccupancy = pawnOccupancy(board.whitePlayer());
+    final long blackPawnOccupancy = pawnOccupancy(board.blackPlayer());
+    final PawnStructureCache.Entry cached =
+            PAWN_STRUCTURE_CACHE.probe(whitePawnOccupancy, blackPawnOccupancy);
+
+    if (cached != null) {
+      return cached;
+    }
+
+    final PawnStructureCache.Entry computed = new PawnStructureCache.Entry(
+            whitePawnOccupancy, blackPawnOccupancy,
+            pawnStructureScore(board.whitePlayer(), board),
+            pawnStructureScore(board.blackPlayer(), board));
+    PAWN_STRUCTURE_CACHE.store(computed);
+    return computed;
   }
 
   /**
@@ -67,6 +98,7 @@ public class OpeningGameEvaluator implements BoardEvaluator {
    *
    * @param player The player for whom the board position is being evaluated.
    * @param board The current state of the chess board.
+   * @param pawnStructure The pawn structure scores of both players.
    * @param defenderCounts The per-square defender counts for the player's pieces.
    * @param opponentDefenderCounts The per-square defender counts for the opponent's pieces.
    * @return The evaluation score from the perspective of the specified player.
@@ -74,13 +106,14 @@ public class OpeningGameEvaluator implements BoardEvaluator {
   @VisibleForTesting
   private double score(final Player player,
                        final Board board,
+                       final PawnStructureCache.Entry pawnStructure,
                        final int[] defenderCounts,
                        final int[] opponentDefenderCounts) {
     return materialScore(player.getActivePieces()) +
             developmentScore(player, board) +
             centerControlScore(player, board) +
             kingSafetyScore(player, board) +
-            pawnStructureScore(player, board) +
+            pawnStructure.scoreOf(player.getAlliance()) +
             mobilityScore(player, board) +
             pieceCoordinationScore(player, board, defenderCounts) +
             tempoScore(player, opponentDefenderCounts) +
@@ -893,5 +926,23 @@ public class OpeningGameEvaluator implements BoardEvaluator {
     return player.getActivePieces().stream()
             .filter(piece -> piece.getPieceType() == Piece.PieceType.PAWN)
             .collect(Collectors.toList());
+  }
+
+  /**
+   * Returns the tiles held by the given player's pawns, as one bit per tile.
+   *
+   * @param player The player whose pawns are read.
+   * @return That player's pawn occupancy.
+   */
+  private static long pawnOccupancy(final Player player) {
+    long occupancy = 0L;
+
+    for (final Piece piece : player.getActivePieces()) {
+      if (piece.getPieceType() == Piece.PieceType.PAWN) {
+        occupancy |= 1L << piece.getPiecePosition();
+      }
+    }
+
+    return occupancy;
   }
 }
