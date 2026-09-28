@@ -121,7 +121,7 @@ so it always exits zero. The checksum is what makes a behaviour-preserving evalu
 checkable, and the allocation figure is where evaluator cost actually shows, since the evaluator is a
 small fraction of tactical suite runtime.
 
-**OpeningBook** verifies the 971-line book at `book/openings.txt`, or a book at a given path. A line
+**OpeningBook** verifies the 33,398-line book at `book/openings.txt`, or a book at a given path. A line
 holds the moves of one opening in long algebraic notation, its ECO code, and its name, separated by
 tabs.
 
