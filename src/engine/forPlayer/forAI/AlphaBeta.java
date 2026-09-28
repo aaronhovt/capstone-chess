@@ -140,6 +140,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** The depth threshold for applying futility pruning. */
   private static final int FUTILITY_PRUNING_DEPTH = 3;
 
+  /** The greatest remaining depth at which quiet moves late in the move order are pruned. */
+  private static final int LATE_MOVE_PRUNING_DEPTH = 3;
+
   /** The least remaining depth at which a null move is searched. */
   private static final int NULL_MOVE_DEPTH = 3;
 
@@ -1010,6 +1013,30 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
+   * Returns whether a legal move, already made on the board, may be skipped without a search
+   * because it is a quiet move late in the move order at a shallow node. A capture, a promotion,
+   * a checking move, and any move at a node in check are never prunable. The caller applies its
+   * own mate guard on the window.
+   *
+   * @param move The move under consideration.
+   * @param depth The remaining search depth at the node.
+   * @param movesSearched The number of legal moves already searched at the node.
+   * @param inCheckAtNode Whether the side to move at the node is in check.
+   * @param givesCheck Whether the move gives check.
+   * @return true if the move may be skipped.
+   */
+  private static boolean isLateMovePrunable(final Move move, final int depth,
+                                            final int movesSearched, final boolean inCheckAtNode,
+                                            final boolean givesCheck) {
+    return depth <= LATE_MOVE_PRUNING_DEPTH
+            && movesSearched >= 3 + depth * depth
+            && !inCheckAtNode
+            && !givesCheck
+            && !move.isAttack()
+            && !(move instanceof Move.PawnPromotion);
+  }
+
+  /**
    * Stores an entry in the transposition table unless the search has been stopped. A score
    * produced after the stop flag is raised is not the result of a completed search.
    *
@@ -1148,10 +1175,16 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         continue;
       }
 
+      final boolean givesCheck = board.currentPlayer().isInCheck();
+      if (isLateMovePrunable(move, depth, movesSearched, inCheckAtNode, givesCheck)
+              && alpha > -MATE_THRESHOLD) {
+        board.unmakeMove();
+        continue;
+      }
+
       double currentValue;
       try {
         int newDepth = depth - 1;
-        final boolean givesCheck = board.currentPlayer().isInCheck();
         // A check that evades a check is not extended, so no two consecutive plies are both
         // extended and a chain of checks by both sides loses depth.
         if (givesCheck && !inCheckAtNode) {
@@ -1216,8 +1249,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       movesSearched++;
     }
 
-    // No legal move was searched. The static exchange skip in the loop cannot fire until three
-    // legal moves have been counted, so this can only mean the position has no legal move.
+    // No legal move was searched. Neither the static exchange skip nor late move pruning in the
+    // loop can fire until three legal moves have been counted, so this can only mean the
+    // position has no legal move.
     if (movesSearched == 0) {
       return terminalScore(board, ply);
     }
@@ -1355,10 +1389,16 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         continue;
       }
 
+      final boolean givesCheck = board.currentPlayer().isInCheck();
+      if (isLateMovePrunable(move, depth, movesSearched, inCheckAtNode, givesCheck)
+              && beta < MATE_THRESHOLD) {
+        board.unmakeMove();
+        continue;
+      }
+
       double currentValue;
       try {
         int newDepth = depth - 1;
-        final boolean givesCheck = board.currentPlayer().isInCheck();
         // A check that evades a check is not extended, so no two consecutive plies are both
         // extended and a chain of checks by both sides loses depth.
         if (givesCheck && !inCheckAtNode) {
@@ -1422,8 +1462,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       movesSearched++;
     }
 
-    // No legal move was searched. The static exchange skip in the loop cannot fire until three
-    // legal moves have been counted, so this can only mean the position has no legal move.
+    // No legal move was searched. Neither the static exchange skip nor late move pruning in the
+    // loop can fire until three legal moves have been counted, so this can only mean the
+    // position has no legal move.
     if (movesSearched == 0) {
       return terminalScore(board, ply);
     }
