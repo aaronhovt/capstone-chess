@@ -1484,6 +1484,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * Implements quiescence search to handle tactical sequences involving captures
    * and checks to avoid the horizon effect in evaluation.
    * <p>
+   * The moves searched are captures and quiet promotions to a queen.
+   * <p>
    * A checkmate is scored as a mate by the evasion search this node delegates to when the side to
    * move is in check. A stalemate is not detected here and scores as the static evaluation.
    *
@@ -1559,7 +1561,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     int captureCount = 0;
     for (Move move : legalMoves) {
-      if (move.isAttack()) {
+      if (isQuiescenceMove(move)) {
         captureCount++;
       }
     }
@@ -1572,7 +1574,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     int captureIndex = 0;
     for (Move move : legalMoves) {
-      if (!move.isAttack()) {
+      if (!isQuiescenceMove(move)) {
         continue;
       }
       captures[captureIndex] = move;
@@ -1642,6 +1644,19 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     }
     storeIfSearching(zobristHash, scoreToTable(finalScore, ply), 0, nodeType, null);
     return finalScore;
+  }
+
+  /**
+   * Returns whether quiescence search searches the given move: any capture, or a promotion to a
+   * queen that captures nothing.
+   *
+   * @param move The move to test.
+   * @return True if the move is searched in quiescence search.
+   */
+  private static boolean isQuiescenceMove(final Move move) {
+    return move.isAttack() ||
+            (move instanceof Move.PawnPromotion &&
+                    move.getPromotionPiece().getPieceType() == Piece.PieceType.QUEEN);
   }
 
   /**
