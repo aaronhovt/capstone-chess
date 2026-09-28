@@ -20,6 +20,13 @@ set "MATCH_MAIN=engine.forTesting.SelfPlayMatch"
 set "ENGINE_LIBS=lib\guava-33.4.0-jre.jar lib\failureaccess-1.0.2.jar"
 set "CONT=  "
 
+rem The jar tool writes each archive to a temporary file first. Keeping temporary files under the
+rem output directory lets an antivirus exception on the repo cover them. A revision built by
+rem "build compare" that lacks these lines inherits them.
+set "TMP=%ROOT%%OUT%\tmp"
+set "TEMP=%TMP%"
+if not exist "%TMP%" mkdir "%TMP%"
+
 set "JDK_BIN="
 if defined JAVA_HOME if exist "%JAVA_HOME%\bin\jar.exe" set "JDK_BIN=%JAVA_HOME%\bin\"
 if not defined JDK_BIN (
