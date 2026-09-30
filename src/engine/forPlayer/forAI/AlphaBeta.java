@@ -959,6 +959,23 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
+   * Returns the index within the given list of the move whose code, as given by
+   * {@link TranspositionTable#moveCode}, is the given code.
+   *
+   * @param moves The moves to search, none of them the null move.
+   * @param moveCode The code of the move to find.
+   * @return The index of that move, or -1 if the list holds no move with that code.
+   */
+  private static int indexOfMoveCode(final List<Move> moves, final short moveCode) {
+    for (int i = 0; i < moves.size(); i++) {
+      if (TranspositionTable.moveCode(moves.get(i)) == moveCode) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
    * Scores a position in which the side to move has no legal moves. A checkmate scores
    * {@link #MATE_VALUE} against the mated side, reduced by the ply at which it occurs so that
    * shorter mates outrank longer ones, and a stalemate scores as a draw.
@@ -1138,12 +1155,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    Move ttMove = entry != null ? entry.move : null;
-    if (ttMove == null && depth >= 4 && openWindow) {
+    short ttMoveCode = entry != null ? entry.moveCode : TranspositionTable.NO_MOVE;
+    if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= 4 && openWindow) {
       max(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
       entry = transpositionTable.get(zobristHash);
       if (entry != null) {
-        ttMove = entry.move;
+        ttMoveCode = entry.moveCode;
       }
     }
 
@@ -1158,8 +1175,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
     final int[] exchangeScores = sortedExchangeScores.get()[ply];
 
-    if (ttMove != null) {
-      moveToFront(sortedMoves, exchangeScores, sortedMoves.indexOf(ttMove));
+    if (ttMoveCode != TranspositionTable.NO_MOVE) {
+      moveToFront(sortedMoves, exchangeScores, indexOfMoveCode(sortedMoves, ttMoveCode));
     }
 
     for (int moveIndex = 0; moveIndex < sortedMoves.size(); moveIndex++) {
@@ -1352,12 +1369,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    Move ttMove = entry != null ? entry.move : null;
-    if (ttMove == null && depth >= 4 && openWindow) {
+    short ttMoveCode = entry != null ? entry.moveCode : TranspositionTable.NO_MOVE;
+    if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= 4 && openWindow) {
       min(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
       entry = transpositionTable.get(zobristHash);
       if (entry != null) {
-        ttMove = entry.move;
+        ttMoveCode = entry.moveCode;
       }
     }
 
@@ -1372,8 +1389,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
     final int[] exchangeScores = sortedExchangeScores.get()[ply];
 
-    if (ttMove != null) {
-      moveToFront(sortedMoves, exchangeScores, sortedMoves.indexOf(ttMove));
+    if (ttMoveCode != TranspositionTable.NO_MOVE) {
+      moveToFront(sortedMoves, exchangeScores, indexOfMoveCode(sortedMoves, ttMoveCode));
     }
 
     for (int moveIndex = 0; moveIndex < sortedMoves.size(); moveIndex++) {
@@ -1797,8 +1814,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     private final byte[] nodeTypes;
     /** The age held in each slot. */
     private final byte[] ages;
-    /** The best move held in each slot, or null if none was recorded. */
-    private final Move[] moves;
+    /**
+     * The code of the best move held in each slot, as given by
+     * {@link TranspositionTable#moveCode}, or {@link TranspositionTable#NO_MOVE} if none was
+     * recorded.
+     */
+    private final short[] moveCodes;
     /** The bit mask for indexing into the hash table. */
     private final int mask;
     /** The current age counter for entry replacement decisions. */
@@ -1823,7 +1844,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       depths = new short[size];
       nodeTypes = new byte[size];
       ages = new byte[size];
-      moves = new Move[size];
+      moveCodes = new short[size];
       mask = size - 1;
       currentAge = 0;
 
@@ -1896,7 +1917,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       entry.depth = depths[slot];
       entry.nodeType = nodeTypes[slot];
       entry.age = ages[slot];
-      entry.move = moves[slot];
+      entry.moveCode = moveCodes[slot];
       return entry;
     }
 
@@ -1913,6 +1934,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      */
     public void store(long zobristHash, double score, int depth, byte nodeType, Move bestMove) {
       int index = (int) (zobristHash & mask) & ~1;
+      final short moveCode = bestMove == null
+              ? TranspositionTable.NO_MOVE : TranspositionTable.moveCode(bestMove);
 
       ReadWriteLock lock = getLock(zobristHash);
       lock.writeLock().lock();
@@ -1930,7 +1953,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         depths[target] = (short) depth;
         nodeTypes[target] = nodeType;
         ages[target] = currentAge;
-        moves[target] = bestMove;
+        moveCodes[target] = moveCode;
       } finally {
         lock.writeLock().unlock();
       }

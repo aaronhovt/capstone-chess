@@ -1,6 +1,7 @@
 package engine.forPlayer.forAI;
 
 import engine.forBoard.Move;
+import engine.forPiece.Piece;
 
 /**
  * The TranspositionTable class provides a hash table implementation for storing previously evaluated
@@ -24,7 +25,7 @@ public class TranspositionTable {
   /**
    * The Entry class holds the values of one transposition table slot, as returned by a probe.
    * Each entry carries the position hash, evaluation score, search depth, node classification,
-   * best move, and age of the slot it was read from. Changing an entry does not change the table.
+   * best move code, and age of the slot it was read from. Changing an entry does not change the table.
    */
   static class Entry {
 
@@ -43,13 +44,16 @@ public class TranspositionTable {
     /** The age of this entry used for replacement policy decisions. */
     byte age;
 
-    /** The best move found for this position, or null if none was recorded. */
-    Move move;
+    /**
+     * The code of the best move found for this position, as given by {@link #moveCode}, or
+     * {@link #NO_MOVE} if none was recorded.
+     */
+    short moveCode;
 
     /**
      * Constructs a new Entry with default values for all fields.
      * Initializes the entry with zero values for the hash key, score, depth,
-     * node type, and age, and a null move.
+     * node type, and age, and no move.
      */
     Entry() {
       this.key = 0L;
@@ -57,8 +61,24 @@ public class TranspositionTable {
       this.depth = 0;
       this.nodeType = 0;
       this.age = 0;
-      this.move = null;
+      this.moveCode = NO_MOVE;
     }
+  }
+
+  /** The move code of an entry that holds no best move. */
+  static final short NO_MOVE = 0;
+
+  /**
+   * Returns the code under which the table records the given move. Two moves of a position have
+   * the same code exactly when they are equal, and no move has the code {@link #NO_MOVE}.
+   *
+   * @param move The move to encode, not null and not the null move.
+   * @return The move's code.
+   */
+  static short moveCode(final Move move) {
+    final Piece promotion = move.getPromotionPiece();
+    return (short) (move.getCurrentCoordinate() << 9 | move.getDestinationCoordinate() << 3
+            | (promotion == null ? 0 : promotion.getPieceType().ordinal() + 1));
   }
 
   /** Node type constant indicating an exact evaluation score within the alpha-beta window. */
