@@ -15,8 +15,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static engine.forBoard.Move.MoveFactory;
 
@@ -64,7 +62,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   private final ExecutorService searchThreadPool;
 
   /** Thread-safe transposition table for storing previously evaluated positions. */
-  private final StripedTranspositionTable transpositionTable;
+  private final LocklessTranspositionTable transpositionTable;
 
   /** Cache of board evaluations belonging to this engine, cleared at the start of each search. */
   private final EvaluationCache evaluationCache = new EvaluationCache();
@@ -458,7 +456,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     this.maxDepth = maxDepth;
     this.threadCount = threadCount;
     this.searchThreadPool = Executors.newFixedThreadPool(Math.max(1, threadCount - 1));
-    this.transpositionTable = new StripedTranspositionTable(tableSizeMB);
+    this.transpositionTable = new LocklessTranspositionTable(tableSizeMB);
 
     for (int i = 0; i < 64; i++) {
       for (int j = 0; j < 64; j++) {
@@ -1800,71 +1798,139 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * The StripedTranspositionTable class implements a thread-safe transposition table
-   * using striped locking to reduce contention in parallel search operations.
+   * The LocklessTranspositionTable class implements a transposition table that every search
+   * thread probes and stores into without locking. Each slot is three consecutive words of one
+   * array: a check word, the bits of the score, and a data word packing the depth, node type, age
+   * and move code. The check word is the key combined by exclusive or with the other two words, so
+   * a probe accepts a slot only when all three words were written by the same store. A slot left
+   * mixed by two threads storing into it at once reads as a miss. Two threads storing the same key
+   * at once can leave that key in both slots of its bucket, and a probe then finds the first.
    */
-  private static class StripedTranspositionTable {
-    /** The Zobrist hash key held in each slot, zero for an empty slot. */
-    private final long[] keys;
-    /** The evaluation score held in each slot. */
-    private final double[] scores;
-    /** The search depth held in each slot. */
-    private final short[] depths;
-    /** The node type held in each slot. */
-    private final byte[] nodeTypes;
-    /** The age held in each slot. */
-    private final byte[] ages;
-    /**
-     * The code of the best move held in each slot, as given by
-     * {@link TranspositionTable#moveCode}, or {@link TranspositionTable#NO_MOVE} if none was
-     * recorded.
-     */
-    private final short[] moveCodes;
+  private static class LocklessTranspositionTable {
+    /** The number of words each slot occupies. */
+    private static final int WORDS_PER_SLOT = 3;
+    /** The offset within a slot of the key combined with the slot's other two words. */
+    private static final int CHECK = 0;
+    /** The offset within a slot of the raw bits of the score. */
+    private static final int SCORE = 1;
+    /** The offset within a slot of the packed depth, node type, age and move code. */
+    private static final int DATA = 2;
+
+    /** The words of every slot, all zero for an empty slot. */
+    private final long[] words;
     /** The bit mask for indexing into the hash table. */
     private final int mask;
     /** The current age counter for entry replacement decisions. */
     private volatile byte currentAge;
-    /** Array of read-write locks for striped locking. */
-    private final ReadWriteLock[] locks;
-    /** The number of locks used for striped locking. */
-    private static final int LOCK_COUNT = 1024;
 
     /**
-     * Constructs a new striped transposition table with the specified size.
+     * Constructs a new transposition table with the specified size.
      *
      * @param sizeMB The size of the transposition table in megabytes.
      */
-    public StripedTranspositionTable(int sizeMB) {
+    public LocklessTranspositionTable(int sizeMB) {
       long bytes = (long) sizeMB * 1024 * 1024;
       int entryCount = (int) (bytes / 24);
       int size = Integer.highestOneBit(entryCount);
 
-      keys = new long[size];
-      scores = new double[size];
-      depths = new short[size];
-      nodeTypes = new byte[size];
-      ages = new byte[size];
-      moveCodes = new short[size];
+      words = new long[size * WORDS_PER_SLOT];
       mask = size - 1;
       currentAge = 0;
-
-      locks = new ReentrantReadWriteLock[LOCK_COUNT];
-      for (int i = 0; i < LOCK_COUNT; i++) {
-        locks[i] = new ReentrantReadWriteLock();
-      }
 
       System.out.println("Transposition Table created with " + size +
               " entries (" + (size * 24 / (1024 * 1024)) + " MB)");
     }
 
     /**
-     * Gets the appropriate lock for the given hash value using striped locking.
+     * Returns the data word holding the given values.
      *
-     * @param hash The hash value to determine the lock.
-     * @return The read-write lock for the hash value.
+     * @param depth The search depth, of which only the low 16 bits are kept.
+     * @param nodeType The node type.
+     * @param age The age.
+     * @param moveCode The move code.
+     * @return The packed data word.
      */
-    private ReadWriteLock getLock(long hash) {
-      return locks[(int) ((hash & mask) >>> 1) & (LOCK_COUNT - 1)];
+    private static long pack(final int depth, final byte nodeType, final byte age,
+                             final short moveCode) {
+      return (depth & 0xFFFFL) | (nodeType & 0xFFL) << 16 | (age & 0xFFL) << 24
+              | (moveCode & 0xFFFFL) << 32;
+    }
+
+    /**
+     * Returns the depth held in a data word.
+     *
+     * @param data The data word.
+     * @return The depth.
+     */
+    private static short depthOf(final long data) {
+      return (short) data;
+    }
+
+    /**
+     * Returns the node type held in a data word.
+     *
+     * @param data The data word.
+     * @return The node type.
+     */
+    private static byte nodeTypeOf(final long data) {
+      return (byte) (data >>> 16);
+    }
+
+    /**
+     * Returns the age held in a data word.
+     *
+     * @param data The data word.
+     * @return The age.
+     */
+    private static byte ageOf(final long data) {
+      return (byte) (data >>> 24);
+    }
+
+    /**
+     * Returns the move code held in a data word.
+     *
+     * @param data The data word.
+     * @return The move code.
+     */
+    private static short moveCodeOf(final long data) {
+      return (short) (data >>> 32);
+    }
+
+    /**
+     * Returns the key held in the given slot, zero for an empty slot. The key of a slot another
+     * thread is writing can be any value.
+     *
+     * @param slot The index of the slot.
+     * @return The slot's key.
+     */
+    private long keyAt(final int slot) {
+      final int base = slot * WORDS_PER_SLOT;
+      return words[base + CHECK] ^ words[base + SCORE] ^ words[base + DATA];
+    }
+
+    /**
+     * Returns the data word of the given slot.
+     *
+     * @param slot The index of the slot.
+     * @return The slot's data word.
+     */
+    private long dataAt(final int slot) {
+      return words[slot * WORDS_PER_SLOT + DATA];
+    }
+
+    /**
+     * Writes the given key, score bits and data word into the given slot.
+     *
+     * @param slot The index of the slot.
+     * @param key The Zobrist hash of the position.
+     * @param scoreBits The raw bits of the score.
+     * @param data The packed data word.
+     */
+    private void write(final int slot, final long key, final long scoreBits, final long data) {
+      final int base = slot * WORDS_PER_SLOT;
+      words[base + CHECK] = key ^ scoreBits ^ data;
+      words[base + SCORE] = scoreBits;
+      words[base + DATA] = data;
     }
 
     /**
@@ -1886,38 +1952,32 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     public TranspositionTable.Entry get(long zobristHash) {
       int index = (int) (zobristHash & mask) & ~1;
 
-      ReadWriteLock lock = getLock(zobristHash);
-      lock.readLock().lock();
-      try {
-        if (keys[index] == zobristHash && keys[index] != 0) {
-          return entryAt(index);
-        }
-
-        if (keys[index + 1] == zobristHash && keys[index + 1] != 0) {
-          return entryAt(index + 1);
-        }
-
-        return null;
-      } finally {
-        lock.readLock().unlock();
-      }
+      final TranspositionTable.Entry entry = entryAt(index, zobristHash);
+      return entry != null ? entry : entryAt(index + 1, zobristHash);
     }
 
     /**
-     * Returns a new entry holding the values of the given slot. The caller must hold the slot's
-     * lock.
+     * Returns a new entry holding the values of the given slot if the slot holds the given key.
      *
      * @param slot The index of the slot to read.
-     * @return A new entry holding the slot's values.
+     * @param zobristHash The Zobrist hash of the board position.
+     * @return A new entry holding the slot's values, or null if the slot does not hold the key
+     *         or the key is zero.
      */
-    private TranspositionTable.Entry entryAt(final int slot) {
+    private TranspositionTable.Entry entryAt(final int slot, final long zobristHash) {
+      final int base = slot * WORDS_PER_SLOT;
+      final long scoreBits = words[base + SCORE];
+      final long data = words[base + DATA];
+      if ((words[base + CHECK] ^ scoreBits ^ data) != zobristHash || zobristHash == 0) {
+        return null;
+      }
       TranspositionTable.Entry entry = new TranspositionTable.Entry();
-      entry.key = keys[slot];
-      entry.score = scores[slot];
-      entry.depth = depths[slot];
-      entry.nodeType = nodeTypes[slot];
-      entry.age = ages[slot];
-      entry.moveCode = moveCodes[slot];
+      entry.key = zobristHash;
+      entry.score = Double.longBitsToDouble(scoreBits);
+      entry.depth = depthOf(data);
+      entry.nodeType = nodeTypeOf(data);
+      entry.age = ageOf(data);
+      entry.moveCode = moveCodeOf(data);
       return entry;
     }
 
@@ -1937,34 +1997,28 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       final short moveCode = bestMove == null
               ? TranspositionTable.NO_MOVE : TranspositionTable.moveCode(bestMove);
 
-      ReadWriteLock lock = getLock(zobristHash);
-      lock.writeLock().lock();
-      try {
-        int target = replacementSlot(index, zobristHash);
+      final byte age = currentAge;
+      final int target = replacementSlot(index, zobristHash);
 
-        if (keys[target] == zobristHash && depths[target] > depth
-                && nodeType != TranspositionTable.EXACT) {
-          ages[target] = currentAge;
-          return;
-        }
-
-        keys[target] = zobristHash;
-        scores[target] = score;
-        depths[target] = (short) depth;
-        nodeTypes[target] = nodeType;
-        ages[target] = currentAge;
-        moveCodes[target] = moveCode;
-      } finally {
-        lock.writeLock().unlock();
+      final int base = target * WORDS_PER_SLOT;
+      final long heldScoreBits = words[base + SCORE];
+      final long heldData = words[base + DATA];
+      if ((words[base + CHECK] ^ heldScoreBits ^ heldData) == zobristHash
+              && depthOf(heldData) > depth && nodeType != TranspositionTable.EXACT) {
+        write(target, zobristHash, heldScoreBits,
+                pack(depthOf(heldData), nodeTypeOf(heldData), age, moveCodeOf(heldData)));
+        return;
       }
+
+      write(target, zobristHash, Double.doubleToRawLongBits(score),
+              pack(depth, nodeType, age, moveCode));
     }
 
     /**
      * Determines which slot of a bucket a store should be written to. A slot already holding the
      * key is taken over any other, so a key occupies at most one slot of its bucket. Otherwise an
      * empty slot is taken, then a slot left by an earlier search, then the shallower slot, an
-     * exact entry being kept over a bound of the same depth. The caller must hold the bucket's
-     * lock.
+     * exact entry being kept over a bound of the same depth.
      *
      * @param first The index of the bucket's first slot; the second slot follows it.
      * @param key The Zobrist hash of the new entry.
@@ -1972,23 +2026,30 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      */
     private int replacementSlot(final int first, final long key) {
       final int second = first + 1;
-      if (keys[first] == key) return first;
-      if (keys[second] == key) return second;
-      if (keys[first] == 0) return first;
-      if (keys[second] == 0) return second;
+      final long firstKey = keyAt(first);
+      final long secondKey = keyAt(second);
+      if (firstKey == key) return first;
+      if (secondKey == key) return second;
+      if (firstKey == 0) return first;
+      if (secondKey == 0) return second;
 
-      final boolean firstIsStale = ages[first] != currentAge;
-      final boolean secondIsStale = ages[second] != currentAge;
+      final long firstData = dataAt(first);
+      final long secondData = dataAt(second);
+      final byte age = currentAge;
+      final boolean firstIsStale = ageOf(firstData) != age;
+      final boolean secondIsStale = ageOf(secondData) != age;
       if (firstIsStale != secondIsStale) {
         return firstIsStale ? first : second;
       }
 
-      if (depths[first] != depths[second]) {
-        return depths[first] < depths[second] ? first : second;
+      final short firstDepth = depthOf(firstData);
+      final short secondDepth = depthOf(secondData);
+      if (firstDepth != secondDepth) {
+        return firstDepth < secondDepth ? first : second;
       }
 
-      final boolean firstIsExact = nodeTypes[first] == TranspositionTable.EXACT;
-      final boolean secondIsExact = nodeTypes[second] == TranspositionTable.EXACT;
+      final boolean firstIsExact = nodeTypeOf(firstData) == TranspositionTable.EXACT;
+      final boolean secondIsExact = nodeTypeOf(secondData) == TranspositionTable.EXACT;
       if (firstIsExact != secondIsExact) {
         return firstIsExact ? second : first;
       }
