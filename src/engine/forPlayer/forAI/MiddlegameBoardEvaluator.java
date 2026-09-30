@@ -92,6 +92,18 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final long LIGHT_TILES = 0xAA55AA55AA55AA55L;
 
   /**
+   * The value of both players' knights, bishops, rooks and queens combined at and above which the
+   * king safety, space control and attacking potential terms count in full.
+   */
+  private static final int KING_TERMS_FULL_MATERIAL = 5000;
+
+  /**
+   * The value of both players' knights, bishops, rooks and queens combined at and below which the
+   * king safety, space control and attacking potential terms count for nothing.
+   */
+  private static final int KING_TERMS_ZERO_MATERIAL = 3000;
+
+  /**
    * The scores of both players' pawn structure terms that read nothing but pawns, keyed by the
    * tiles their pawns occupy.
    */
@@ -130,11 +142,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final PieceLayout blackLayout = pieceLayout(board.blackPlayer());
     final PawnStructureCache.Entry pawnStructureScores =
             pawnStructureScores(whitePawns, blackPawns);
+    final double kingWeight = kingTermWeight(whiteLayout, blackLayout);
 
     return (score(board.whitePlayer(), board, whiteStatistics, blackStatistics,
-                    whitePawns, blackPawns, pawnStructureScores, whiteLayout, blackLayout) -
+                    whitePawns, blackPawns, pawnStructureScores, whiteLayout, blackLayout,
+                    kingWeight) -
             score(board.blackPlayer(), board, blackStatistics, whiteStatistics,
-                    blackPawns, whitePawns, pawnStructureScores, blackLayout, whiteLayout));
+                    blackPawns, whitePawns, pawnStructureScores, blackLayout, whiteLayout,
+                    kingWeight));
   }
 
   /**
@@ -465,6 +480,43 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
+   * Returns the weight applied to the king safety, space control and attacking potential terms of
+   * both players. The weight is one when both players' knights, bishops, rooks and queens are
+   * worth {@link #KING_TERMS_FULL_MATERIAL} or more combined, zero when they are worth
+   * {@link #KING_TERMS_ZERO_MATERIAL} or less, and linear in that value between the two.
+   *
+   * @param whiteLayout The layout of white's pieces.
+   * @param blackLayout The layout of black's pieces.
+   * @return The weight of the king safety, space control and attacking potential terms, from zero
+   *         to one.
+   */
+  private static double kingTermWeight(final PieceLayout whiteLayout,
+                                       final PieceLayout blackLayout) {
+    final int material = nonPawnMaterial(whiteLayout) + nonPawnMaterial(blackLayout);
+    if (material >= KING_TERMS_FULL_MATERIAL) {
+      return 1.0;
+    }
+    if (material <= KING_TERMS_ZERO_MATERIAL) {
+      return 0.0;
+    }
+    return (double) (material - KING_TERMS_ZERO_MATERIAL) /
+            (KING_TERMS_FULL_MATERIAL - KING_TERMS_ZERO_MATERIAL);
+  }
+
+  /**
+   * Returns the combined value of the knights, bishops, rooks and queens in the given layout.
+   *
+   * @param layout The layout of one player's pieces.
+   * @return The value of that player's knights, bishops, rooks and queens.
+   */
+  private static int nonPawnMaterial(final PieceLayout layout) {
+    return Long.bitCount(layout.knights()) * Piece.PieceType.KNIGHT.getPieceValue() +
+            Long.bitCount(layout.bishops()) * Piece.PieceType.BISHOP.getPieceValue() +
+            Long.bitCount(layout.rooks()) * Piece.PieceType.ROOK.getPieceValue() +
+            Long.bitCount(layout.queens()) * Piece.PieceType.QUEEN.getPieceValue();
+  }
+
+  /**
    * Calculates the overall score of the current board position for a given player
    * using modern chess engine evaluation principles tuned for middlegame positions.
    *
@@ -477,6 +529,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param pawnStructureScores The pawns-only pawn structure scores of both players.
    * @param playerLayout The layout of the player's pieces.
    * @param opponentLayout The layout of the opponent's pieces.
+   * @param kingWeight The weight applied to the king safety, space control and attacking
+   *                   potential terms, from {@link #kingTermWeight}.
    * @return The evaluation score of the board from the perspective of the specified player.
    */
   @VisibleForTesting
@@ -487,16 +541,18 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
                        final PawnStructure opponentPawns,
                        final PawnStructureCache.Entry pawnStructureScores,
                        final PieceLayout playerLayout,
-                       final PieceLayout opponentLayout) {
+                       final PieceLayout opponentLayout,
+                       final double kingWeight) {
     return materialEvaluation(playerLayout) +
             mobilityEvaluation(playerStatistics) +
-            kingSafetyEvaluation(player, playerPawns, opponentStatistics, opponentLayout) +
+            kingWeight * kingSafetyEvaluation(player, playerPawns, opponentStatistics,
+                    opponentLayout) +
             pawnStructureEvaluation(player, board, playerPawns, opponentPawns,
                     pawnStructureScores) +
             pieceCoordinationEvaluation(player, board, opponentStatistics,
                     playerPawns, opponentPawns, playerLayout) +
-            spaceControlEvaluation(playerStatistics, opponentStatistics) +
-            attackingPotentialEvaluation(player, playerStatistics, opponentLayout) +
+            kingWeight * spaceControlEvaluation(playerStatistics, opponentStatistics) +
+            kingWeight * attackingPotentialEvaluation(player, playerStatistics, opponentLayout) +
             specialPatternsEvaluation(player, board, playerPawns, opponentPawns, playerLayout);
   }
 
