@@ -766,8 +766,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /**
    * Searches the root with a narrow window centered on the score of the previous iteration. A
    * search whose score reaches or passes a bound is discarded and repeated with that bound moved
-   * out and the window doubled, until the score lands strictly inside the window or the window
-   * and full window is used. A checkmate score from the previous iteration is never narrowed.
+   * to infinity. If the repeated search fails on the other bound, the root is searched again with
+   * a full window. A checkmate score from the previous iteration is never narrowed.
    *
    * @param board The board this search thread owns, in the root position.
    * @param depth The current search depth.
