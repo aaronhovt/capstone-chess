@@ -21,7 +21,8 @@ import java.util.Arrays;
  * carries no chess logic beyond resolving notation into a move and back.
  * <p>
  * Only the commands a self play match needs are implemented: uci, isready, setoption for the Hash
- * and Threads options, ucinewgame, position, go with a node, move time or depth limit, and quit.
+ * and Threads options, ucinewgame, position, go with a node, move time, depth or clock limit, and
+ * quit.
  * Anything else is ignored, as the protocol requires. There is no stop command and no infinite
  * search, since the command loop is never reading while a search is running.
  * <p>
@@ -63,6 +64,12 @@ public class UciEngine {
 
   /** The node limit used by a go command that names no limit of its own. */
   private static final long DEFAULT_NODE_LIMIT = 100_000;
+
+  /** The moves a clock is divided over when the go command names no movestogo. */
+  private static final int DEFAULT_MOVES_TO_GO = 30;
+
+  /** The milliseconds of the remaining clock a search never plans to spend. */
+  private static final long CLOCK_SAFETY_MARGIN_MILLIS = 50;
 
   /** The long algebraic notation reported when a search returns no move. */
   private static final String NULL_MOVE_NOTATION = "0000";
@@ -240,18 +247,24 @@ public class UciEngine {
    * Searches the current position and reports the depth reached, the score, and the best move.
    * Every limit the command names holds, and the search is stopped by whichever is reached first:
    * nodes bounds the positions evaluated, movetime bounds the milliseconds spent, and depth bounds
-   * the iterations. A command naming no limit searches under the default node limit. A search that
-   * returns no move is reported as the null move with no depth or score, which is what a terminal
-   * position produces. A score holding a checkmate is reported as a distance to mate rather than
-   * in centipawns.
+   * the iterations. The clock of the side to move, wtime or btime, bounds the milliseconds spent to
+   * the share {@link #clockAllocation(long, long, int)} gives it, using that side's increment, winc
+   * or binc, and movestogo when the command names them. The other side's clock is ignored. A command
+   * naming no limit searches under the default node limit. A search that returns no move is reported
+   * as the null move with no depth or score, which is what a terminal position produces. A score
+   * holding a checkmate is reported as a distance to mate rather than in centipawns.
    *
    * @param tokens The whitespace separated tokens of the command.
    * @throws IllegalArgumentException If a limit is not a number.
    */
   private void go(final String[] tokens) {
+    final boolean white = this.board.currentPlayer().getAlliance().isWhite();
     final int nodesIndex = indexOf(tokens, "nodes");
     final int moveTimeIndex = indexOf(tokens, "movetime");
     final int depthIndex = indexOf(tokens, "depth");
+    final int clockIndex = indexOf(tokens, white ? "wtime" : "btime");
+    final int incrementIndex = indexOf(tokens, white ? "winc" : "binc");
+    final int movesToGoIndex = indexOf(tokens, "movestogo");
     long nodeLimit = AlphaBeta.UNLIMITED_NODES;
     long timeLimitMillis = AlphaBeta.UNLIMITED_TIME;
     int searchDepth = LIMIT_DEPTH;
@@ -267,6 +280,20 @@ public class UciEngine {
     if (depthIndex >= 0 && depthIndex + 1 < tokens.length) {
       searchDepth = parseNumber(tokens[depthIndex + 1], "depth");
     }
+    if (clockIndex >= 0 && clockIndex + 1 < tokens.length) {
+      final long remainingMillis = parseLimit(tokens[clockIndex + 1], tokens[clockIndex]);
+      long incrementMillis = 0;
+      if (incrementIndex >= 0 && incrementIndex + 1 < tokens.length) {
+        incrementMillis = parseLimit(tokens[incrementIndex + 1], tokens[incrementIndex]);
+      }
+      int movesToGo = DEFAULT_MOVES_TO_GO;
+      if (movesToGoIndex >= 0 && movesToGoIndex + 1 < tokens.length) {
+        movesToGo = Math.max(1, parseNumber(tokens[movesToGoIndex + 1], "movestogo"));
+      }
+      timeLimitMillis = Math.min(timeLimitMillis,
+              clockAllocation(remainingMillis, incrementMillis, movesToGo));
+      limited = true;
+    }
     if (!limited) {
       nodeLimit = DEFAULT_NODE_LIMIT;
     }
@@ -275,12 +302,28 @@ public class UciEngine {
     final String notation = notationOf(bestMove);
     if (!NULL_MOVE_NOTATION.equals(notation)) {
       final double score = engine().getLastScore();
-      final double relativeScore =
-              this.board.currentPlayer().getAlliance().isWhite() ? score : -score;
+      final double relativeScore = white ? score : -score;
       this.protocol.println("info depth " + engine().getLastDepth() + " score " +
               scoreOf(relativeScore));
     }
     this.protocol.println("bestmove " + notation);
+  }
+
+  /**
+   * Returns the milliseconds a search under a game clock may spend on this move: an even share of
+   * the remaining time over the moves left to play, plus three quarters of the increment. The
+   * result never exceeds the remaining time less {@link #CLOCK_SAFETY_MARGIN_MILLIS}, and is at
+   * least one millisecond even when the clock is empty or negative.
+   *
+   * @param remainingMillis The milliseconds left on the clock of the side to move.
+   * @param incrementMillis The milliseconds added to that clock after each move.
+   * @param movesToGo The moves left to play before the clock is next replenished, at least one.
+   * @return The time limit for this move in milliseconds.
+   */
+  private static long clockAllocation(final long remainingMillis, final long incrementMillis,
+                                      final int movesToGo) {
+    final long share = remainingMillis / movesToGo + incrementMillis * 3 / 4;
+    return Math.max(1, Math.min(share, remainingMillis - CLOCK_SAFETY_MARGIN_MILLIS));
   }
 
   /**
