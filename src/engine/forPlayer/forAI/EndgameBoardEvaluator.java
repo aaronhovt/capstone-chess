@@ -25,8 +25,229 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** Singleton instance of the EndgameBoardEvaluator. */
   private static final EndgameBoardEvaluator Instance = new EndgameBoardEvaluator();
 
+  /**
+   * The weights this evaluator scores with. Each index constant below names one weight, and its
+   * description states what the weight scores.
+   */
+  private static final EvaluationWeights WEIGHTS = new EvaluationWeights();
+
+  /** The material value of a pawn. */
+  private static final int PAWN_VALUE = WEIGHTS.add("PAWN_VALUE", 100);
+
+  /** The material value of a knight. */
+  private static final int KNIGHT_VALUE = WEIGHTS.add("KNIGHT_VALUE", 310);
+
+  /** The material value of a knight with four or fewer pieces other than pawns and kings left. */
+  private static final int KNIGHT_VALUE_DEEP = WEIGHTS.add("KNIGHT_VALUE_DEEP", 290);
+
+  /** The material value of a bishop. */
+  private static final int BISHOP_VALUE = WEIGHTS.add("BISHOP_VALUE", 320);
+
+  /** The material value of a bishop with four or fewer pieces other than pawns and kings left. */
+  private static final int BISHOP_VALUE_DEEP = WEIGHTS.add("BISHOP_VALUE_DEEP", 330);
+
+  /** The material value of a rook. */
+  private static final int ROOK_VALUE = WEIGHTS.add("ROOK_VALUE", 500);
+
+  /** The material value of a rook with four or fewer pieces other than pawns and kings left. */
+  private static final int ROOK_VALUE_DEEP = WEIGHTS.add("ROOK_VALUE_DEEP", 530);
+
+  /** The material value of a queen. */
+  private static final int QUEEN_VALUE = WEIGHTS.add("QUEEN_VALUE", 900);
+
+  /** The material bonus for owning two or more bishops. */
+  private static final int TWO_BISHOPS = WEIGHTS.add("TWO_BISHOPS", 50);
+
+  /** The material penalty when neither side has enough material to force mate. */
+  private static final int INSUFFICIENT_MATERIAL = WEIGHTS.add("INSUFFICIENT_MATERIAL", 800);
+
+  /** The material bonus for a favourable combination such as queen against rook. */
+  private static final int FAVOURABLE_MATERIAL = WEIGHTS.add("FAVOURABLE_MATERIAL", 100);
+
+  /** The material penalty when the sides hold bishops on opposite colours. */
+  private static final int OPPOSITE_BISHOPS = WEIGHTS.add("OPPOSITE_BISHOPS", 50);
+
+  /** The factor of the king's closeness to the centre. */
+  private static final int KING_CENTRALITY = WEIGHTS.add("KING_CENTRALITY", 10);
+
+  /** The bonus for the opposition, kings two tiles apart on a rank or file. */
+  private static final int OPPOSITION = WEIGHTS.add("OPPOSITION", 20);
+
+  /** The bonus per own pawn within one tile of the king. */
+  private static final int KING_BESIDE_OWN_PAWN = WEIGHTS.add("KING_BESIDE_OWN_PAWN", 10);
+
+  /** The bonus per own pawn two tiles from the king. */
+  private static final int KING_NEAR_OWN_PAWN = WEIGHTS.add("KING_NEAR_OWN_PAWN", 5);
+
+  /** The bonus per opposing pawn within one tile of the king. */
+  private static final int KING_BESIDE_OPPOSING_PAWN =
+          WEIGHTS.add("KING_BESIDE_OPPOSING_PAWN", 8);
+
+  /** The bonus per opposing pawn two tiles from the king. */
+  private static final int KING_NEAR_OPPOSING_PAWN = WEIGHTS.add("KING_NEAR_OPPOSING_PAWN", 4);
+
+  /** The exposure per opposing move landing on the king's square, halved when charged. */
+  private static final int KING_SQUARE_MOVE = WEIGHTS.add("KING_SQUARE_MOVE", 30);
+
+  /** The exposure per opposing move landing beside or on the king, halved when charged. */
+  private static final int KING_ZONE_MOVE = WEIGHTS.add("KING_ZONE_MOVE", 5);
+
+  /** The exposure for being in check, halved when charged. */
+  private static final int IN_CHECK = WEIGHTS.add("IN_CHECK", 20);
+
+  /** The bonus per passed pawn per rank it has advanced. */
+  private static final int PASSED_PAWN_RANK = WEIGHTS.add("PASSED_PAWN_RANK", 20);
+
+  /** The further bonus per passed pawn within two ranks of promotion. */
+  private static final int PASSED_PAWN_NEAR_PROMOTION =
+          WEIGHTS.add("PASSED_PAWN_NEAR_PROMOTION", 50);
+
+  /** The further bonus per passed pawn three or four ranks from promotion. */
+  private static final int PASSED_PAWN_MIDWAY = WEIGHTS.add("PASSED_PAWN_MIDWAY", 30);
+
+  /** The bonus per passed pawn per tile the own king is closer than eight. */
+  private static final int PASSED_PAWN_OWN_KING = WEIGHTS.add("PASSED_PAWN_OWN_KING", 5);
+
+  /** The bonus per passed pawn per tile the opposing king is away from it. */
+  private static final int PASSED_PAWN_OPPOSING_KING =
+          WEIGHTS.add("PASSED_PAWN_OPPOSING_KING", 3);
+
+  /** The further bonus per passed pawn with no piece ahead of it on its file. */
+  private static final int PASSED_PAWN_CLEAR_PATH = WEIGHTS.add("PASSED_PAWN_CLEAR_PATH", 40);
+
+  /** The further bonus per passed pawn protected by a pawn. */
+  private static final int PASSED_PAWN_PROTECTED = WEIGHTS.add("PASSED_PAWN_PROTECTED", 25);
+
+  /** The bonus per pair of passed pawns on adjacent files. */
+  private static final int CONNECTED_PASSED_PAWNS = WEIGHTS.add("CONNECTED_PASSED_PAWNS", 80);
+
+  /** The further bonus per such pair whose more advanced pawn is within two ranks of promotion. */
+  private static final int CONNECTED_PASSED_PAWNS_ADVANCED =
+          WEIGHTS.add("CONNECTED_PASSED_PAWNS_ADVANCED", 50);
+
+  /** The penalty per pawn island beyond the first. */
+  private static final int PAWN_ISLAND = WEIGHTS.add("PAWN_ISLAND", 15);
+
+  /** The penalty per pawn on a file beyond the first. */
+  private static final int DOUBLED_PAWN = WEIGHTS.add("DOUBLED_PAWN", 25);
+
+  /** The penalty per isolated pawn. */
+  private static final int ISOLATED_PAWN = WEIGHTS.add("ISOLATED_PAWN", 20);
+
+  /** The further penalty per isolated pawn on a file with no opposing pawn. */
+  private static final int ISOLATED_PAWN_SEMI_OPEN = WEIGHTS.add("ISOLATED_PAWN_SEMI_OPEN", 10);
+
+  /** The bonus per wing on which the player has more pawns than the opponent. */
+  private static final int PAWN_MAJORITY = WEIGHTS.add("PAWN_MAJORITY", 15);
+
+  /** The further bonus per pawn of such a majority. */
+  private static final int PAWN_MAJORITY_PAWN = WEIGHTS.add("PAWN_MAJORITY_PAWN", 5);
+
+  /** The bonus per pawn protected by a pawn. */
+  private static final int PAWN_CHAIN_LINK = WEIGHTS.add("PAWN_CHAIN_LINK", 5);
+
+  /** The penalty per backward pawn. */
+  private static final int BACKWARD_PAWN = WEIGHTS.add("BACKWARD_PAWN", 15);
+
+  /** The further penalty per backward pawn on a file with no opposing pawn. */
+  private static final int BACKWARD_PAWN_SEMI_OPEN = WEIGHTS.add("BACKWARD_PAWN_SEMI_OPEN", 10);
+
+  /** The bonus for two or more bishops while any pawn remains. */
+  private static final int BISHOP_PAIR_WITH_PAWNS = WEIGHTS.add("BISHOP_PAIR_WITH_PAWNS", 50);
+
+  /** The penalty per knight with four or fewer pawns left. */
+  private static final int KNIGHT_FEW_PAWNS = WEIGHTS.add("KNIGHT_FEW_PAWNS", 10);
+
+  /** The bonus per bishop with an own pawn ahead of it on its file or beside. */
+  private static final int BISHOP_BEHIND_PAWNS = WEIGHTS.add("BISHOP_BEHIND_PAWNS", 10);
+
+  /** The bonus per bishop on one of the long diagonal squares this evaluator recognises. */
+  private static final int BISHOP_LONG_DIAGONAL = WEIGHTS.add("BISHOP_LONG_DIAGONAL", 15);
+
+  /** The factor of a knight's closeness to each own pawn within two tiles. */
+  private static final int KNIGHT_NEAR_PAWN = WEIGHTS.add("KNIGHT_NEAR_PAWN", 5);
+
+  /** The bonus per piece within one tile of an own passed pawn. */
+  private static final int PASSED_PAWN_ESCORT = WEIGHTS.add("PASSED_PAWN_ESCORT", 20);
+
+  /** The bonus per piece two tiles from an own passed pawn. */
+  private static final int PASSED_PAWN_NEAR_ESCORT = WEIGHTS.add("PASSED_PAWN_NEAR_ESCORT", 10);
+
+  /** The bonus per piece with a legal move to an own passed pawn's promotion square. */
+  private static final int PROMOTION_SQUARE_CONTROL =
+          WEIGHTS.add("PROMOTION_SQUARE_CONTROL", 15);
+
+  /** The bonus per rook on a file with no pawn. */
+  private static final int ROOK_OPEN_FILE = WEIGHTS.add("ROOK_OPEN_FILE", 30);
+
+  /** The bonus per rook on a file with only opposing pawns. */
+  private static final int ROOK_SEMI_OPEN_FILE = WEIGHTS.add("ROOK_SEMI_OPEN_FILE", 15);
+
+  /** The bonus per rook behind an own passed pawn on its file. */
+  private static final int ROOK_BEHIND_OWN_PASSER = WEIGHTS.add("ROOK_BEHIND_OWN_PASSER", 30);
+
+  /** The bonus per rook behind an opposing passed pawn on its file. */
+  private static final int ROOK_BEHIND_OPPOSING_PASSER =
+          WEIGHTS.add("ROOK_BEHIND_OPPOSING_PASSER", 20);
+
+  /** The bonus per rook on the seventh rank. */
+  private static final int ROOK_ON_SEVENTH = WEIGHTS.add("ROOK_ON_SEVENTH", 30);
+
+  /** The further bonus per such rook per opposing pawn on that rank. */
+  private static final int ROOK_ON_SEVENTH_PAWN = WEIGHTS.add("ROOK_ON_SEVENTH_PAWN", 10);
+
+  /** The bonus per pair of rooks sharing a rank, counted once per rook. */
+  private static final int ROOKS_SHARING_RANK = WEIGHTS.add("ROOKS_SHARING_RANK", 20);
+
+  /** The bonus per pair of rooks sharing a file, counted once per rook. */
+  private static final int ROOKS_SHARING_FILE = WEIGHTS.add("ROOKS_SHARING_FILE", 15);
+
+  /** The bonus per legal bishop move. */
+  private static final int BISHOP_MOBILITY = WEIGHTS.add("BISHOP_MOBILITY", 5);
+
+  /** The bonus for bishops on both colours of square. */
+  private static final int BISHOPS_ON_BOTH_COLOURS = WEIGHTS.add("BISHOPS_ON_BOTH_COLOURS", 50);
+
+  /** The bonus for a single-coloured bishop whose colour holds fewer pawns. */
+  private static final int GOOD_BISHOP_COLOUR = WEIGHTS.add("GOOD_BISHOP_COLOUR", 20);
+
+  /** The penalty for a single-coloured bishop whose colour holds more pawns. */
+  private static final int BAD_BISHOP_COLOUR = WEIGHTS.add("BAD_BISHOP_COLOUR", 15);
+
+  /** The bonus for bishop against knight with five or fewer pawns left. */
+  private static final int BISHOP_AGAINST_KNIGHT_OPEN =
+          WEIGHTS.add("BISHOP_AGAINST_KNIGHT_OPEN", 20);
+
+  /** The penalty for bishop against knight with eight or more pawns left. */
+  private static final int BISHOP_AGAINST_KNIGHT_CLOSED =
+          WEIGHTS.add("BISHOP_AGAINST_KNIGHT_CLOSED", 10);
+
+  /** The draw penalty when neither side has enough material to force mate. */
+  private static final int INSUFFICIENT_MATERIAL_DRAW =
+          WEIGHTS.add("INSUFFICIENT_MATERIAL_DRAW", 800);
+
+  /** The draw penalty for opposite coloured bishops with two or fewer pawns each. */
+  private static final int OPPOSITE_BISHOPS_DRAW = WEIGHTS.add("OPPOSITE_BISHOPS_DRAW", 200);
+
+  /** The bonus for rook and pawn against rook with the pawn on its seventh rank or beyond. */
+  private static final int ROOK_PAWN_ADVANCED = WEIGHTS.add("ROOK_PAWN_ADVANCED", 100);
+
+  /** The penalty for rook and pawn against rook with the pawn short of its seventh rank. */
+  private static final int ROOK_PAWN_BEHIND = WEIGHTS.add("ROOK_PAWN_BEHIND", 100);
+
+  /** The bonus per legal move. */
+  private static final int MOBILITY = WEIGHTS.add("MOBILITY", 4);
+
+  /** The factor applied to mobility in a pawn endgame. */
+  private static final int PAWN_ENDGAME_MOBILITY_FACTOR =
+          WEIGHTS.add("PAWN_ENDGAME_MOBILITY_FACTOR", 0.5);
+
+  /** The factor applied to mobility with opposite coloured bishops. */
+  private static final int OPPOSITE_BISHOPS_MOBILITY_FACTOR =
+          WEIGHTS.add("OPPOSITE_BISHOPS_MOBILITY_FACTOR", 1.5);
+
   /** The fraction of a threatened piece's value charged against the side that owns it. */
-  private static final double THREAT_FRACTION = 0.25;
+  private static final int THREAT_FRACTION = WEIGHTS.add("THREAT_FRACTION", 0.25);
 
   /** The number of distinct piece types. */
   private static final int PIECE_TYPE_COUNT = Piece.PieceType.values().length;
@@ -50,6 +271,15 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   public static EndgameBoardEvaluator get() {
     return Instance;
+  }
+
+  /**
+   * Returns the weights this evaluator scores with.
+   *
+   * @return The weights of this evaluator.
+   */
+  public static EvaluationWeights weights() {
+    return WEIGHTS;
   }
 
   /**
@@ -304,27 +534,30 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final PieceCounts playerPieceCounts = material.of(player);
     final PieceCounts opponentPieceCounts = material.of(player.getOpponent());
 
-    materialScore += playerPieceCounts.of(Piece.PieceType.PAWN) * 100;
-    materialScore += playerPieceCounts.of(Piece.PieceType.KNIGHT) * (isEndgame ? 290 : 310);
-    materialScore += playerPieceCounts.of(Piece.PieceType.BISHOP) * (isEndgame ? 330 : 320);
-    materialScore += playerPieceCounts.of(Piece.PieceType.ROOK) * (isEndgame ? 530 : 500);
-    materialScore += playerPieceCounts.of(Piece.PieceType.QUEEN) * 900;
+    materialScore += playerPieceCounts.of(Piece.PieceType.PAWN) * WEIGHTS.get(PAWN_VALUE);
+    materialScore += playerPieceCounts.of(Piece.PieceType.KNIGHT) *
+            WEIGHTS.get(isEndgame ? KNIGHT_VALUE_DEEP : KNIGHT_VALUE);
+    materialScore += playerPieceCounts.of(Piece.PieceType.BISHOP) *
+            WEIGHTS.get(isEndgame ? BISHOP_VALUE_DEEP : BISHOP_VALUE);
+    materialScore += playerPieceCounts.of(Piece.PieceType.ROOK) *
+            WEIGHTS.get(isEndgame ? ROOK_VALUE_DEEP : ROOK_VALUE);
+    materialScore += playerPieceCounts.of(Piece.PieceType.QUEEN) * WEIGHTS.get(QUEEN_VALUE);
     materialScore += playerPieceCounts.of(Piece.PieceType.KING) * 10000;
 
     if (playerPieceCounts.of(Piece.PieceType.BISHOP) >= 2) {
-      materialScore += 50;
+      materialScore += WEIGHTS.get(TWO_BISHOPS);
     }
 
     if (isInsufficientMaterial(playerPieceCounts, opponentPieceCounts)) {
-      materialScore -= 800;
+      materialScore -= WEIGHTS.get(INSUFFICIENT_MATERIAL);
     }
 
     if (evaluateSpecialMaterialCombinations(playerPieceCounts, opponentPieceCounts, player.getAlliance())) {
-      materialScore += 100;
+      materialScore += WEIGHTS.get(FAVOURABLE_MATERIAL);
     }
 
     if (material.oppositeColoredBishops()) {
-      materialScore -= 50;
+      materialScore -= WEIGHTS.get(OPPOSITE_BISHOPS);
     }
 
     return materialScore;
@@ -561,7 +794,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final double rankDistance = Math.abs(kingRank - 3.5);
     final double distanceFromCenter = fileDistance + rankDistance;
 
-    return (7 - distanceFromCenter) * 10;
+    return (7 - distanceFromCenter) * WEIGHTS.get(KING_CENTRALITY);
   }
 
   /**
@@ -584,7 +817,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     );
 
     if (kingDistance == 2 && ((kingFile == opponentKingFile) || (kingRank == opponentKingRank))) {
-      return 20;
+      return WEIGHTS.get(OPPOSITION);
     }
 
     return 0;
@@ -610,9 +843,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       final int distance = calculateChebyshevDistance(kingPosition, pawn.getPiecePosition());
 
       if (distance <= 1) {
-        kingPawnDefenseScore += 10;
+        kingPawnDefenseScore += WEIGHTS.get(KING_BESIDE_OWN_PAWN);
       } else if (distance == 2) {
-        kingPawnDefenseScore += 5;
+        kingPawnDefenseScore += WEIGHTS.get(KING_NEAR_OWN_PAWN);
       }
     }
 
@@ -620,9 +853,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       final int distance = calculateChebyshevDistance(kingPosition, pawn.getPiecePosition());
 
       if (distance <= 1) {
-        kingPawnDefenseScore += 8;
+        kingPawnDefenseScore += WEIGHTS.get(KING_BESIDE_OPPOSING_PAWN);
       } else if (distance == 2) {
-        kingPawnDefenseScore += 4;
+        kingPawnDefenseScore += WEIGHTS.get(KING_NEAR_OPPOSING_PAWN);
       }
     }
 
@@ -646,16 +879,16 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final int kingFile = kingPosition % 8;
     final int kingRank = kingPosition / 8;
 
-    exposureScore += destinationCount[kingPosition] * 30;
+    exposureScore += destinationCount[kingPosition] * WEIGHTS.get(KING_SQUARE_MOVE);
 
     for (int rank = Math.max(kingRank - 1, 0); rank <= Math.min(kingRank + 1, 7); rank++) {
       for (int file = Math.max(kingFile - 1, 0); file <= Math.min(kingFile + 1, 7); file++) {
-        exposureScore += destinationCount[rank * 8 + file] * 5;
+        exposureScore += destinationCount[rank * 8 + file] * WEIGHTS.get(KING_ZONE_MOVE);
       }
     }
 
     if (player.isInCheck()) {
-      exposureScore += 20;
+      exposureScore += WEIGHTS.get(IN_CHECK);
     }
 
     return exposureScore;
@@ -686,27 +919,27 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
         final int pawnPosition = pawn.getPiecePosition();
         final int pawnRank = pawnPosition / 8;
         final int rankFromPromotion = alliance.isWhite() ? pawnRank : (7 - pawnRank);
-        final int advancementScore = (7 - rankFromPromotion) * 20;
+        final double advancementScore = (7 - rankFromPromotion) * WEIGHTS.get(PASSED_PAWN_RANK);
         passedPawnScore += advancementScore;
 
         if (rankFromPromotion <= 2) {
-          passedPawnScore += 50;
+          passedPawnScore += WEIGHTS.get(PASSED_PAWN_NEAR_PROMOTION);
         } else if (rankFromPromotion <= 4) {
-          passedPawnScore += 30;
+          passedPawnScore += WEIGHTS.get(PASSED_PAWN_MIDWAY);
         }
 
         final int kingDistance = calculateChebyshevDistance(playerKing.getPiecePosition(), pawnPosition);
-        passedPawnScore += (8 - kingDistance) * 5;
+        passedPawnScore += (8 - kingDistance) * WEIGHTS.get(PASSED_PAWN_OWN_KING);
 
         final int opponentKingDistance = calculateChebyshevDistance(opponentKing.getPiecePosition(), pawnPosition);
-        passedPawnScore += opponentKingDistance * 3;
+        passedPawnScore += opponentKingDistance * WEIGHTS.get(PASSED_PAWN_OPPOSING_KING);
 
         if (isPathToPromotionClear(pawn, alliance, board)) {
-          passedPawnScore += 40;
+          passedPawnScore += WEIGHTS.get(PASSED_PAWN_CLEAR_PATH);
         }
 
         if (isPawnProtected(pawn, playerPawnOccupancy, alliance)) {
-          passedPawnScore += 25;
+          passedPawnScore += WEIGHTS.get(PASSED_PAWN_PROTECTED);
         }
       }
     }
@@ -861,7 +1094,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
         final int file2 = passedPawns.get(j).getPiecePosition() % 8;
 
         if (Math.abs(file1 - file2) == 1) {
-          connectedScore += 80;
+          connectedScore += WEIGHTS.get(CONNECTED_PASSED_PAWNS);
 
           final int rank1 = passedPawns.get(i).getPiecePosition() / 8;
           final int rank2 = passedPawns.get(j).getPiecePosition() / 8;
@@ -871,7 +1104,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
           if ((alliance.isWhite() && advancedRank <= 2) ||
                   (!alliance.isWhite() && advancedRank >= 5)) {
-            connectedScore += 50;
+            connectedScore += WEIGHTS.get(CONNECTED_PASSED_PAWNS_ADVANCED);
           }
         }
       }
@@ -935,7 +1168,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     if (islands > 1) {
-      islandScore -= (islands - 1) * 15;
+      islandScore -= (islands - 1) * WEIGHTS.get(PAWN_ISLAND);
     }
 
     return islandScore;
@@ -957,7 +1190,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     for (int count : pawnsPerFile) {
       if (count > 1) {
-        doubledPawnScore -= (count - 1) * 25;
+        doubledPawnScore -= (count - 1) * WEIGHTS.get(DOUBLED_PAWN);
       }
     }
 
@@ -989,10 +1222,10 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       }
 
       if (isIsolated) {
-        isolatedPawnScore -= 20;
+        isolatedPawnScore -= WEIGHTS.get(ISOLATED_PAWN);
 
         if (isOnSemiOpenFile(pawn, opponentPawns)) {
-          isolatedPawnScore -= 10;
+          isolatedPawnScore -= WEIGHTS.get(ISOLATED_PAWN_SEMI_OPEN);
         }
       }
     }
@@ -1053,11 +1286,13 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     if (playerKingsidePawns > opponentKingsidePawns) {
-      majorityScore += 15 + (playerKingsidePawns - opponentKingsidePawns) * 5;
+      majorityScore += WEIGHTS.get(PAWN_MAJORITY) +
+              (playerKingsidePawns - opponentKingsidePawns) * WEIGHTS.get(PAWN_MAJORITY_PAWN);
     }
 
     if (playerQueensidePawns > opponentQueensidePawns) {
-      majorityScore += 15 + (playerQueensidePawns - opponentQueensidePawns) * 5;
+      majorityScore += WEIGHTS.get(PAWN_MAJORITY) +
+              (playerQueensidePawns - opponentQueensidePawns) * WEIGHTS.get(PAWN_MAJORITY_PAWN);
     }
 
     return majorityScore;
@@ -1083,7 +1318,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       }
     }
 
-    pawnChainScore += chainLinks * 5;
+    pawnChainScore += chainLinks * WEIGHTS.get(PAWN_CHAIN_LINK);
 
     return pawnChainScore;
   }
@@ -1121,10 +1356,10 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     for (final Piece pawn : playerPawns) {
       if (isBackward(alliance, pawn, rearmostRankOnFile, fileHasPawn)) {
-        backwardPawnScore -= 15;
+        backwardPawnScore -= WEIGHTS.get(BACKWARD_PAWN);
 
         if (isOnSemiOpenFile(pawn, opponentPawns)) {
-          backwardPawnScore -= 10;
+          backwardPawnScore -= WEIGHTS.get(BACKWARD_PAWN_SEMI_OPEN);
         }
       }
     }
@@ -1205,12 +1440,13 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
     if (!pawns.white().isEmpty() || !pawns.black().isEmpty()) {
       if (playerPieceCounts.of(Piece.PieceType.BISHOP) >= 2) {
-        minorPieceScore += 50;
+        minorPieceScore += WEIGHTS.get(BISHOP_PAIR_WITH_PAWNS);
       }
     }
 
     if (pawns.white().size() + pawns.black().size() <= 4) {
-      minorPieceScore -= playerPieceCounts.of(Piece.PieceType.KNIGHT) * 10;
+      minorPieceScore -= playerPieceCounts.of(Piece.PieceType.KNIGHT) *
+              WEIGHTS.get(KNIGHT_FEW_PAWNS);
     }
 
     return minorPieceScore;
@@ -1268,11 +1504,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     if (pawnsInFront > 0) {
-      bishopScore += 10;
+      bishopScore += WEIGHTS.get(BISHOP_BEHIND_PAWNS);
     }
 
     if ((bishopPosition % 9 == 0) || (bishopPosition % 7 == 0 && bishopPosition % 8 != 0 && bishopPosition % 8 != 7)) {
-      bishopScore += 15;
+      bishopScore += WEIGHTS.get(BISHOP_LONG_DIAGONAL);
     }
 
     return bishopScore;
@@ -1294,7 +1530,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       final int distance = calculateChebyshevDistance(knightPosition, pawn.getPiecePosition());
 
       if (distance <= 2) {
-        knightScore += (3 - distance) * 5;
+        knightScore += (3 - distance) * WEIGHTS.get(KNIGHT_NEAR_PAWN);
       }
     }
 
@@ -1333,13 +1569,13 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
             final int distance = calculateChebyshevDistance(piecePosition, pawnPosition);
 
             if (distance <= 1) {
-              supportScore += 20;
+              supportScore += WEIGHTS.get(PASSED_PAWN_ESCORT);
             } else if (distance == 2) {
-              supportScore += 10;
+              supportScore += WEIGHTS.get(PASSED_PAWN_NEAR_ESCORT);
             }
 
             if (((piece.legalDestinations(board) >>> promotionSquare) & 1L) != 0L) {
-              supportScore += 15;
+              supportScore += WEIGHTS.get(PROMOTION_SQUARE_CONTROL);
             }
           }
         }
@@ -1415,9 +1651,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     if (openFile) {
-      fileScore += 30;
+      fileScore += WEIGHTS.get(ROOK_OPEN_FILE);
     } else if (semiOpenFile) {
-      fileScore += 15;
+      fileScore += WEIGHTS.get(ROOK_SEMI_OPEN_FILE);
     }
 
     return fileScore;
@@ -1453,7 +1689,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
         if ((alliance.isWhite() && rookRank > pawnRank) ||
                 (!alliance.isWhite() && rookRank < pawnRank)) {
-          behindPawnScore += 30;
+          behindPawnScore += WEIGHTS.get(ROOK_BEHIND_OWN_PASSER);
         }
       }
     }
@@ -1465,7 +1701,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
         if ((alliance.isWhite() && rookRank > pawnRank) ||
                 (!alliance.isWhite() && rookRank < pawnRank)) {
-          behindPawnScore += 20;
+          behindPawnScore += WEIGHTS.get(ROOK_BEHIND_OPPOSING_PASSER);
         }
       }
     }
@@ -1489,12 +1725,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final int rookRank = rook.getPiecePosition() / 8;
 
     if ((alliance.isWhite() && rookRank == 1) || (!alliance.isWhite() && rookRank == 6)) {
-      seventhRankScore += 30;
+      seventhRankScore += WEIGHTS.get(ROOK_ON_SEVENTH);
 
       for (final Piece pawn : opponentPawns) {
         final int pawnRank = pawn.getPiecePosition() / 8;
         if ((alliance.isWhite() && pawnRank == 1) || (!alliance.isWhite() && pawnRank == 6)) {
-          seventhRankScore += 10;
+          seventhRankScore += WEIGHTS.get(ROOK_ON_SEVENTH_PAWN);
         }
       }
     }
@@ -1518,11 +1754,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
         final int rookPos2 = playerRooks.get(j).getPiecePosition();
 
         if (rookPos1 / 8 == rookPos2 / 8) {
-          connectedScore += 20;
+          connectedScore += WEIGHTS.get(ROOKS_SHARING_RANK);
         }
 
         if (rookPos1 % 8 == rookPos2 % 8) {
-          connectedScore += 15;
+          connectedScore += WEIGHTS.get(ROOKS_SHARING_FILE);
         }
       }
     }
@@ -1554,7 +1790,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     bishopScore += evaluateColorComplexControl(playerBishops, pawns);
 
     for (final Piece bishop : playerBishops) {
-      bishopScore += Long.bitCount(bishop.legalDestinations(board)) * 5;
+      bishopScore += Long.bitCount(bishop.legalDestinations(board)) * WEIGHTS.get(BISHOP_MOBILITY);
     }
 
     final int playerKnightCount = material.of(player).of(Piece.PieceType.KNIGHT);
@@ -1594,7 +1830,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     if (hasLightSquareBishop && hasDarkSquareBishop) {
-      colorScore += 50;
+      colorScore += WEIGHTS.get(BISHOPS_ON_BOTH_COLOURS);
       return colorScore;
     }
 
@@ -1615,15 +1851,15 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     if (hasLightSquareBishop && darkSquarePawns > lightSquarePawns) {
-      colorScore += 20;
+      colorScore += WEIGHTS.get(GOOD_BISHOP_COLOUR);
     } else if (!hasLightSquareBishop && hasDarkSquareBishop && lightSquarePawns > darkSquarePawns) {
-      colorScore += 20;
+      colorScore += WEIGHTS.get(GOOD_BISHOP_COLOUR);
     }
 
     if (hasLightSquareBishop && lightSquarePawns > darkSquarePawns) {
-      colorScore -= 15;
+      colorScore -= WEIGHTS.get(BAD_BISHOP_COLOUR);
     } else if (!hasLightSquareBishop && hasDarkSquareBishop && darkSquarePawns > lightSquarePawns) {
-      colorScore -= 15;
+      colorScore -= WEIGHTS.get(BAD_BISHOP_COLOUR);
     }
 
     return colorScore;
@@ -1641,9 +1877,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final int pawnCount = pawns.white().size() + pawns.black().size();
 
     if (pawnCount <= 5) {
-      dynamicScore += 20;
+      dynamicScore += WEIGHTS.get(BISHOP_AGAINST_KNIGHT_OPEN);
     } else if (pawnCount >= 8) {
-      dynamicScore -= 10;
+      dynamicScore -= WEIGHTS.get(BISHOP_AGAINST_KNIGHT_CLOSED);
     }
 
     return dynamicScore;
@@ -1665,13 +1901,13 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final PieceCounts opponentPieceCounts = material.of(player.getOpponent());
 
     if (isInsufficientMaterial(playerPieceCounts, opponentPieceCounts)) {
-      drawScore -= 800;
+      drawScore -= WEIGHTS.get(INSUFFICIENT_MATERIAL_DRAW);
     }
 
     if (material.oppositeColoredBishops() &&
             playerPieceCounts.of(Piece.PieceType.PAWN) <= 2 &&
             opponentPieceCounts.of(Piece.PieceType.PAWN) <= 2) {
-      drawScore -= 200;
+      drawScore -= WEIGHTS.get(OPPOSITE_BISHOPS_DRAW);
     }
 
     if (playerPieceCounts.of(Piece.PieceType.ROOK) == 1 &&
@@ -1685,9 +1921,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
         if ((player.getAlliance().isWhite() && pawnRank <= 1) ||
                 (!player.getAlliance().isWhite() && pawnRank >= 6)) {
-          drawScore += 100;
+          drawScore += WEIGHTS.get(ROOK_PAWN_ADVANCED);
         } else {
-          drawScore -= 100;
+          drawScore -= WEIGHTS.get(ROOK_PAWN_BEHIND);
         }
       }
     }
@@ -1713,14 +1949,14 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     double mobilityWeight = 1.0;
 
     if (isPawnEndgame(material.nonPawnPieceCount())) {
-      mobilityWeight = 0.5;
+      mobilityWeight = WEIGHTS.get(PAWN_ENDGAME_MOBILITY_FACTOR);
     }
 
     if (material.oppositeColoredBishops()) {
-      mobilityWeight = 1.5;
+      mobilityWeight = WEIGHTS.get(OPPOSITE_BISHOPS_MOBILITY_FACTOR);
     }
 
-    mobilityScore += playerTargets.moveCount() * 4 * mobilityWeight;
+    mobilityScore += playerTargets.moveCount() * WEIGHTS.get(MOBILITY) * mobilityWeight;
 
     return mobilityScore;
   }
@@ -1757,7 +1993,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
               && attackCount[position] > countDefenders(playerPieces, position, board);
 
       if (outnumbered || harriedByPawn) {
-        largestThreat = Math.max(largestThreat, pieceValue * THREAT_FRACTION);
+        largestThreat = Math.max(largestThreat, pieceValue * WEIGHTS.get(THREAT_FRACTION));
       }
     }
 
