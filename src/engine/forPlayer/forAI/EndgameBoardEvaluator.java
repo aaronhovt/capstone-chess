@@ -55,17 +55,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** The material value of a queen. */
   private static final int QUEEN_VALUE = WEIGHTS.add("QUEEN_VALUE", 900);
 
-  /** The material bonus for owning two or more bishops. */
-  private static final int TWO_BISHOPS = WEIGHTS.add("TWO_BISHOPS", 50);
-
-  /** The material penalty when neither side has enough material to force mate. */
-  private static final int INSUFFICIENT_MATERIAL = WEIGHTS.add("INSUFFICIENT_MATERIAL", 800);
-
   /** The material bonus for a favourable combination such as queen against rook. */
   private static final int FAVOURABLE_MATERIAL = WEIGHTS.add("FAVOURABLE_MATERIAL", 100);
-
-  /** The material penalty when the sides hold bishops on opposite colours. */
-  private static final int OPPOSITE_BISHOPS = WEIGHTS.add("OPPOSITE_BISHOPS", 50);
 
   /** The factor of the king's closeness to the centre. */
   private static final int KING_CENTRALITY = WEIGHTS.add("KING_CENTRALITY", 10);
@@ -152,9 +143,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** The further penalty per backward pawn on a file with no opposing pawn. */
   private static final int BACKWARD_PAWN_SEMI_OPEN = WEIGHTS.add("BACKWARD_PAWN_SEMI_OPEN", 10);
 
-  /** The bonus for two or more bishops while any pawn remains. */
-  private static final int BISHOP_PAIR_WITH_PAWNS = WEIGHTS.add("BISHOP_PAIR_WITH_PAWNS", 50);
-
   /** The penalty per knight with four or fewer pawns left. */
   private static final int KNIGHT_FEW_PAWNS = WEIGHTS.add("KNIGHT_FEW_PAWNS", 10);
 
@@ -196,17 +184,17 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** The further bonus per such rook per opposing pawn on that rank. */
   private static final int ROOK_ON_SEVENTH_PAWN = WEIGHTS.add("ROOK_ON_SEVENTH_PAWN", 10);
 
-  /** The bonus per pair of rooks sharing a rank, counted once per rook. */
-  private static final int ROOKS_SHARING_RANK = WEIGHTS.add("ROOKS_SHARING_RANK", 20);
+  /** The bonus per pair of rooks sharing a rank. */
+  private static final int ROOKS_SHARING_RANK = WEIGHTS.add("ROOKS_SHARING_RANK", 40);
 
-  /** The bonus per pair of rooks sharing a file, counted once per rook. */
-  private static final int ROOKS_SHARING_FILE = WEIGHTS.add("ROOKS_SHARING_FILE", 15);
+  /** The bonus per pair of rooks sharing a file. */
+  private static final int ROOKS_SHARING_FILE = WEIGHTS.add("ROOKS_SHARING_FILE", 30);
 
   /** The bonus per legal bishop move. */
   private static final int BISHOP_MOBILITY = WEIGHTS.add("BISHOP_MOBILITY", 5);
 
   /** The bonus for bishops on both colours of square. */
-  private static final int BISHOPS_ON_BOTH_COLOURS = WEIGHTS.add("BISHOPS_ON_BOTH_COLOURS", 50);
+  private static final int BISHOP_PAIR = WEIGHTS.add("BISHOP_PAIR", 150);
 
   /** The bonus for a single-coloured bishop whose colour holds fewer pawns. */
   private static final int GOOD_BISHOP_COLOUR = WEIGHTS.add("GOOD_BISHOP_COLOUR", 20);
@@ -222,12 +210,15 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   private static final int BISHOP_AGAINST_KNIGHT_CLOSED =
           WEIGHTS.add("BISHOP_AGAINST_KNIGHT_CLOSED", 10);
 
-  /** The draw penalty when neither side has enough material to force mate. */
-  private static final int INSUFFICIENT_MATERIAL_DRAW =
-          WEIGHTS.add("INSUFFICIENT_MATERIAL_DRAW", 800);
+  /** The factor applied to the score when the sides hold bishops on opposite colours. */
+  private static final int OPPOSITE_BISHOPS_SCALE = WEIGHTS.add("OPPOSITE_BISHOPS_SCALE", 0.75);
 
-  /** The draw penalty for opposite coloured bishops with two or fewer pawns each. */
-  private static final int OPPOSITE_BISHOPS_DRAW = WEIGHTS.add("OPPOSITE_BISHOPS_DRAW", 200);
+  /**
+   * The factor applied to the score when the sides hold bishops on opposite colours and two or
+   * fewer pawns each.
+   */
+  private static final int OPPOSITE_BISHOPS_FEW_PAWNS_SCALE =
+          WEIGHTS.add("OPPOSITE_BISHOPS_FEW_PAWNS_SCALE", 0.5);
 
   /** The bonus for rook and pawn against rook with the pawn on its seventh rank or beyond. */
   private static final int ROOK_PAWN_ADVANCED = WEIGHTS.add("ROOK_PAWN_ADVANCED", 100);
@@ -303,6 +294,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final Collection<Piece> blackPieces = board.blackPlayer().getActivePieces();
     final Material material = new Material(countPieceTypes(whitePieces),
             countPieceTypes(blackPieces), hasOppositeColoredBishops(whitePieces, blackPieces));
+
+    if (isDrawnByMaterial(material)) {
+      return 0;
+    }
+
     final MoveTargets whiteTargets = moveTargets(board, board.whitePlayer());
     final MoveTargets blackTargets = moveTargets(board, board.blackPlayer());
     final PawnStructureCache.Entry pawnStructure = pawnStructureScores(board, pawns);
@@ -310,7 +306,64 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     return (score(board.whitePlayer(), board, pawns, pawnStructure, material, whiteTargets,
                     blackTargets) -
             score(board.blackPlayer(), board, pawns, pawnStructure, material, blackTargets,
-                    whiteTargets));
+                    whiteTargets)) * drawishScale(material);
+  }
+
+  /**
+   * Returns whether neither side can win with the material on the board. That is the case for a
+   * bare king against a bare king, a single knight or bishop against a bare king, one bishop each
+   * on squares of the same colour, and two knights against a bare king, which cannot force mate.
+   * Every case requires that no pawn, rook or queen remains.
+   *
+   * @param material The piece counts of both players.
+   * @return True if the material on the board is drawn, false otherwise.
+   */
+  private static boolean isDrawnByMaterial(final Material material) {
+    final PieceCounts white = material.white();
+    final PieceCounts black = material.black();
+
+    if (white.of(Piece.PieceType.PAWN) + black.of(Piece.PieceType.PAWN) +
+            white.of(Piece.PieceType.ROOK) + black.of(Piece.PieceType.ROOK) +
+            white.of(Piece.PieceType.QUEEN) + black.of(Piece.PieceType.QUEEN) > 0) {
+      return false;
+    }
+
+    final int knights = white.of(Piece.PieceType.KNIGHT) + black.of(Piece.PieceType.KNIGHT);
+    final int bishops = white.of(Piece.PieceType.BISHOP) + black.of(Piece.PieceType.BISHOP);
+
+    if (knights + bishops <= 1) {
+      return true;
+    }
+
+    if (knights == 0 && white.of(Piece.PieceType.BISHOP) == 1 &&
+            black.of(Piece.PieceType.BISHOP) == 1) {
+      return !material.oppositeColoredBishops();
+    }
+
+    return bishops == 0 && knights == 2 &&
+            (white.of(Piece.PieceType.KNIGHT) == 2 || black.of(Piece.PieceType.KNIGHT) == 2);
+  }
+
+  /**
+   * Returns the factor by which the score is scaled toward a draw. The score is scaled by
+   * {@link #OPPOSITE_BISHOPS_FEW_PAWNS_SCALE} when the sides hold bishops on opposite colours and
+   * two or fewer pawns each, by {@link #OPPOSITE_BISHOPS_SCALE} when they hold bishops on opposite
+   * colours and more pawns, and is otherwise left unscaled.
+   *
+   * @param material The piece counts of both players.
+   * @return The factor applied to the score.
+   */
+  private static double drawishScale(final Material material) {
+    if (!material.oppositeColoredBishops()) {
+      return 1.0;
+    }
+
+    if (material.white().of(Piece.PieceType.PAWN) <= 2 &&
+            material.black().of(Piece.PieceType.PAWN) <= 2) {
+      return WEIGHTS.get(OPPOSITE_BISHOPS_FEW_PAWNS_SCALE);
+    }
+
+    return WEIGHTS.get(OPPOSITE_BISHOPS_SCALE);
   }
 
   /**
@@ -519,9 +572,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
   /**
    * Evaluates material balance with specific endgame piece values and recognizes
-   * special endgame material combinations. This method applies endgame-specific
-   * piece values and identifies patterns like insufficient material or favorable
-   * material combinations.
+   * favorable endgame material combinations.
    *
    * @param player The player whose material is being evaluated.
    * @param material The piece counts of both players.
@@ -544,20 +595,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     materialScore += playerPieceCounts.of(Piece.PieceType.QUEEN) * WEIGHTS.get(QUEEN_VALUE);
     materialScore += playerPieceCounts.of(Piece.PieceType.KING) * 10000;
 
-    if (playerPieceCounts.of(Piece.PieceType.BISHOP) >= 2) {
-      materialScore += WEIGHTS.get(TWO_BISHOPS);
-    }
-
-    if (isInsufficientMaterial(playerPieceCounts, opponentPieceCounts)) {
-      materialScore -= WEIGHTS.get(INSUFFICIENT_MATERIAL);
-    }
-
     if (evaluateSpecialMaterialCombinations(playerPieceCounts, opponentPieceCounts, player.getAlliance())) {
       materialScore += WEIGHTS.get(FAVOURABLE_MATERIAL);
-    }
-
-    if (material.oppositeColoredBishops()) {
-      materialScore -= WEIGHTS.get(OPPOSITE_BISHOPS);
     }
 
     return materialScore;
@@ -568,9 +607,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * must not be modified by a caller.
    *
    * @param byType The number of pieces of each type, indexed by piece type ordinal.
-   * @param distinctTypes The number of piece types present at least once.
    */
-  private record PieceCounts(int[] byType, int distinctTypes) {
+  private record PieceCounts(int[] byType) {
 
     /**
      * Returns the number of pieces of the given type.
@@ -601,19 +639,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   private PieceCounts countPieceTypes(final Collection<Piece> pieces) {
     final int[] byType = new int[PIECE_TYPE_COUNT];
-    int distinctTypes = 0;
 
     for (final Piece piece : pieces) {
-      final int ordinal = piece.getPieceType().ordinal();
-
-      if (byType[ordinal] == 0) {
-        distinctTypes++;
-      }
-
-      byType[ordinal]++;
+      byType[piece.getPieceType().ordinal()]++;
     }
 
-    return new PieceCounts(byType, distinctTypes);
+    return new PieceCounts(byType);
   }
 
   /**
@@ -625,44 +656,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   private boolean isDeepEndgame(final int nonPawnPieceCount) {
     return nonPawnPieceCount <= 4;
-  }
-
-  /**
-   * Checks for insufficient material to force checkmate. This includes positions
-   * like king versus king, king and minor piece versus king, or king and two
-   * knights versus king.
-   *
-   * @param playerPieceCounts The piece counts for the player.
-   * @param opponentPieceCounts The piece counts for the opponent.
-   * @return True if insufficient material exists, false otherwise.
-   */
-  private boolean isInsufficientMaterial(final PieceCounts playerPieceCounts,
-                                         final PieceCounts opponentPieceCounts) {
-    boolean noPawns = playerPieceCounts.of(Piece.PieceType.PAWN) == 0 &&
-            opponentPieceCounts.of(Piece.PieceType.PAWN) == 0;
-
-    if (noPawns) {
-      if (playerPieceCounts.distinctTypes() == 1 && opponentPieceCounts.distinctTypes() == 1) {
-        return true;
-      }
-
-      if ((playerPieceCounts.distinctTypes() == 2 && opponentPieceCounts.distinctTypes() == 1) ||
-              (playerPieceCounts.distinctTypes() == 1 && opponentPieceCounts.distinctTypes() == 2)) {
-        int minorsCount = playerPieceCounts.of(Piece.PieceType.KNIGHT) +
-                playerPieceCounts.of(Piece.PieceType.BISHOP) +
-                opponentPieceCounts.of(Piece.PieceType.KNIGHT) +
-                opponentPieceCounts.of(Piece.PieceType.BISHOP);
-
-        return minorsCount <= 1;
-      }
-
-      return (playerPieceCounts.of(Piece.PieceType.KNIGHT) == 2 &&
-              playerPieceCounts.distinctTypes() == 2 && opponentPieceCounts.distinctTypes() == 1) ||
-              (opponentPieceCounts.of(Piece.PieceType.KNIGHT) == 2 &&
-                      opponentPieceCounts.distinctTypes() == 2 && playerPieceCounts.distinctTypes() == 1);
-    }
-
-    return false;
   }
 
   /**
@@ -1427,8 +1420,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Evaluates minor piece coordination in endgames, including bishop pair
-   * advantages and knight positioning relative to remaining pawns.
+   * Evaluates minor piece coordination in endgames by penalising knights when few pawns remain.
+   * The bishop pair is scored by {@link #evaluateColorComplexControl}.
    *
    * @param playerPieceCounts The piece counts for the player.
    * @param pawns The pawns of both players.
@@ -1437,12 +1430,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   private double evaluateMinorPieceCoordination(final PieceCounts playerPieceCounts,
                                                 final PawnLists pawns) {
     double minorPieceScore = 0;
-
-    if (!pawns.white().isEmpty() || !pawns.black().isEmpty()) {
-      if (playerPieceCounts.of(Piece.PieceType.BISHOP) >= 2) {
-        minorPieceScore += WEIGHTS.get(BISHOP_PAIR_WITH_PAWNS);
-      }
-    }
 
     if (pawns.white().size() + pawns.black().size() <= 4) {
       minorPieceScore -= playerPieceCounts.of(Piece.PieceType.KNIGHT) *
@@ -1616,10 +1603,10 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       rookScore += evaluateRookBehindPassedPawn(rook, playerPawns, opponentPawns,
               playerPassedPawns, opponentPassedPawns, alliance);
       rookScore += evaluateRookOn7thRank(rook, opponentPawns, alliance);
+    }
 
-      if (playerRooks.size() >= 2) {
-        rookScore += evaluateConnectedRooks(playerRooks);
-      }
+    if (playerRooks.size() >= 2) {
+      rookScore += evaluateConnectedRooks(playerRooks);
     }
 
     return rookScore;
@@ -1805,8 +1792,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
   /**
    * Evaluates color complex control, which is important in bishop endgames.
-   * Bishops that control squares of the opposite color from most pawns are
-   * generally more effective.
+   * Bishops on both colours earn the bishop pair bonus. Otherwise, bishops that control squares
+   * of the opposite color from most pawns are generally more effective.
    *
    * @param playerBishops The player's bishops.
    * @param pawns The pawns of both players.
@@ -1830,7 +1817,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     if (hasLightSquareBishop && hasDarkSquareBishop) {
-      colorScore += WEIGHTS.get(BISHOPS_ON_BOTH_COLOURS);
+      colorScore += WEIGHTS.get(BISHOP_PAIR);
       return colorScore;
     }
 
@@ -1886,8 +1873,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Evaluates common draw patterns in endgames, including insufficient material,
-   * opposite-colored bishops, and other drawish tendencies.
+   * Evaluates rook and pawn against rook, rewarding the pawn's side when its pawn stands on its
+   * seventh rank or beyond and penalising it otherwise. Material that cannot win is handled by
+   * {@link #isDrawnByMaterial} and opposite-coloured bishops by {@link #drawishScale}.
    *
    * @param player The player whose draw patterns are being evaluated.
    * @param pawns The pawns of both players.
@@ -1899,16 +1887,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     double drawScore = 0;
     final PieceCounts playerPieceCounts = material.of(player);
     final PieceCounts opponentPieceCounts = material.of(player.getOpponent());
-
-    if (isInsufficientMaterial(playerPieceCounts, opponentPieceCounts)) {
-      drawScore -= WEIGHTS.get(INSUFFICIENT_MATERIAL_DRAW);
-    }
-
-    if (material.oppositeColoredBishops() &&
-            playerPieceCounts.of(Piece.PieceType.PAWN) <= 2 &&
-            opponentPieceCounts.of(Piece.PieceType.PAWN) <= 2) {
-      drawScore -= WEIGHTS.get(OPPOSITE_BISHOPS_DRAW);
-    }
 
     if (playerPieceCounts.of(Piece.PieceType.ROOK) == 1 &&
             playerPieceCounts.of(Piece.PieceType.PAWN) == 1 &&

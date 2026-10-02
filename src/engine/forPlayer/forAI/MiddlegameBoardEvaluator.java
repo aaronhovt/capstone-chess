@@ -48,9 +48,6 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /** The material value of a queen. */
   private static final int QUEEN_VALUE = WEIGHTS.add("QUEEN_VALUE", 900);
 
-  /** The material bonus for owning two or more bishops. */
-  private static final int TWO_BISHOPS = WEIGHTS.add("TWO_BISHOPS", 45);
-
   /** The bonus per legal move. */
   private static final int MOBILITY = WEIGHTS.add("MOBILITY", 5.0);
 
@@ -183,7 +180,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final int CENTRAL_PAWN_ATTACK = WEIGHTS.add("CENTRAL_PAWN_ATTACK", 15);
 
   /** The bonus for bishops on both colours of square. */
-  private static final int BISHOP_PAIR = WEIGHTS.add("BISHOP_PAIR", 50);
+  private static final int BISHOP_PAIR = WEIGHTS.add("BISHOP_PAIR", 95);
 
   /** The bonus per pair of rooks sharing a rank. */
   private static final int ROOKS_SHARING_RANK = WEIGHTS.add("ROOKS_SHARING_RANK", 20);
@@ -850,20 +847,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Evaluates material balance with refined piece values and contextual adjustments.
-   * Modern engines use dynamic piece values based on the position.
+   * Evaluates the material value of the player's pieces. The bishop pair is scored by
+   * {@link #evaluateBishopPair}.
    *
    * @param playerLayout The layout of the player's pieces.
    * @return The material evaluation score.
    */
   private double materialEvaluation(final PieceLayout playerLayout) {
-    double materialScore = playerLayout.material();
-
-    if (Long.bitCount(playerLayout.bishops()) >= 2) {
-      materialScore += WEIGHTS.get(TWO_BISHOPS);
-    }
-
-    return materialScore;
+    return playerLayout.material();
   }
 
   /**
@@ -1608,7 +1599,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * square more times than the player defends it, or when it is worth more than a pawn and stands
    * on a square an opposing pawn attacks. Only the largest such threat is charged, at
    * {@link #THREAT_FRACTION} of the threatened piece's value, so the penalty this term can produce
-   * is bounded by a third of a queen.
+   * is bounded by a quarter of a queen.
    *
    * @param playerPieces The player's pieces.
    * @param board The current chess board state.

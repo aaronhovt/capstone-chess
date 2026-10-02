@@ -61,9 +61,6 @@ public class OpeningGameEvaluator implements BoardEvaluator {
   private static final int EARLY_QUEEN_PAST_MIDLINE =
           WEIGHTS.add("EARLY_QUEEN_PAST_MIDLINE", 8);
 
-  /** The development bonus for a king on a square that castling can produce. */
-  private static final int CASTLED = WEIGHTS.add("CASTLED", 50);
-
   /** The development bonus for an uncastled king that keeps a castling right. */
   private static final int CAN_CASTLE = WEIGHTS.add("CAN_CASTLE", 12);
 
@@ -95,7 +92,7 @@ public class OpeningGameEvaluator implements BoardEvaluator {
   private static final int EXTENDED_CENTRE_MOVE = WEIGHTS.add("EXTENDED_CENTRE_MOVE", 3);
 
   /** The king safety bonus for a king on a square that castling can produce. */
-  private static final int KING_ON_CASTLED_SQUARE = WEIGHTS.add("KING_ON_CASTLED_SQUARE", 40);
+  private static final int KING_ON_CASTLED_SQUARE = WEIGHTS.add("KING_ON_CASTLED_SQUARE", 90);
 
   /** The penalty for an uncastled king on the c to f files. */
   private static final int KING_IN_CENTRE = WEIGHTS.add("KING_IN_CENTRE", 25);
@@ -377,7 +374,8 @@ public class OpeningGameEvaluator implements BoardEvaluator {
    * Evaluates piece development for the given player.
    * Scores each knight and bishop by whether it stands off its own back rank, penalises a queen
    * that has left its home square in proportion to the number of minor pieces still undeveloped,
-   * and scores whether the king stands on a square castling can produce.
+   * and scores the castling rights of a king that does not stand on a square castling can produce.
+   * A king that does stand on such a square is scored by {@link #kingSafetyScore}.
    *
    * @param player The player whose development is being evaluated.
    * @param board The current chess board state.
@@ -435,12 +433,12 @@ public class OpeningGameEvaluator implements BoardEvaluator {
       }
     }
 
-    if (castled) {
-      score += WEIGHTS.get(CASTLED);
-    } else if (canCastle(player)) {
-      score += WEIGHTS.get(CAN_CASTLE);
-    } else if (!canCastle(player)) {
-      score -= WEIGHTS.get(CANNOT_CASTLE);
+    if (!castled) {
+      if (canCastle(player)) {
+        score += WEIGHTS.get(CAN_CASTLE);
+      } else {
+        score -= WEIGHTS.get(CANNOT_CASTLE);
+      }
     }
 
     if (developedMinorPieces >= 3 && castled && !queenSortied) {
