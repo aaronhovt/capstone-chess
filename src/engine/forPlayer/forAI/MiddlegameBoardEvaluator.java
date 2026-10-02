@@ -27,8 +27,298 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /** Singleton instance of the MiddlegameBoardEvaluator. */
   private static final MiddlegameBoardEvaluator Instance = new MiddlegameBoardEvaluator();
 
+  /**
+   * The weights this evaluator scores with. Each index constant below names one weight, and its
+   * description states what the weight scores.
+   */
+  private static final EvaluationWeights WEIGHTS = new EvaluationWeights();
+
+  /** The material value of a pawn. */
+  private static final int PAWN_VALUE = WEIGHTS.add("PAWN_VALUE", 100);
+
+  /** The material value of a knight. */
+  private static final int KNIGHT_VALUE = WEIGHTS.add("KNIGHT_VALUE", 310);
+
+  /** The material value of a bishop. */
+  private static final int BISHOP_VALUE = WEIGHTS.add("BISHOP_VALUE", 330);
+
+  /** The material value of a rook. */
+  private static final int ROOK_VALUE = WEIGHTS.add("ROOK_VALUE", 500);
+
+  /** The material value of a queen. */
+  private static final int QUEEN_VALUE = WEIGHTS.add("QUEEN_VALUE", 900);
+
+  /** The material bonus for owning two or more bishops. */
+  private static final int TWO_BISHOPS = WEIGHTS.add("TWO_BISHOPS", 45);
+
+  /** The bonus per legal move. */
+  private static final int MOBILITY = WEIGHTS.add("MOBILITY", 5.0);
+
+  /** The further bonus per legal knight move. */
+  private static final int KNIGHT_MOBILITY = WEIGHTS.add("KNIGHT_MOBILITY", 4.5);
+
+  /** The further bonus per legal bishop move. */
+  private static final int BISHOP_MOBILITY = WEIGHTS.add("BISHOP_MOBILITY", 5.0);
+
+  /** The further bonus per legal rook move. */
+  private static final int ROOK_MOBILITY = WEIGHTS.add("ROOK_MOBILITY", 4.0);
+
+  /** The further bonus per legal queen move. */
+  private static final int QUEEN_MOBILITY = WEIGHTS.add("QUEEN_MOBILITY", 2.0);
+
+  /** The bonus for a king standing on a square that castling can produce. */
+  private static final int KING_ON_CASTLED_SQUARE = WEIGHTS.add("KING_ON_CASTLED_SQUARE", 40);
+
+  /** The bonus for three or more pawns in the king's shield. */
+  private static final int SHIELD_THREE_PAWNS = WEIGHTS.add("SHIELD_THREE_PAWNS", 35);
+
+  /** The bonus for two pawns in the king's shield. */
+  private static final int SHIELD_TWO_PAWNS = WEIGHTS.add("SHIELD_TWO_PAWNS", 20);
+
+  /** The bonus for one pawn in the king's shield. */
+  private static final int SHIELD_ONE_PAWN = WEIGHTS.add("SHIELD_ONE_PAWN", 5);
+
+  /** The penalty for no pawn in the king's shield. */
+  private static final int SHIELD_NO_PAWN = WEIGHTS.add("SHIELD_NO_PAWN", 20);
+
+  /** The bonus per file holding a pawn of the king's shield. */
+  private static final int SHIELD_FILE = WEIGHTS.add("SHIELD_FILE", 10);
+
+  /** The penalty per opposing queen move landing near the king. */
+  private static final int QUEEN_MOVE_NEAR_KING = WEIGHTS.add("QUEEN_MOVE_NEAR_KING", 10);
+
+  /** The penalty per opposing rook move landing near the king. */
+  private static final int ROOK_MOVE_NEAR_KING = WEIGHTS.add("ROOK_MOVE_NEAR_KING", 7);
+
+  /** The penalty per opposing bishop move landing near the king. */
+  private static final int BISHOP_MOVE_NEAR_KING = WEIGHTS.add("BISHOP_MOVE_NEAR_KING", 5);
+
+  /** The penalty per opposing knight move landing near the king. */
+  private static final int KNIGHT_MOVE_NEAR_KING = WEIGHTS.add("KNIGHT_MOVE_NEAR_KING", 5);
+
+  /** The penalty per opposing pawn move landing near the king. */
+  private static final int PAWN_MOVE_NEAR_KING = WEIGHTS.add("PAWN_MOVE_NEAR_KING", 2);
+
+  /** The penalty per opposing king move landing near the king. */
+  private static final int KING_MOVE_NEAR_KING = WEIGHTS.add("KING_MOVE_NEAR_KING", 2);
+
+  /** The penalty per opposing move landing near the king beyond the second. */
+  private static final int EXCESS_MOVE_NEAR_KING = WEIGHTS.add("EXCESS_MOVE_NEAR_KING", 15);
+
+  /** The penalty for being in check. */
+  private static final int IN_CHECK = WEIGHTS.add("IN_CHECK", 30);
+
+  /** The factor of an opposing queen's tropism toward the king. */
+  private static final int QUEEN_TROPISM = WEIGHTS.add("QUEEN_TROPISM", 6);
+
+  /** The factor of an opposing rook's tropism toward the king. */
+  private static final int ROOK_TROPISM = WEIGHTS.add("ROOK_TROPISM", 4);
+
+  /** The factor of an opposing bishop's tropism toward the king. */
+  private static final int BISHOP_TROPISM = WEIGHTS.add("BISHOP_TROPISM", 3);
+
+  /** The factor of an opposing knight's tropism toward the king. */
+  private static final int KNIGHT_TROPISM = WEIGHTS.add("KNIGHT_TROPISM", 4);
+
+  /** The factor of an opposing pawn's tropism toward the king. */
+  private static final int PAWN_TROPISM = WEIGHTS.add("PAWN_TROPISM", 2);
+
+  /** The penalty for no own pawn on the king's file. */
+  private static final int KING_FILE_OPEN = WEIGHTS.add("KING_FILE_OPEN", 25);
+
+  /** The further penalty for an opposing rook or queen on that open king file. */
+  private static final int KING_FILE_HEAVY_PIECE = WEIGHTS.add("KING_FILE_HEAVY_PIECE", 35);
+
+  /** The penalty per file beside the king with no own pawn on it. */
+  private static final int ADJACENT_FILE_OPEN = WEIGHTS.add("ADJACENT_FILE_OPEN", 15);
+
+  /** The further penalty per such open file holding an opposing rook or queen. */
+  private static final int ADJACENT_FILE_HEAVY_PIECE =
+          WEIGHTS.add("ADJACENT_FILE_HEAVY_PIECE", 25);
+
+  /** The bonus per passed pawn. */
+  private static final int PASSED_PAWN = WEIGHTS.add("PASSED_PAWN", 20);
+
+  /** The further bonus per passed pawn per rank it has advanced. */
+  private static final int PASSED_PAWN_RANK = WEIGHTS.add("PASSED_PAWN_RANK", 10);
+
+  /** The further bonus per passed pawn protected by a pawn. */
+  private static final int PASSED_PAWN_PROTECTED = WEIGHTS.add("PASSED_PAWN_PROTECTED", 15);
+
+  /** The further bonus per passed pawn whose stop square no opposing piece controls. */
+  private static final int PASSED_PAWN_FREE_STOP_SQUARE =
+          WEIGHTS.add("PASSED_PAWN_FREE_STOP_SQUARE", 10);
+
+  /** The penalty per pawn island beyond the first. */
+  private static final int PAWN_ISLAND = WEIGHTS.add("PAWN_ISLAND", 10);
+
+  /** The penalty per pawn on a file beyond the first. */
+  private static final int DOUBLED_PAWN = WEIGHTS.add("DOUBLED_PAWN", 20);
+
+  /** The penalty per isolated pawn. */
+  private static final int ISOLATED_PAWN = WEIGHTS.add("ISOLATED_PAWN", 15);
+
+  /** The further penalty per isolated pawn on a file with no opposing pawn. */
+  private static final int ISOLATED_PAWN_SEMI_OPEN = WEIGHTS.add("ISOLATED_PAWN_SEMI_OPEN", 5);
+
+  /** The further penalty per isolated pawn on the c to f files. */
+  private static final int ISOLATED_PAWN_CENTRAL = WEIGHTS.add("ISOLATED_PAWN_CENTRAL", 5);
+
+  /** The penalty per backward pawn. */
+  private static final int BACKWARD_PAWN = WEIGHTS.add("BACKWARD_PAWN", 20);
+
+  /** The further penalty per backward pawn on a file with no opposing pawn. */
+  private static final int BACKWARD_PAWN_SEMI_OPEN = WEIGHTS.add("BACKWARD_PAWN_SEMI_OPEN", 5);
+
+  /** The bonus per pawn protected by a pawn. */
+  private static final int PAWN_CHAIN_LINK = WEIGHTS.add("PAWN_CHAIN_LINK", 8);
+
+  /** The bonus for three or more pawns protected by pawns. */
+  private static final int PAWN_CHAIN = WEIGHTS.add("PAWN_CHAIN", 10);
+
+  /** The bonus per pawn on one of the four central squares. */
+  private static final int CENTRAL_PAWN = WEIGHTS.add("CENTRAL_PAWN", 25);
+
+  /** The bonus per pawn attack on one of the four central squares. */
+  private static final int CENTRAL_PAWN_ATTACK = WEIGHTS.add("CENTRAL_PAWN_ATTACK", 15);
+
+  /** The bonus for bishops on both colours of square. */
+  private static final int BISHOP_PAIR = WEIGHTS.add("BISHOP_PAIR", 50);
+
+  /** The bonus per pair of rooks sharing a rank. */
+  private static final int ROOKS_SHARING_RANK = WEIGHTS.add("ROOKS_SHARING_RANK", 20);
+
+  /** The bonus per pair of rooks sharing a file. */
+  private static final int ROOKS_SHARING_FILE = WEIGHTS.add("ROOKS_SHARING_FILE", 15);
+
+  /** The bonus for any pair of rooks sharing a rank or file. */
+  private static final int ROOKS_CONNECTED = WEIGHTS.add("ROOKS_CONNECTED", 10);
+
+  /** The bonus per rook on a file with no own pawn and an opposing pawn. */
+  private static final int ROOK_SEMI_OPEN_FILE = WEIGHTS.add("ROOK_SEMI_OPEN_FILE", 10);
+
+  /** The bonus per rook on a file with no pawn. */
+  private static final int ROOK_OPEN_FILE = WEIGHTS.add("ROOK_OPEN_FILE", 20);
+
+  /** The bonus per protected piece that no opposing move attacks. */
+  private static final int PROTECTED_PIECE = WEIGHTS.add("PROTECTED_PIECE", 8);
+
+  /** The further bonus per defender of such a queen. */
+  private static final int QUEEN_DEFENDER = WEIGHTS.add("QUEEN_DEFENDER", 6);
+
+  /** The further bonus per defender of such a rook. */
+  private static final int ROOK_DEFENDER = WEIGHTS.add("ROOK_DEFENDER", 4);
+
   /** The fraction of a threatened piece's value charged against the side that owns it. */
-  private static final double THREAT_FRACTION = 0.25;
+  private static final int THREAT_FRACTION = WEIGHTS.add("THREAT_FRACTION", 0.25);
+
+  /** The factor of a knight's closeness to the centre. */
+  private static final int KNIGHT_CENTRALITY = WEIGHTS.add("KNIGHT_CENTRALITY", 5);
+
+  /** The factor of a bishop's closeness to the centre. */
+  private static final int BISHOP_CENTRALITY = WEIGHTS.add("BISHOP_CENTRALITY", 4);
+
+  /** The factor of a rook's closeness to the central files. */
+  private static final int ROOK_CENTRALITY = WEIGHTS.add("ROOK_CENTRALITY", 3);
+
+  /** The factor of a queen's closeness to the centre. */
+  private static final int QUEEN_CENTRALITY = WEIGHTS.add("QUEEN_CENTRALITY", 2);
+
+  /** The bonus per unit of space count. */
+  private static final int SPACE = WEIGHTS.add("SPACE", 1.0);
+
+  /** The bonus per legal move held over the opponent, up to ten. */
+  private static final int MOVE_ADVANTAGE = WEIGHTS.add("MOVE_ADVANTAGE", 3);
+
+  /** The bonus per legal move landing on one of the four central squares. */
+  private static final int CENTRAL_SQUARE_MOVE = WEIGHTS.add("CENTRAL_SQUARE_MOVE", 5);
+
+  /** The attack bonus per kind of piece with a move near the opposing king. */
+  private static final int KING_ATTACKER = WEIGHTS.add("KING_ATTACKER", 20);
+
+  /** The attack bonus per move landing near the opposing king. */
+  private static final int KING_ATTACK_MOVE = WEIGHTS.add("KING_ATTACK_MOVE", 10);
+
+  /** The further attack bonus for a queen move near the opposing king. */
+  private static final int QUEEN_KING_ATTACK = WEIGHTS.add("QUEEN_KING_ATTACK", 40);
+
+  /** The further attack bonus for a rook move near the opposing king. */
+  private static final int ROOK_KING_ATTACK = WEIGHTS.add("ROOK_KING_ATTACK", 30);
+
+  /** The further attack bonus for a bishop move near the opposing king. */
+  private static final int BISHOP_KING_ATTACK = WEIGHTS.add("BISHOP_KING_ATTACK", 20);
+
+  /** The further attack bonus for a knight move near the opposing king. */
+  private static final int KNIGHT_KING_ATTACK = WEIGHTS.add("KNIGHT_KING_ATTACK", 15);
+
+  /** The further attack bonus for a pawn move near the opposing king. */
+  private static final int PAWN_KING_ATTACK = WEIGHTS.add("PAWN_KING_ATTACK", 10);
+
+  /** The further attack bonus when the opposing king is in check. */
+  private static final int KING_ATTACK_CHECK = WEIGHTS.add("KING_ATTACK_CHECK", 50);
+
+  /** The further attack bonus when the opposing king is off its castled squares. */
+  private static final int KING_ATTACK_UNCASTLED = WEIGHTS.add("KING_ATTACK_UNCASTLED", 30);
+
+  /** The attack penalty per opposing piece within two tiles of the opposing king. */
+  private static final int KING_ZONE_DEFENDER = WEIGHTS.add("KING_ZONE_DEFENDER", 15);
+
+  /** The bonus per rook on the seventh rank. */
+  private static final int ROOK_ON_SEVENTH = WEIGHTS.add("ROOK_ON_SEVENTH", 30);
+
+  /** The further bonus per such rook per file holding an opposing pawn on that rank. */
+  private static final int ROOK_ON_SEVENTH_PAWN = WEIGHTS.add("ROOK_ON_SEVENTH_PAWN", 10);
+
+  /** The further bonus per such rook when the opposing king is on its back rank. */
+  private static final int ROOK_ON_SEVENTH_KING = WEIGHTS.add("ROOK_ON_SEVENTH_KING", 20);
+
+  /** The bonus for a bishop on the kingside fianchetto square. */
+  private static final int KINGSIDE_FIANCHETTO = WEIGHTS.add("KINGSIDE_FIANCHETTO", 20);
+
+  /** The bonus for a bishop on the queenside fianchetto square. */
+  private static final int QUEENSIDE_FIANCHETTO = WEIGHTS.add("QUEENSIDE_FIANCHETTO", 15);
+
+  /** The penalty per bishop sharing its square colour with three or more own pawns. */
+  private static final int BAD_BISHOP_THREE_PAWNS = WEIGHTS.add("BAD_BISHOP_THREE_PAWNS", 20);
+
+  /** The penalty per bishop sharing its square colour with two own pawns. */
+  private static final int BAD_BISHOP_TWO_PAWNS = WEIGHTS.add("BAD_BISHOP_TWO_PAWNS", 10);
+
+  /** The bonus per knight outpost. */
+  private static final int KNIGHT_OUTPOST = WEIGHTS.add("KNIGHT_OUTPOST", 20);
+
+  /** The further bonus per knight outpost protected by a pawn. */
+  private static final int KNIGHT_OUTPOST_PROTECTED =
+          WEIGHTS.add("KNIGHT_OUTPOST_PROTECTED", 15);
+
+  /** The further bonus per knight outpost on the c to f files. */
+  private static final int KNIGHT_OUTPOST_CENTRAL = WEIGHTS.add("KNIGHT_OUTPOST_CENTRAL", 10);
+
+  /** The bonus per queen in the central sixteen squares. */
+  private static final int QUEEN_CENTRAL = WEIGHTS.add("QUEEN_CENTRAL", 10);
+
+  /** The penalty per queen on its first two ranks with fewer than two supporting pieces. */
+  private static final int QUEEN_UNSUPPORTED = WEIGHTS.add("QUEEN_UNSUPPORTED", 25);
+
+  /** The bonus per queen within two tiles of the opposing king. */
+  private static final int QUEEN_NEAR_KING = WEIGHTS.add("QUEEN_NEAR_KING", 20);
+
+  /** The bonus per queen three tiles from the opposing king. */
+  private static final int QUEEN_THREE_FROM_KING = WEIGHTS.add("QUEEN_THREE_FROM_KING", 10);
+
+  /**
+   * The value of both players' knights, bishops, rooks and queens combined at and above which the
+   * king safety, space control and attacking potential terms count in full.
+   */
+  private static final int KING_TERMS_FULL_MATERIAL =
+          WEIGHTS.add("KING_TERMS_FULL_MATERIAL", 5000);
+
+  /**
+   * The value of both players' knights, bishops, rooks and queens combined at and below which the
+   * king safety, space control and attacking potential terms count for nothing.
+   */
+  private static final int KING_TERMS_ZERO_MATERIAL =
+          WEIGHTS.add("KING_TERMS_ZERO_MATERIAL", 3000);
 
   /**
    * The tiles within two ranks and two files of each tile, indexed by tile, as one bit per tile.
@@ -92,18 +382,6 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final long LIGHT_TILES = 0xAA55AA55AA55AA55L;
 
   /**
-   * The value of both players' knights, bishops, rooks and queens combined at and above which the
-   * king safety, space control and attacking potential terms count in full.
-   */
-  private static final int KING_TERMS_FULL_MATERIAL = 5000;
-
-  /**
-   * The value of both players' knights, bishops, rooks and queens combined at and below which the
-   * king safety, space control and attacking potential terms count for nothing.
-   */
-  private static final int KING_TERMS_ZERO_MATERIAL = 3000;
-
-  /**
    * The scores of both players' pawn structure terms that read nothing but pawns, keyed by the
    * tiles their pawns occupy.
    */
@@ -122,6 +400,15 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   public static MiddlegameBoardEvaluator get() {
     return Instance;
+  }
+
+  /**
+   * Returns the weights this evaluator scores with.
+   *
+   * @return The weights of this evaluator.
+   */
+  public static EvaluationWeights weights() {
+    return WEIGHTS;
   }
 
   /**
@@ -391,7 +678,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   /**
    * The facts about the placement of one player's pieces that the scoring terms read.
    *
-   * @param material The summed value of all the player's pieces, the king included.
+   * @param material The summed material value of all the player's pieces, the king included at
+   *                 its piece value.
    * @param knights The tiles holding the player's knights, as one bit per tile.
    * @param bishops The tiles holding the player's bishops, as one bit per tile.
    * @param rooks The tiles holding the player's rooks, as one bit per tile.
@@ -404,7 +692,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    *                    order of the player's piece list. A higher value means more danger to the
    *                    opposing king.
    */
-  private record PieceLayout(int material,
+  private record PieceLayout(double material,
                              long knights,
                              long bishops,
                              long rooks,
@@ -423,7 +711,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private PieceLayout pieceLayout(final Player player) {
     final int opposingKingPosition = player.getOpponent().getPlayerKing().getPiecePosition();
 
-    int material = 0;
+    double material = 0;
     long knights = 0L;
     long bishops = 0L;
     long rooks = 0L;
@@ -433,9 +721,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     double kingTropism = 0;
 
     for (final Piece piece : player.getActivePieces()) {
-      material += piece.getPieceValue();
-
       if (piece.getPieceType() == Piece.PieceType.KING) {
+        material += piece.getPieceValue();
         continue;
       }
 
@@ -448,28 +735,33 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
       switch (piece.getPieceType()) {
         case QUEEN:
+          material += WEIGHTS.get(QUEEN_VALUE);
           queens |= tile;
           heavyPieceFiles |= 1 << (position % 8);
-          kingTropism += (7 - distance) * 6 * pieceValue;
+          kingTropism += (7 - distance) * WEIGHTS.get(QUEEN_TROPISM) * pieceValue;
           break;
         case ROOK:
+          material += WEIGHTS.get(ROOK_VALUE);
           rooks |= tile;
           heavyPieceFiles |= 1 << (position % 8);
-          kingTropism += (7 - distance) * 4 * pieceValue;
+          kingTropism += (7 - distance) * WEIGHTS.get(ROOK_TROPISM) * pieceValue;
           break;
         case BISHOP:
+          material += WEIGHTS.get(BISHOP_VALUE);
           bishops |= tile;
-          kingTropism += (7 - distance) * 3 * pieceValue;
+          kingTropism += (7 - distance) * WEIGHTS.get(BISHOP_TROPISM) * pieceValue;
           break;
         case KNIGHT:
+          material += WEIGHTS.get(KNIGHT_VALUE);
           knights |= tile;
           if (distance <= 3) {
-            kingTropism += (4 - distance) * 4 * pieceValue;
+            kingTropism += (4 - distance) * WEIGHTS.get(KNIGHT_TROPISM) * pieceValue;
           }
           break;
         case PAWN:
+          material += WEIGHTS.get(PAWN_VALUE);
           if (distance <= 2) {
-            kingTropism += (3 - distance) * 2 * pieceValue;
+            kingTropism += (3 - distance) * WEIGHTS.get(PAWN_TROPISM) * pieceValue;
           }
           break;
       }
@@ -493,14 +785,15 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static double kingTermWeight(final PieceLayout whiteLayout,
                                        final PieceLayout blackLayout) {
     final int material = nonPawnMaterial(whiteLayout) + nonPawnMaterial(blackLayout);
-    if (material >= KING_TERMS_FULL_MATERIAL) {
+    final double fullMaterial = WEIGHTS.get(KING_TERMS_FULL_MATERIAL);
+    final double zeroMaterial = WEIGHTS.get(KING_TERMS_ZERO_MATERIAL);
+    if (material >= fullMaterial) {
       return 1.0;
     }
-    if (material <= KING_TERMS_ZERO_MATERIAL) {
+    if (material <= zeroMaterial) {
       return 0.0;
     }
-    return (double) (material - KING_TERMS_ZERO_MATERIAL) /
-            (KING_TERMS_FULL_MATERIAL - KING_TERMS_ZERO_MATERIAL);
+    return (material - zeroMaterial) / (fullMaterial - zeroMaterial);
   }
 
   /**
@@ -567,7 +860,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     double materialScore = playerLayout.material();
 
     if (Long.bitCount(playerLayout.bishops()) >= 2) {
-      materialScore += 45;
+      materialScore += WEIGHTS.get(TWO_BISHOPS);
     }
 
     return materialScore;
@@ -586,12 +879,16 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final int[] moveCountByPieceType = playerStatistics.moveCountByPieceType();
     double mobilityScore = 0;
 
-    mobilityScore += moveCountByPieceType[Piece.PieceType.KNIGHT.ordinal()] * 4.5;
-    mobilityScore += moveCountByPieceType[Piece.PieceType.BISHOP.ordinal()] * 5.0;
-    mobilityScore += moveCountByPieceType[Piece.PieceType.ROOK.ordinal()] * 4.0;
-    mobilityScore += moveCountByPieceType[Piece.PieceType.QUEEN.ordinal()] * 2.0;
+    mobilityScore += moveCountByPieceType[Piece.PieceType.KNIGHT.ordinal()] *
+            WEIGHTS.get(KNIGHT_MOBILITY);
+    mobilityScore += moveCountByPieceType[Piece.PieceType.BISHOP.ordinal()] *
+            WEIGHTS.get(BISHOP_MOBILITY);
+    mobilityScore += moveCountByPieceType[Piece.PieceType.ROOK.ordinal()] *
+            WEIGHTS.get(ROOK_MOBILITY);
+    mobilityScore += moveCountByPieceType[Piece.PieceType.QUEEN.ordinal()] *
+            WEIGHTS.get(QUEEN_MOBILITY);
 
-    mobilityScore += playerStatistics.moveCount() * 5.0;
+    mobilityScore += playerStatistics.moveCount() * WEIGHTS.get(MOBILITY);
 
     return mobilityScore;
   }
@@ -615,7 +912,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final int kingPosition = playerKing.getPiecePosition();
 
     if (playerKing.isOnCastledSquare()) {
-      kingSafetyScore += 40;
+      kingSafetyScore += WEIGHTS.get(KING_ON_CASTLED_SQUARE);
     }
 
     kingSafetyScore += evaluatePawnShield(player.getAlliance(), kingPosition, playerPawns);
@@ -647,16 +944,16 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final int intactFileCount = Integer.bitCount(occupiedFiles(shieldPawns));
 
     if (pawnsInShield >= 3) {
-      shieldScore += 35;
+      shieldScore += WEIGHTS.get(SHIELD_THREE_PAWNS);
     } else if (pawnsInShield == 2) {
-      shieldScore += 20;
+      shieldScore += WEIGHTS.get(SHIELD_TWO_PAWNS);
     } else if (pawnsInShield == 1) {
-      shieldScore += 5;
+      shieldScore += WEIGHTS.get(SHIELD_ONE_PAWN);
     } else {
-      shieldScore -= 20;
+      shieldScore -= WEIGHTS.get(SHIELD_NO_PAWN);
     }
 
-    shieldScore += intactFileCount * 10;
+    shieldScore += intactFileCount * WEIGHTS.get(SHIELD_FILE);
 
     return shieldScore;
   }
@@ -675,19 +972,25 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final int[] nearKingCount = opponentStatistics.nearKingCountByPieceType();
     final int attacksNearKing = opponentStatistics.nearKingSquareCount();
 
-    exposureScore += nearKingCount[Piece.PieceType.QUEEN.ordinal()] * 10;
-    exposureScore += nearKingCount[Piece.PieceType.ROOK.ordinal()] * 7;
-    exposureScore += nearKingCount[Piece.PieceType.BISHOP.ordinal()] * 5;
-    exposureScore += nearKingCount[Piece.PieceType.KNIGHT.ordinal()] * 5;
-    exposureScore += nearKingCount[Piece.PieceType.PAWN.ordinal()] * 2;
-    exposureScore += nearKingCount[Piece.PieceType.KING.ordinal()] * 2;
+    exposureScore += nearKingCount[Piece.PieceType.QUEEN.ordinal()] *
+            WEIGHTS.get(QUEEN_MOVE_NEAR_KING);
+    exposureScore += nearKingCount[Piece.PieceType.ROOK.ordinal()] *
+            WEIGHTS.get(ROOK_MOVE_NEAR_KING);
+    exposureScore += nearKingCount[Piece.PieceType.BISHOP.ordinal()] *
+            WEIGHTS.get(BISHOP_MOVE_NEAR_KING);
+    exposureScore += nearKingCount[Piece.PieceType.KNIGHT.ordinal()] *
+            WEIGHTS.get(KNIGHT_MOVE_NEAR_KING);
+    exposureScore += nearKingCount[Piece.PieceType.PAWN.ordinal()] *
+            WEIGHTS.get(PAWN_MOVE_NEAR_KING);
+    exposureScore += nearKingCount[Piece.PieceType.KING.ordinal()] *
+            WEIGHTS.get(KING_MOVE_NEAR_KING);
 
     if (attacksNearKing > 2) {
-      exposureScore += (attacksNearKing - 2) * 15;
+      exposureScore += (attacksNearKing - 2) * WEIGHTS.get(EXCESS_MOVE_NEAR_KING);
     }
 
     if (player.isInCheck()) {
-      exposureScore += 30;
+      exposureScore += WEIGHTS.get(IN_CHECK);
     }
 
     return exposureScore;
@@ -709,10 +1012,10 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final int heavyPieceFiles = opponentLayout.heavyPieceFiles();
 
     if (!isPawnOnFile(kingFile, playerPawns)) {
-      openFileScore += 25;
+      openFileScore += WEIGHTS.get(KING_FILE_OPEN);
 
       if ((heavyPieceFiles & (1 << kingFile)) != 0) {
-        openFileScore += 35;
+        openFileScore += WEIGHTS.get(KING_FILE_HEAVY_PIECE);
       }
     }
 
@@ -720,10 +1023,10 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       if (file == kingFile) continue;
 
       if (!isPawnOnFile(file, playerPawns)) {
-        openFileScore += 15;
+        openFileScore += WEIGHTS.get(ADJACENT_FILE_OPEN);
 
         if ((heavyPieceFiles & (1 << file)) != 0) {
-          openFileScore += 25;
+          openFileScore += WEIGHTS.get(ADJACENT_FILE_HEAVY_PIECE);
         }
       }
     }
@@ -806,10 +1109,11 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
         final int rank = pawnPosition / 8;
         final int advancementBonus = alliance.isWhite() ? 7 - rank : rank;
 
-        passedPawnScore += 20 + (advancementBonus * 10);
+        passedPawnScore += WEIGHTS.get(PASSED_PAWN) +
+                (advancementBonus * WEIGHTS.get(PASSED_PAWN_RANK));
 
         if (isPawnProtected(pawnPosition, playerPawns, alliance)) {
-          passedPawnScore += 15;
+          passedPawnScore += WEIGHTS.get(PASSED_PAWN_PROTECTED);
         }
       }
     }
@@ -837,7 +1141,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     for (final int pawnPosition : playerPawns.positions()) {
       if (isPassedPawn(pawnPosition, opponentPawns, alliance) &&
               !opponentControlsStopSquare(pawnPosition, alliance, opponentPieces, board)) {
-        stopSquareScore += 10;
+        stopSquareScore += WEIGHTS.get(PASSED_PAWN_FREE_STOP_SQUARE);
       }
     }
 
@@ -946,7 +1250,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     }
 
     if (islands > 1) {
-      islandScore -= (islands - 1) * 10;
+      islandScore -= (islands - 1) * WEIGHTS.get(PAWN_ISLAND);
     }
 
     return islandScore;
@@ -963,7 +1267,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
     for (int count : playerPawns.countByFile()) {
       if (count > 1) {
-        doubledPawnScore -= (count - 1) * 20;
+        doubledPawnScore -= (count - 1) * WEIGHTS.get(DOUBLED_PAWN);
       }
     }
 
@@ -992,14 +1296,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       }
 
       if (isIsolated) {
-        isolatedPawnScore -= 15;
+        isolatedPawnScore -= WEIGHTS.get(ISOLATED_PAWN);
 
         if (isOnSemiOpenFile(pawnFile, opponentPawns)) {
-          isolatedPawnScore -= 5;
+          isolatedPawnScore -= WEIGHTS.get(ISOLATED_PAWN_SEMI_OPEN);
         }
 
         if (pawnFile > 1 && pawnFile < 6) {
-          isolatedPawnScore -= 5;
+          isolatedPawnScore -= WEIGHTS.get(ISOLATED_PAWN_CENTRAL);
         }
       }
     }
@@ -1033,10 +1337,10 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
     for (final int pawnPosition : playerPawns.positions()) {
       if (isBackward(alliance, pawnPosition, playerPawns)) {
-        backwardPawnScore -= 20;
+        backwardPawnScore -= WEIGHTS.get(BACKWARD_PAWN);
 
         if (isOnSemiOpenFile(pawnPosition % 8, opponentPawns)) {
-          backwardPawnScore -= 5;
+          backwardPawnScore -= WEIGHTS.get(BACKWARD_PAWN_SEMI_OPEN);
         }
       }
     }
@@ -1104,10 +1408,10 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       }
     }
 
-    pawnChainScore += chainLinks * 8;
+    pawnChainScore += chainLinks * WEIGHTS.get(PAWN_CHAIN_LINK);
 
     if (chainLinks >= 3) {
-      pawnChainScore += 10;
+      pawnChainScore += WEIGHTS.get(PAWN_CHAIN);
     }
 
     return pawnChainScore;
@@ -1154,10 +1458,11 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
     for (final int centralSquare : centralSquares) {
       if (playerPawns.hasPawnAt(centralSquare)) {
-        centralControlScore += 25;
+        centralControlScore += WEIGHTS.get(CENTRAL_PAWN);
       }
 
-      centralControlScore += attackCountBySquare[centralSquare] * 15;
+      centralControlScore += attackCountBySquare[centralSquare] *
+              WEIGHTS.get(CENTRAL_PAWN_ATTACK);
     }
 
     return centralControlScore;
@@ -1202,7 +1507,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final boolean hasDarkSquareBishop = (bishops & ~LIGHT_TILES) != 0L;
 
     if (hasLightSquareBishop && hasDarkSquareBishop) {
-      bishopPairScore += 50;
+      bishopPairScore += WEIGHTS.get(BISHOP_PAIR);
     }
 
     return bishopPairScore;
@@ -1233,11 +1538,11 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
         sameFilePairs += rooksOnFile * (rooksOnFile - 1) / 2;
       }
 
-      rookScore += sameRankPairs * 20;
-      rookScore += sameFilePairs * 15;
+      rookScore += sameRankPairs * WEIGHTS.get(ROOKS_SHARING_RANK);
+      rookScore += sameFilePairs * WEIGHTS.get(ROOKS_SHARING_FILE);
 
       if (sameRankPairs + sameFilePairs > 0) {
-        rookScore += 10;
+        rookScore += WEIGHTS.get(ROOKS_CONNECTED);
       }
     }
 
@@ -1245,7 +1550,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       final int rookFile = Long.numberOfTrailingZeros(remaining) % 8;
 
       if (!isPawnOnFile(rookFile, playerPawns)) {
-        rookScore += isPawnOnFile(rookFile, opponentPawns) ? 10 : 20;
+        rookScore += isPawnOnFile(rookFile, opponentPawns) ?
+                WEIGHTS.get(ROOK_SEMI_OPEN_FILE) :
+                WEIGHTS.get(ROOK_OPEN_FILE);
       }
     }
 
@@ -1279,14 +1586,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
         boolean canBeAttackedByPawn = opponentPawns.attackCountBySquare()[position] > 0;
 
         if (!canBeAttackedByPawn) {
-          outpostScore += 20;
+          outpostScore += WEIGHTS.get(KNIGHT_OUTPOST);
 
           if (playerPawns.attackCountBySquare()[position] > 0) {
-            outpostScore += 15;
+            outpostScore += WEIGHTS.get(KNIGHT_OUTPOST_PROTECTED);
           }
 
           if (file >= 2 && file <= 5) {
-            outpostScore += 10;
+            outpostScore += WEIGHTS.get(KNIGHT_OUTPOST_CENTRAL);
           }
         }
       }
@@ -1335,14 +1642,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
               && pieceValue > Piece.PieceType.PAWN.getPieceValue();
 
       if (outnumbered || harriedByPawn) {
-        largestThreat = Math.max(largestThreat, pieceValue * THREAT_FRACTION);
+        largestThreat = Math.max(largestThreat, pieceValue * WEIGHTS.get(THREAT_FRACTION));
       } else if (attackCount == 0 && protectionCount > 0) {
-        protectionScore += 8;
+        protectionScore += WEIGHTS.get(PROTECTED_PIECE);
 
         if (piece.getPieceType() == Piece.PieceType.QUEEN) {
-          protectionScore += 6 * protectionCount;
+          protectionScore += WEIGHTS.get(QUEEN_DEFENDER) * protectionCount;
         } else if (piece.getPieceType() == Piece.PieceType.ROOK) {
-          protectionScore += 4 * protectionCount;
+          protectionScore += WEIGHTS.get(ROOK_DEFENDER) * protectionCount;
         }
       }
     }
@@ -1375,13 +1682,13 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       int distanceFromCenter = fileDistance + rankDistance;
 
       if ((knights & tile) != 0L) {
-        activityScore += (6 - distanceFromCenter) * 5;
+        activityScore += (6 - distanceFromCenter) * WEIGHTS.get(KNIGHT_CENTRALITY);
       } else if ((bishops & tile) != 0L) {
-        activityScore += (6 - distanceFromCenter) * 4;
+        activityScore += (6 - distanceFromCenter) * WEIGHTS.get(BISHOP_CENTRALITY);
       } else if ((rooks & tile) != 0L) {
-        activityScore += (3 - fileDistance) * 3;
+        activityScore += (3 - fileDistance) * WEIGHTS.get(ROOK_CENTRALITY);
       } else {
-        activityScore += (6 - distanceFromCenter) * 2;
+        activityScore += (6 - distanceFromCenter) * WEIGHTS.get(QUEEN_CENTRALITY);
       }
     }
 
@@ -1404,13 +1711,13 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     double spaceScore = 0;
     final int[] controlledSquares = playerStatistics.destinationCount();
 
-    spaceScore += playerStatistics.spaceCount() * 1.0;
+    spaceScore += playerStatistics.spaceCount() * WEIGHTS.get(SPACE);
     final int moveAdvantage = playerStatistics.moveCount() - opponentStatistics.moveCount();
-    spaceScore += Math.max(-10, Math.min(moveAdvantage, 10)) * 3;
+    spaceScore += Math.max(-10, Math.min(moveAdvantage, 10)) * WEIGHTS.get(MOVE_ADVANTAGE);
 
     final int[] keySquares = {27, 28, 35, 36};
     for (final int square : keySquares) {
-      spaceScore += controlledSquares[square] * 5;
+      spaceScore += controlledSquares[square] * WEIGHTS.get(CENTRAL_SQUARE_MOVE);
     }
 
     return spaceScore;
@@ -1448,29 +1755,29 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     if (pawnAttacking) attackingPiecesCount++;
 
     if (attackingPiecesCount >= 2) {
-      attackScore += 20 * attackingPiecesCount;
-      attackScore += 10 * attackingSquaresCount;
+      attackScore += WEIGHTS.get(KING_ATTACKER) * attackingPiecesCount;
+      attackScore += WEIGHTS.get(KING_ATTACK_MOVE) * attackingSquaresCount;
 
-      if (queenAttacking) attackScore += 40;
-      if (rookAttacking) attackScore += 30;
-      if (bishopAttacking) attackScore += 20;
-      if (knightAttacking) attackScore += 15;
-      if (pawnAttacking) attackScore += 10;
+      if (queenAttacking) attackScore += WEIGHTS.get(QUEEN_KING_ATTACK);
+      if (rookAttacking) attackScore += WEIGHTS.get(ROOK_KING_ATTACK);
+      if (bishopAttacking) attackScore += WEIGHTS.get(BISHOP_KING_ATTACK);
+      if (knightAttacking) attackScore += WEIGHTS.get(KNIGHT_KING_ATTACK);
+      if (pawnAttacking) attackScore += WEIGHTS.get(PAWN_KING_ATTACK);
 
       final boolean opponentKingOnCastledSquare = opponentKing.isOnCastledSquare();
       final boolean opponentChecked = player.getOpponent().isInCheck();
 
       if (opponentChecked) {
-        attackScore += 50;
+        attackScore += WEIGHTS.get(KING_ATTACK_CHECK);
       }
 
       if (!opponentKingOnCastledSquare) {
-        attackScore += 30;
+        attackScore += WEIGHTS.get(KING_ATTACK_UNCASTLED);
       }
 
       final int defendingPiecesCount =
               Long.bitCount(KING_ZONES[kingPosition] & opponentLayout.nonKingPieces());
-      attackScore -= defendingPiecesCount * 15;
+      attackScore -= defendingPiecesCount * WEIGHTS.get(KING_ZONE_DEFENDER);
     }
 
     return attackScore;
@@ -1521,14 +1828,15 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final long rooksOnSeventh = rooks & (RANK_TILES << (seventhRank * 8));
 
     for (long remaining = rooksOnSeventh; remaining != 0L; remaining &= remaining - 1) {
-      rookScore += 30;
-      rookScore += 10 * Integer.bitCount(opponentPawns.filesByRank()[seventhRank]);
+      rookScore += WEIGHTS.get(ROOK_ON_SEVENTH);
+      rookScore += WEIGHTS.get(ROOK_ON_SEVENTH_PAWN) *
+              Integer.bitCount(opponentPawns.filesByRank()[seventhRank]);
 
       final King opponentKing = opposingKing(board, alliance);
       final int kingRank = opponentKing.getPiecePosition() / 8;
 
       if ((alliance.isWhite() && kingRank == 0) || (!alliance.isWhite() && kingRank == 7)) {
-        rookScore += 20;
+        rookScore += WEIGHTS.get(ROOK_ON_SEVENTH_KING);
       }
     }
 
@@ -1550,11 +1858,11 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final int queensideBishopPosition = alliance.isWhite() ? 49 : 9;
 
     if (((bishops >>> kingsideBishopPosition) & 1L) != 0L) {
-      fianchettoScore += 20;
+      fianchettoScore += WEIGHTS.get(KINGSIDE_FIANCHETTO);
     }
 
     if (((bishops >>> queensideBishopPosition) & 1L) != 0L) {
-      fianchettoScore += 15;
+      fianchettoScore += WEIGHTS.get(QUEENSIDE_FIANCHETTO);
     }
 
     return fianchettoScore;
@@ -1576,9 +1884,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
               getPawnsOnSameColor(playerPawns, Long.numberOfTrailingZeros(remaining));
 
       if (pawnsOnSameColor >= 3) {
-        badBishopScore -= 20;
+        badBishopScore -= WEIGHTS.get(BAD_BISHOP_THREE_PAWNS);
       } else if (pawnsOnSameColor == 2) {
-        badBishopScore -= 10;
+        badBishopScore -= WEIGHTS.get(BAD_BISHOP_TWO_PAWNS);
       }
     }
 
@@ -1617,7 +1925,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       final int file = position % 8;
 
       if (file >= 2 && file <= 5 && rank >= 2 && rank <= 5) {
-        queenScore += 10;
+        queenScore += WEIGHTS.get(QUEEN_CENTRAL);
       }
 
       boolean queenTooAdvanced = false;
@@ -1631,7 +1939,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
         int supportingPieces = getSupportingPieces(playerLayout, alliance, rank);
 
         if (supportingPieces < 2) {
-          queenScore -= 25;
+          queenScore -= WEIGHTS.get(QUEEN_UNSUPPORTED);
         }
       }
 
@@ -1640,9 +1948,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
       final int distance = calculateChebyshevDistance(position, kingPosition);
       if (distance <= 2) {
-        queenScore += 20;
+        queenScore += WEIGHTS.get(QUEEN_NEAR_KING);
       } else if (distance == 3) {
-        queenScore += 10;
+        queenScore += WEIGHTS.get(QUEEN_THREE_FROM_KING);
       }
     }
 
