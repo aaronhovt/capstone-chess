@@ -1121,7 +1121,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     final boolean inCheckAtNode = board.currentPlayer().isInCheck();
 
-    if (depth == 1 && !inCheckAtNode) {
+    // No static evaluation reaches a mate score, so razoring against a mate bound would send every
+    // such node to quiescence, which cannot find a shorter mate that ends in a quiet move.
+    if (depth == 1 && !inCheckAtNode && alpha < MATE_THRESHOLD) {
       double eval = getCachedEvaluation(board);
       if (eval + RAZOR_MARGIN < alpha) {
         return quiescenceSearch(board, alpha, beta, ply, true);
@@ -1335,7 +1337,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     final boolean inCheckAtNode = board.currentPlayer().isInCheck();
 
-    if (depth == 1 && !inCheckAtNode) {
+    // No static evaluation reaches a mate score, so razoring against a mate bound would send every
+    // such node to quiescence, which cannot find a shorter mate that ends in a quiet move.
+    if (depth == 1 && !inCheckAtNode && beta > -MATE_THRESHOLD) {
       double eval = getCachedEvaluation(board);
       if (eval - RAZOR_MARGIN > beta) {
         return quiescenceSearch(board, alpha, beta, ply, false);
