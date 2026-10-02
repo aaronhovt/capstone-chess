@@ -2,14 +2,17 @@ package engine.forPlayer.forAI;
 
 import engine.Alliance;
 
+import java.util.Arrays;
+
 /**
  * The PawnStructureCache class holds pawn structure scores keyed by the tiles each player's pawns
  * occupy. It is a fixed table of slots indexed by a hash of both occupancies, and each slot holds
  * the occupancies it was stored under, so a lookup never returns the scores of a different pawn
  * placement. A store overwrites whatever slot the occupancies index.
  * <p>
- * Callers may store only scores that depend on nothing but the placement of both players' pawns.
- * Such a score never goes stale, so a cache is never cleared and may be shared by every thread and
+ * Callers may store only scores that depend on nothing but the placement of both players' pawns
+ * and the owning evaluator's weights. Such a score stays valid until a weight changes, and the
+ * owning evaluator clears the cache when one does, so a cache may be shared by every thread and
  * every engine that uses the evaluator owning it.
  * <p>
  * Reads and writes take no locks. Each slot holds a reference to an immutable entry, so a lookup
@@ -71,6 +74,14 @@ public class PawnStructureCache {
    */
   public void store(final Entry entry) {
     this.entries[index(entry.whiteOccupancy(), entry.blackOccupancy())] = entry;
+  }
+
+  /**
+   * Empties every slot. It must not be called while another thread stores into or probes this
+   * cache.
+   */
+  public void clear() {
+    Arrays.fill(this.entries, null);
   }
 
   /**

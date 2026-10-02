@@ -25,11 +25,15 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** Singleton instance of the EndgameBoardEvaluator. */
   private static final EndgameBoardEvaluator Instance = new EndgameBoardEvaluator();
 
+  /** The pawn structure scores of both players, keyed by the tiles their pawns occupy. */
+  private static final PawnStructureCache PAWN_STRUCTURE_CACHE = new PawnStructureCache();
+
   /**
    * The weights this evaluator scores with. Each index constant below names one weight, and its
-   * description states what the weight scores.
+   * description states what the weight scores. Changing a weight clears the pawn structure cache.
    */
-  private static final EvaluationWeights WEIGHTS = new EvaluationWeights();
+  private static final EvaluationWeights WEIGHTS =
+          new EvaluationWeights(PAWN_STRUCTURE_CACHE::clear);
 
   /** The material value of a pawn. */
   private static final int PAWN_VALUE = WEIGHTS.add("PAWN_VALUE", 100);
@@ -248,9 +252,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
   /** The tiles on which a black pawn promotes, as one bit per tile. */
   private static final long BLACK_PROMOTION_TILES = computePromotionTiles(Alliance.BLACK);
-
-  /** The pawn structure scores of both players, keyed by the tiles their pawns occupy. */
-  private static final PawnStructureCache PAWN_STRUCTURE_CACHE = new PawnStructureCache();
 
   /** Private constructor to prevent instantiation outside of class. */
   private EndgameBoardEvaluator() {}

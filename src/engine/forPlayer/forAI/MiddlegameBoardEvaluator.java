@@ -28,10 +28,17 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final MiddlegameBoardEvaluator Instance = new MiddlegameBoardEvaluator();
 
   /**
-   * The weights this evaluator scores with. Each index constant below names one weight, and its
-   * description states what the weight scores.
+   * The scores of both players' pawn structure terms that read nothing but pawns, keyed by the
+   * tiles their pawns occupy.
    */
-  private static final EvaluationWeights WEIGHTS = new EvaluationWeights();
+  private static final PawnStructureCache PAWN_STRUCTURE_CACHE = new PawnStructureCache();
+
+  /**
+   * The weights this evaluator scores with. Each index constant below names one weight, and its
+   * description states what the weight scores. Changing a weight clears the pawn structure cache.
+   */
+  private static final EvaluationWeights WEIGHTS =
+          new EvaluationWeights(PAWN_STRUCTURE_CACHE::clear);
 
   /** The material value of a pawn. */
   private static final int PAWN_VALUE = WEIGHTS.add("PAWN_VALUE", 100);
@@ -377,12 +384,6 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
   /** The tiles whose rank and file sum to an even number, as one bit per tile. */
   private static final long LIGHT_TILES = 0xAA55AA55AA55AA55L;
-
-  /**
-   * The scores of both players' pawn structure terms that read nothing but pawns, keyed by the
-   * tiles their pawns occupy.
-   */
-  private static final PawnStructureCache PAWN_STRUCTURE_CACHE = new PawnStructureCache();
 
   /**
    * Private constructor to prevent instantiation outside of the class.

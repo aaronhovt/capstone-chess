@@ -11,11 +11,24 @@ import java.util.Arrays;
  */
 public final class EvaluationWeights {
 
+  /** The action run after a weight changes, which discards whatever the old value produced. */
+  private final Runnable onChange;
+
   /** The name of each weight, indexed by the weight's index. */
   private String[] names = new String[0];
 
   /** The value of each weight, indexed by the weight's index. */
   private double[] values = new double[0];
+
+  /**
+   * Constructs an empty set of weights.
+   *
+   * @param onChange The action to run after any weight is changed by {@link #set}, such as
+   *                 clearing a cache of scores computed with the old values.
+   */
+  EvaluationWeights(final Runnable onChange) {
+    this.onChange = onChange;
+  }
 
   /**
    * Adds a weight with the given name and value and returns its index. Weights must be added
@@ -66,5 +79,19 @@ public final class EvaluationWeights {
    */
   public double get(final int index) {
     return this.values[index];
+  }
+
+  /**
+   * Sets the value of the weight at the given index and runs the change action given at
+   * construction. It must not be called while the owning evaluator is evaluating on any thread,
+   * and an evaluation on another thread sees the new value only if that thread synchronizes with
+   * the caller afterwards, as a task submitted to an executor after this returns does.
+   *
+   * @param index The index of the weight.
+   * @param value The new value of the weight.
+   */
+  public void set(final int index, final double value) {
+    this.values[index] = value;
+    this.onChange.run();
   }
 }
