@@ -2,6 +2,7 @@ package engine.forPlayer.forAI;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ComparisonChain;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
 import engine.forBoard.Move;
@@ -1037,52 +1038,48 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Returns whether a legal move, already made on the board, may be skipped without a search
-   * because it is a quiet move late in the move order at a shallow node. A capture, a promotion,
-   * a checking move, and any move at a node in check are never prunable. The caller applies its
-   * own mate guard on the window.
+   * Returns whether a move, not yet made on the board, may be skipped without a search because it
+   * is a quiet move late in the move order at a shallow node. A capture, a promotion, and any move
+   * at a node in check are never prunable. A checking move is not prunable either, which the
+   * caller tests, and the caller applies its own mate guard on the window.
    *
    * @param move The move under consideration.
    * @param depth The remaining search depth at the node.
    * @param movesSearched The number of legal moves already searched at the node.
    * @param inCheckAtNode Whether the side to move at the node is in check.
-   * @param givesCheck Whether the move gives check.
-   * @return true if the move may be skipped.
+   * @return true if the move may be skipped unless it gives check.
    */
   private static boolean isLateMovePrunable(final Move move, final int depth,
-                                            final int movesSearched, final boolean inCheckAtNode,
-                                            final boolean givesCheck) {
+                                            final int movesSearched, final boolean inCheckAtNode) {
     return depth <= LATE_MOVE_PRUNING_DEPTH
             && movesSearched >= 3 + depth * depth
             && !inCheckAtNode
-            && !givesCheck
             && !move.isAttack()
             && !(move instanceof Move.PawnPromotion);
   }
 
   /**
-   * Returns whether a legal move, already made on the board, may be skipped without a search
-   * because it is a quiet move at a shallow node whose static score falls short of the bound by at
-   * least the quiet move futility margin for the remaining depth. The first move searched at a
-   * node, a capture, a promotion, a checking move, and any move at a node in check are never
-   * prunable. The caller applies its own mate guard on the bound.
+   * Returns whether a move, not yet made on the board, may be skipped without a search because it
+   * is a quiet move at a shallow node whose static score falls short of the bound by at least the
+   * quiet move futility margin for the remaining depth. The first move searched at a node, a
+   * capture, a promotion, and any move at a node in check are never prunable. A checking move is
+   * not prunable either, which the caller tests, and the caller applies its own mate guard on the
+   * bound.
    *
    * @param move The move under consideration.
    * @param depth The remaining search depth at the node.
    * @param movesSearched The number of legal moves already searched at the node.
    * @param inCheckAtNode Whether the side to move at the node is in check.
-   * @param givesCheck Whether the move gives check.
    * @param shortfall How far the static score of the node falls short of the bound the side to
    *                  move must pass, positive when it falls short.
-   * @return true if the move may be skipped.
+   * @return true if the move may be skipped unless it gives check.
    */
   private static boolean isFutileQuietMove(final Move move, final int depth,
                                            final int movesSearched, final boolean inCheckAtNode,
-                                           final boolean givesCheck, final double shortfall) {
+                                           final double shortfall) {
     return depth <= QUIET_FUTILITY_DEPTH
             && movesSearched > 0
             && !inCheckAtNode
-            && !givesCheck
             && !move.isAttack()
             && !(move instanceof Move.PawnPromotion)
             && shortfall >= depth * QUIET_FUTILITY_MARGIN;
@@ -1225,6 +1222,17 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         continue;
       }
 
+      // A quiet move cannot find a shorter mate once a mate is the bound, so futility is not
+      // applied against a winning mate bound. A pruned move is skipped before it is made, legal
+      // or not, so whether it gives check is answered without making it.
+      if (((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode)
+              && alpha > -MATE_THRESHOLD)
+              || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode,
+                      currentAlpha - nodeEval) && currentAlpha < MATE_THRESHOLD))
+              && !AttackDetector.givesCheck(board, move)) {
+        continue;
+      }
+
       board.makeMove(move);
       if (board.currentPlayer().getOpponent().isInCheck()) {
         board.unmakeMove();
@@ -1232,15 +1240,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
 
       final boolean givesCheck = board.currentPlayer().isInCheck();
-      // A quiet move cannot find a shorter mate once a mate is the bound, so futility is not
-      // applied against a winning mate bound.
-      if ((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode, givesCheck)
-              && alpha > -MATE_THRESHOLD)
-              || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode, givesCheck,
-                      currentAlpha - nodeEval) && currentAlpha < MATE_THRESHOLD)) {
-        board.unmakeMove();
-        continue;
-      }
 
       double currentValue;
       try {
@@ -1447,6 +1446,17 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         continue;
       }
 
+      // A quiet move cannot find a shorter mate once a mate is the bound, so futility is not
+      // applied against a winning mate bound. A pruned move is skipped before it is made, legal
+      // or not, so whether it gives check is answered without making it.
+      if (((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode)
+              && beta < MATE_THRESHOLD)
+              || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode,
+                      nodeEval - currentBeta) && currentBeta > -MATE_THRESHOLD))
+              && !AttackDetector.givesCheck(board, move)) {
+        continue;
+      }
+
       board.makeMove(move);
       if (board.currentPlayer().getOpponent().isInCheck()) {
         board.unmakeMove();
@@ -1454,15 +1464,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
 
       final boolean givesCheck = board.currentPlayer().isInCheck();
-      // A quiet move cannot find a shorter mate once a mate is the bound, so futility is not
-      // applied against a winning mate bound.
-      if ((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode, givesCheck)
-              && beta < MATE_THRESHOLD)
-              || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode, givesCheck,
-                      nodeEval - currentBeta) && currentBeta > -MATE_THRESHOLD)) {
-        board.unmakeMove();
-        continue;
-      }
 
       double currentValue;
       try {

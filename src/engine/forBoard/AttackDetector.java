@@ -87,6 +87,12 @@ public final class AttackDetector {
   /** The squares from which a black pawn attacks each square, indexed by square. */
   private static final int[][] BLACK_PAWN_ATTACKERS = computePawnAttackers(Alliance.BLACK);
 
+  /** Marks a square that a move does not use. */
+  private static final int NO_SQUARE = -1;
+
+  /** The squares a piece with no step attack attacks from. */
+  private static final int[] NO_SQUARES = {};
+
   /** Prevents instantiation, since this class holds only tables and static queries against them. */
   private AttackDetector() {
   }
@@ -116,6 +122,111 @@ public final class AttackDetector {
     }
     return sliderBearsAlong(DIAGONAL_RAYS[square], Piece.PieceType.BISHOP, attackerAlliance, board) ||
             sliderBearsAlong(ORTHOGONAL_RAYS[square], Piece.PieceType.ROOK, attackerAlliance, board);
+  }
+
+  /**
+   * Determines whether the given move would leave the opponent of the side making it in check,
+   * without making the move. The answer is the one making the move and testing the side then to
+   * move for check would give, provided that side is not in check before the move, which holds in
+   * any position reached by legal play. Whether the move is legal is not considered.
+   *
+   * @param board The board the move was generated from, in the position before the move.
+   * @param move The move to test.
+   * @return True if the move would give check, false otherwise.
+   */
+  public static boolean givesCheck(final Board board, final Move move) {
+    final Alliance mover = move.getMovedPiece().getPieceAllegiance();
+    final int kingSquare =
+            board.getKing(mover.isWhite() ? Alliance.BLACK : Alliance.WHITE).getPiecePosition();
+    final int origin = move.getCurrentCoordinate();
+    final int destination = move.getDestinationCoordinate();
+    final Piece.PieceType arrivingType = move instanceof Move.PawnPromotion promotion ?
+            promotion.promotionPiece.getPieceType() : move.getMovedPiece().getPieceType();
+
+    int rookOrigin = NO_SQUARE;
+    int rookDestination = NO_SQUARE;
+    int capturedPawnSquare = NO_SQUARE;
+    if (move instanceof Move.CastleMove castle) {
+      rookOrigin = castle.castleRookStart;
+      rookDestination = castle.castleRookDestination;
+    } else if (move instanceof Move.PawnEnPassantAttack) {
+      capturedPawnSquare = move.getAttackedPiece().getPiecePosition();
+    }
+
+    final int[] stepOrigins = switch (arrivingType) {
+      case PAWN -> mover.isWhite() ? WHITE_PAWN_ATTACKERS[kingSquare]
+              : BLACK_PAWN_ATTACKERS[kingSquare];
+      case KNIGHT -> KNIGHT_ATTACKERS[kingSquare];
+      case KING -> KING_ATTACKERS[kingSquare];
+      default -> NO_SQUARES;
+    };
+    for (final int stepOrigin : stepOrigins) {
+      if (stepOrigin == destination) {
+        return true;
+      }
+    }
+
+    return sliderBearsAfterMove(DIAGONAL_RAYS[kingSquare], Piece.PieceType.BISHOP, mover,
+            board, origin, destination, arrivingType, rookOrigin, rookDestination,
+            capturedPawnSquare) ||
+            sliderBearsAfterMove(ORTHOGONAL_RAYS[kingSquare], Piece.PieceType.ROOK, mover,
+                    board, origin, destination, arrivingType, rookOrigin, rookDestination,
+                    capturedPawnSquare);
+  }
+
+  /**
+   * Determines whether a queen, or a slider of the given type, of the given alliance would stand at
+   * the near end of any of the given rays with nothing in between once a move is made. The move is
+   * described by the squares it empties and fills; a square it does not use is given as
+   * {@link #NO_SQUARE}.
+   *
+   * @param rays The rays out of the square being tested.
+   * @param sliderType The slider other than the queen that travels along these rays.
+   * @param mover The alliance making the move, being the alliance of the piece looked for.
+   * @param board The board in the position before the move.
+   * @param origin The square the moving piece leaves.
+   * @param destination The square the moving piece arrives on.
+   * @param arrivingType The type of the piece arriving on the destination square.
+   * @param rookOrigin The square a castling rook leaves.
+   * @param rookDestination The square a castling rook arrives on.
+   * @param capturedPawnSquare The square of a pawn captured en passant.
+   * @return True if such a piece would bear along one of the rays, false otherwise.
+   */
+  private static boolean sliderBearsAfterMove(final int[][] rays,
+                                              final Piece.PieceType sliderType,
+                                              final Alliance mover, final Board board,
+                                              final int origin, final int destination,
+                                              final Piece.PieceType arrivingType,
+                                              final int rookOrigin, final int rookDestination,
+                                              final int capturedPawnSquare) {
+    for (final int[] ray : rays) {
+      for (final int candidate : ray) {
+        final Piece.PieceType type;
+        final Alliance alliance;
+        if (candidate == destination) {
+          type = arrivingType;
+          alliance = mover;
+        } else if (candidate == rookDestination) {
+          type = Piece.PieceType.ROOK;
+          alliance = mover;
+        } else if (candidate == origin || candidate == rookOrigin ||
+                candidate == capturedPawnSquare) {
+          continue;
+        } else {
+          final Piece piece = board.getPiece(candidate);
+          if (piece == null) {
+            continue;
+          }
+          type = piece.getPieceType();
+          alliance = piece.getPieceAllegiance();
+        }
+        if (alliance == mover && (type == sliderType || type == Piece.PieceType.QUEEN)) {
+          return true;
+        }
+        break;
+      }
+    }
+    return false;
   }
 
   /**
