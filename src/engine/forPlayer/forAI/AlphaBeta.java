@@ -144,6 +144,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** The greatest remaining depth at which quiet moves late in the move order are pruned. */
   private static final int LATE_MOVE_PRUNING_DEPTH = 3;
 
+  /** The greatest remaining depth at which quiet moves are pruned by futility. */
+  private static final int QUIET_FUTILITY_DEPTH = 3;
+
+  /** The quiet move futility pruning margin per ply of remaining depth. */
+  private static final int QUIET_FUTILITY_MARGIN = 75;
+
   /** The least remaining depth at which a null move is searched. */
   private static final int NULL_MOVE_DEPTH = 3;
 
@@ -1055,6 +1061,34 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
+   * Returns whether a legal move, already made on the board, may be skipped without a search
+   * because it is a quiet move at a shallow node whose static score falls short of the bound by at
+   * least the quiet move futility margin for the remaining depth. The first move searched at a
+   * node, a capture, a promotion, a checking move, and any move at a node in check are never
+   * prunable. The caller applies its own mate guard on the bound.
+   *
+   * @param move The move under consideration.
+   * @param depth The remaining search depth at the node.
+   * @param movesSearched The number of legal moves already searched at the node.
+   * @param inCheckAtNode Whether the side to move at the node is in check.
+   * @param givesCheck Whether the move gives check.
+   * @param shortfall How far the static score of the node falls short of the bound the side to
+   *                  move must pass, positive when it falls short.
+   * @return true if the move may be skipped.
+   */
+  private static boolean isFutileQuietMove(final Move move, final int depth,
+                                           final int movesSearched, final boolean inCheckAtNode,
+                                           final boolean givesCheck, final double shortfall) {
+    return depth <= QUIET_FUTILITY_DEPTH
+            && movesSearched > 0
+            && !inCheckAtNode
+            && !givesCheck
+            && !move.isAttack()
+            && !(move instanceof Move.PawnPromotion)
+            && shortfall >= depth * QUIET_FUTILITY_MARGIN;
+  }
+
+  /**
    * Stores an entry in the transposition table unless the search has been stopped. A score
    * produced after the stop flag is raised is not the result of a completed search.
    *
@@ -1177,6 +1211,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
     final int[] exchangeScores = sortedExchangeScores.get()[ply];
+    final double nodeEval = depth <= QUIET_FUTILITY_DEPTH && !inCheckAtNode ?
+            getCachedEvaluation(board) : Double.NaN;
 
     if (ttMoveCode != TranspositionTable.NO_MOVE) {
       moveToFront(sortedMoves, exchangeScores, indexOfMoveCode(sortedMoves, ttMoveCode));
@@ -1196,8 +1232,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
 
       final boolean givesCheck = board.currentPlayer().isInCheck();
-      if (isLateMovePrunable(move, depth, movesSearched, inCheckAtNode, givesCheck)
-              && alpha > -MATE_THRESHOLD) {
+      // A quiet move cannot find a shorter mate once a mate is the bound, so futility is not
+      // applied against a winning mate bound.
+      if ((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode, givesCheck)
+              && alpha > -MATE_THRESHOLD)
+              || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode, givesCheck,
+                      currentAlpha - nodeEval) && currentAlpha < MATE_THRESHOLD)) {
         board.unmakeMove();
         continue;
       }
@@ -1393,6 +1433,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
     final int[] exchangeScores = sortedExchangeScores.get()[ply];
+    final double nodeEval = depth <= QUIET_FUTILITY_DEPTH && !inCheckAtNode ?
+            getCachedEvaluation(board) : Double.NaN;
 
     if (ttMoveCode != TranspositionTable.NO_MOVE) {
       moveToFront(sortedMoves, exchangeScores, indexOfMoveCode(sortedMoves, ttMoveCode));
@@ -1412,8 +1454,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
 
       final boolean givesCheck = board.currentPlayer().isInCheck();
-      if (isLateMovePrunable(move, depth, movesSearched, inCheckAtNode, givesCheck)
-              && beta < MATE_THRESHOLD) {
+      // A quiet move cannot find a shorter mate once a mate is the bound, so futility is not
+      // applied against a winning mate bound.
+      if ((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode, givesCheck)
+              && beta < MATE_THRESHOLD)
+              || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode, givesCheck,
+                      nodeEval - currentBeta) && currentBeta > -MATE_THRESHOLD)) {
         board.unmakeMove();
         continue;
       }
