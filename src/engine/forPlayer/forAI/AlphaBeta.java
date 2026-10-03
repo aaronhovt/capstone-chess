@@ -136,8 +136,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** The transposition table size in megabytes used when a caller does not specify one. */
   private static final int DEFAULT_TABLE_SIZE_MB = 256;
 
-  /** The depth threshold for applying futility pruning. */
-  private static final int FUTILITY_PRUNING_DEPTH = 3;
+  /** The greatest remaining depth at which a node is pruned by reverse futility. */
+  private static final int FUTILITY_PRUNING_DEPTH = 5;
 
   /** The futility pruning margin per ply of remaining depth. */
   private static final int FUTILITY_MARGIN = 65;
@@ -1164,7 +1164,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    if (depth < FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
+    if (depth <= FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
       double eval = getCachedEvaluation(board);
       if (eval >= beta + depth * FUTILITY_MARGIN) {
         return eval;
@@ -1388,7 +1388,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    if (depth < FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
+    if (depth <= FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
       double eval = getCachedEvaluation(board);
       if (eval <= alpha - depth * FUTILITY_MARGIN) {
         return eval;
