@@ -138,6 +138,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** The depth threshold for applying futility pruning. */
   private static final int FUTILITY_PRUNING_DEPTH = 3;
 
+  /** The futility pruning margin per ply of remaining depth. */
+  private static final int FUTILITY_MARGIN = 65;
+
   /** The greatest remaining depth at which quiet moves late in the move order are pruned. */
   private static final int LATE_MOVE_PRUNING_DEPTH = 3;
 
@@ -1132,7 +1135,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     if (depth < FUTILITY_PRUNING_DEPTH && !inCheckAtNode) {
       double eval = getCachedEvaluation(board);
-      if (eval >= beta + (depth * 100)) {
+      if (eval >= beta + depth * FUTILITY_MARGIN) {
         return eval;
       }
     }
@@ -1348,7 +1351,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     if (depth < FUTILITY_PRUNING_DEPTH && !inCheckAtNode) {
       double eval = getCachedEvaluation(board);
-      if (eval <= alpha - (depth * 100)) {
+      if (eval <= alpha - depth * FUTILITY_MARGIN) {
         return eval;
       }
     }
