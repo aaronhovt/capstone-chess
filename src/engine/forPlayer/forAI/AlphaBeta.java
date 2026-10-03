@@ -1164,7 +1164,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    if (depth < FUTILITY_PRUNING_DEPTH && !inCheckAtNode) {
+    if (depth < FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
       double eval = getCachedEvaluation(board);
       if (eval >= beta + depth * FUTILITY_MARGIN) {
         return eval;
@@ -1388,7 +1388,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
     }
 
-    if (depth < FUTILITY_PRUNING_DEPTH && !inCheckAtNode) {
+    if (depth < FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
       double eval = getCachedEvaluation(board);
       if (eval <= alpha - depth * FUTILITY_MARGIN) {
         return eval;
