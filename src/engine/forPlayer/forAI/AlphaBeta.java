@@ -613,7 +613,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     assert mainBoard.getZobristHash() == rootHash :
             "The main search left its board somewhere other than the root position.";
 
-    this.lastScore = bestScore;
+    // Adding zero turns the negative zero that negating a drawn score can produce into zero.
+    this.lastScore = (mainBoard.currentPlayer().getAlliance().isWhite() ? bestScore : -bestScore) + 0.0;
     this.lastDepth = bestDepth;
 
     return bestMove;
@@ -775,7 +776,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * Searches the root with a narrow window centered on the score of the previous iteration. A
    * search whose score reaches or passes a bound is discarded and repeated with that bound moved
    * to infinity. If the repeated search fails on the other bound, the root is searched again with
-   * a full window. A checkmate score from the previous iteration is never narrowed.
+   * a full window. A checkmate score from the previous iteration is never narrowed. Scores are from
+   * the point of view of the side to move at the root.
    *
    * @param board The board this search thread owns, in the root position.
    * @param depth The current search depth.
@@ -820,7 +822,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * found so far, then again against the window from that score to the far bound if it scores
    * strictly inside it. A root move that leaves the mover in check is skipped. A search that is stopped part way returns the best of the moves whose search
    * finished, and the null move if none of them scored inside the window. The move being searched
-   * when the stop came is not considered.
+   * when the stop came is not considered. Bounds and scores are from the point of view of the side
+   * to move at the root.
    *
    * @param board The board this search thread owns, in the root position. It is left in that
    *              position when this method returns.
@@ -845,9 +848,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       rootMoves.add(0, previousBestMove);
     }
 
-    final boolean rootIsWhite = board.currentPlayer().getAlliance().isWhite();
     Move bestMove = MoveFactory.getNullMove();
-    double bestScore = rootIsWhite ? alpha : beta;
+    double bestScore = alpha;
     boolean firstMove = true;
 
     for (final Move move : rootMoves) {
@@ -864,18 +866,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       double score;
       try {
         if (firstMove) {
-          score = rootIsWhite ?
-                  min(board, depth - 1, bestScore, beta, 1, true) :
-                  max(board, depth - 1, alpha, bestScore, 1, true);
-        } else if (rootIsWhite) {
-          score = min(board, depth - 1, bestScore, bestScore + ZERO_WINDOW, 1, true);
-          if (score > bestScore && score < beta) {
-            score = min(board, depth - 1, bestScore, beta, 1, true);
-          }
+          score = -negamax(board, depth - 1, -beta, -bestScore, 1, true);
         } else {
-          score = max(board, depth - 1, bestScore - ZERO_WINDOW, bestScore, 1, true);
-          if (score < bestScore && score > alpha) {
-            score = max(board, depth - 1, alpha, bestScore, 1, true);
+          score = -negamax(board, depth - 1, -(bestScore + ZERO_WINDOW), -bestScore, 1, true);
+          if (score > bestScore && score < beta) {
+            score = -negamax(board, depth - 1, -beta, -bestScore, 1, true);
           }
         }
       } finally {
@@ -887,11 +882,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         break;
       }
 
-      if (rootIsWhite ? score > bestScore : score < bestScore) {
+      if (score > bestScore) {
         bestScore = score;
         bestMove = move;
 
-        if (rootIsWhite ? bestScore >= beta : bestScore <= alpha) {
+        if (bestScore >= beta) {
           recordCounterMove(board, move);
           break;
         }
@@ -905,7 +900,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * The move a root search chose and the score it was given.
    *
    * @param move The best root move found.
-   * @param score The score of that move.
+   * @param score The score of that move, from the point of view of the side to move at the root.
    */
   private record RootResult(Move move, double score) {
   }
@@ -990,14 +985,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    *
    * @param board The terminal board position.
    * @param ply The current search ply, counted from the root.
-   * @return The terminal score, positive when Black is mated and negative when White is mated.
+   * @return The terminal score from the point of view of the side to move, negative when it is
+   *         mated.
    */
   private double terminalScore(final Board board, final int ply) {
     if (!board.currentPlayer().isInCheckMate()) {
       return 0;
     }
-    final double mateScore = MATE_VALUE - ply;
-    return board.currentPlayer().getAlliance().isWhite() ? -mateScore : mateScore;
+    return -(MATE_VALUE - ply);
   }
 
   /**
@@ -1103,8 +1098,20 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Implements the maximizing player portion of the alpha-beta search algorithm
-   * with various pruning techniques and search extensions.
+   * Returns the static evaluation of a position from the point of view of the side to move.
+   *
+   * @param board The board position to evaluate.
+   * @return The evaluation score, positive when the side to move stands better.
+   */
+  private double evaluateForSideToMove(final Board board) {
+    final double score = getCachedEvaluation(board);
+    return board.currentPlayer().getAlliance().isWhite() ? score : -score;
+  }
+
+  /**
+   * Searches a position with alpha-beta search and the pruning techniques and search extensions
+   * of this engine. Scores, bounds and the returned value are all from the point of view of the
+   * side to move.
    *
    * @param board The current board position.
    * @param depth The remaining search depth.
@@ -1112,10 +1119,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * @param beta The beta bound.
    * @param ply The current search ply.
    * @param nullMoveAllowed Whether a null move may be played at this node.
-   * @return The best evaluation score for the maximizing player.
+   * @return The score of the position for the side to move.
    */
-  private double max(final Board board, int depth, double alpha, double beta, int ply,
-                     boolean nullMoveAllowed) {
+  private double negamax(final Board board, int depth, double alpha, double beta, int ply,
+                         boolean nullMoveAllowed) {
     SearchStats stats = threadStats.get();
     stats.boardsEvaluated++;
     if (limitReached(stats)) {
@@ -1125,12 +1132,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     if (ply > 0 && isDrawnByRule(board)) {
       return 0;
     } if (searchStopped) {
-      return depth <= 0 ? quiescenceSearch(board, alpha, beta, ply, true) :
-              getCachedEvaluation(board);
+      return depth <= 0 ? quiescenceSearch(board, alpha, beta, ply) :
+              evaluateForSideToMove(board);
     } if (depth <= 0) {
-      return quiescenceSearch(board, alpha, beta, ply, true);
+      return quiescenceSearch(board, alpha, beta, ply);
     } if (ply >= MAX_PLY) {
-      return getCachedEvaluation(board);
+      return evaluateForSideToMove(board);
     }
 
     // Read before the transposition probe narrows the window. A zero window built by adding
@@ -1158,40 +1165,40 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     // No static evaluation reaches a mate score, so razoring against a mate bound would send every
     // such node to quiescence, which cannot find a shorter mate that ends in a quiet move.
     if (depth == 1 && !inCheckAtNode && alpha < MATE_THRESHOLD) {
-      double eval = getCachedEvaluation(board);
+      double eval = evaluateForSideToMove(board);
       if (eval + RAZOR_MARGIN < alpha) {
-        return quiescenceSearch(board, alpha, beta, ply, true);
+        return quiescenceSearch(board, alpha, beta, ply);
       }
     }
 
     if (depth <= FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
-      double eval = getCachedEvaluation(board);
+      double eval = evaluateForSideToMove(board);
       if (eval >= beta + depth * FUTILITY_MARGIN) {
         return eval;
       }
     }
 
     if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !openWindow && !inCheckAtNode
-            && beta < MATE_THRESHOLD && getCachedEvaluation(board) >= beta
+            && beta < MATE_THRESHOLD && evaluateForSideToMove(board) >= beta
             && hasNonPawnMaterial(board.currentPlayer())) {
       final int R = 3 + depth / 4;
       double nullMoveScore;
       board.makeNullMove();
       try {
-        nullMoveScore = min(board, depth - 1 - R, beta - ZERO_WINDOW, beta, ply + 1, false);
+        nullMoveScore = -negamax(board, depth - 1 - R, -beta, -(beta - ZERO_WINDOW), ply + 1, false);
       } finally {
         board.unmakeNullMove();
       }
       if (nullMoveScore >= beta
               && (depth < NULL_MOVE_VERIFICATION_DEPTH
-                      || max(board, depth - R, beta - ZERO_WINDOW, beta, ply, false) >= beta)) {
+                      || negamax(board, depth - R, beta - ZERO_WINDOW, beta, ply, false) >= beta)) {
         return beta;
       }
     }
 
     short ttMoveCode = entry != null ? entry.moveCode : TranspositionTable.NO_MOVE;
     if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= 4 && openWindow) {
-      max(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
+      negamax(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
       entry = transpositionTable.get(zobristHash);
       if (entry != null) {
         ttMoveCode = entry.moveCode;
@@ -1209,7 +1216,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
     final int[] exchangeScores = sortedExchangeScores.get()[ply];
     final double nodeEval = depth <= QUIET_FUTILITY_DEPTH && !inCheckAtNode ?
-            getCachedEvaluation(board) : Double.NaN;
+            evaluateForSideToMove(board) : Double.NaN;
 
     if (ttMoveCode != TranspositionTable.NO_MOVE) {
       moveToFront(sortedMoves, exchangeScores, indexOfMoveCode(sortedMoves, ttMoveCode));
@@ -1251,7 +1258,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         }
 
         if (firstMove) {
-          currentValue = min(board, newDepth, currentAlpha, beta, ply + 1, true);
+          currentValue = -negamax(board, newDepth, -beta, -currentAlpha, ply + 1, true);
         } else {
           int reduction = 0;
           if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
@@ -1259,7 +1266,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
             if (reduction > 3) reduction = 3;
           }
 
-          currentValue = min(board, newDepth - reduction, currentAlpha, currentAlpha + 0.1,
+          currentValue = -negamax(board, newDepth - reduction, -(currentAlpha + 0.1), -currentAlpha,
                   ply + 1, true);
 
           // A reduced search that raises alpha is not evidence at this node's depth, so the move
@@ -1267,11 +1274,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           // allowed to raise alpha or cut this node off. Without this the node would store a
           // bound at its own depth on the strength of a search shallower than that depth.
           if (reduction > 0 && currentValue > currentAlpha) {
-            currentValue = min(board, newDepth, currentAlpha, currentAlpha + 0.1, ply + 1, true);
+            currentValue = -negamax(board, newDepth, -(currentAlpha + 0.1), -currentAlpha,
+                    ply + 1, true);
           }
 
           if (currentValue > currentAlpha && currentValue < beta) {
-            currentValue = min(board, newDepth, currentAlpha, beta, ply + 1, true);
+            currentValue = -negamax(board, newDepth, -beta, -currentAlpha, ply + 1, true);
           }
         }
       } finally {
@@ -1327,229 +1335,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Implements the minimizing player portion of the alpha-beta search algorithm
-   * with various pruning techniques and search extensions.
-   *
-   * @param board The current board position.
-   * @param depth The remaining search depth.
-   * @param alpha The alpha bound.
-   * @param beta The beta bound.
-   * @param ply The current search ply.
-   * @param nullMoveAllowed Whether a null move may be played at this node.
-   * @return The best evaluation score for the minimizing player.
-   */
-  private double min(final Board board, int depth, double alpha, double beta, int ply,
-                     boolean nullMoveAllowed) {
-    SearchStats stats = threadStats.get();
-    stats.boardsEvaluated++;
-    if (limitReached(stats)) {
-      this.searchStopped = true;
-    }
-
-    if (ply > 0 && isDrawnByRule(board)) {
-      return 0;
-    } if (searchStopped) {
-      return depth <= 0 ? quiescenceSearch(board, alpha, beta, ply, false) :
-              getCachedEvaluation(board);
-    } if (depth <= 0) {
-      return quiescenceSearch(board, alpha, beta, ply, false);
-    } if (ply >= MAX_PLY) {
-      return getCachedEvaluation(board);
-    }
-
-    // Read before the transposition probe narrows the window. A zero window built by adding
-    // ZERO_WINDOW to a score can come out slightly wider than ZERO_WINDOW.
-    final boolean openWindow = beta - alpha > 2 * ZERO_WINDOW;
-
-    long zobristHash = board.getZobristHash();
-    TranspositionTable.Entry entry = transpositionTable.get(zobristHash);
-    if (entry != null && entry.depth >= depth) {
-      final double entryScore = scoreFromTable(entry.score, ply);
-      if (entry.nodeType == TranspositionTable.EXACT) {
-        return entryScore;
-      } else if (entry.nodeType == TranspositionTable.LOWERBOUND) {
-        alpha = Math.max(alpha, entryScore);
-      } else if (entry.nodeType == TranspositionTable.UPPERBOUND) {
-        beta = Math.min(beta, entryScore);
-      }
-      if (alpha >= beta) {
-        return entryScore;
-      }
-    }
-
-    final boolean inCheckAtNode = board.currentPlayer().isInCheck();
-
-    // No static evaluation reaches a mate score, so razoring against a mate bound would send every
-    // such node to quiescence, which cannot find a shorter mate that ends in a quiet move.
-    if (depth == 1 && !inCheckAtNode && beta > -MATE_THRESHOLD) {
-      double eval = getCachedEvaluation(board);
-      if (eval - RAZOR_MARGIN > beta) {
-        return quiescenceSearch(board, alpha, beta, ply, false);
-      }
-    }
-
-    if (depth <= FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
-      double eval = getCachedEvaluation(board);
-      if (eval <= alpha - depth * FUTILITY_MARGIN) {
-        return eval;
-      }
-    }
-
-    if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !openWindow && !inCheckAtNode
-            && alpha > -MATE_THRESHOLD && getCachedEvaluation(board) <= alpha
-            && hasNonPawnMaterial(board.currentPlayer())) {
-      final int R = 3 + depth / 4;
-      double nullMoveScore;
-      board.makeNullMove();
-      try {
-        nullMoveScore = max(board, depth - 1 - R, alpha, alpha + ZERO_WINDOW, ply + 1, false);
-      } finally {
-        board.unmakeNullMove();
-      }
-      if (nullMoveScore <= alpha
-              && (depth < NULL_MOVE_VERIFICATION_DEPTH
-                      || min(board, depth - R, alpha, alpha + ZERO_WINDOW, ply, false) <= alpha)) {
-        return alpha;
-      }
-    }
-
-    short ttMoveCode = entry != null ? entry.moveCode : TranspositionTable.NO_MOVE;
-    if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= 4 && openWindow) {
-      min(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
-      entry = transpositionTable.get(zobristHash);
-      if (entry != null) {
-        ttMoveCode = entry.moveCode;
-      }
-    }
-
-    double currentBeta = beta;
-    boolean firstMove = true;
-    Move bestFoundMove = null;
-    Move[][] killers = killerMoves.get();
-    int movesSearched = 0;
-    final Move[] quietsSearched = searchedQuiets.get()[ply];
-    int quietCount = 0;
-
-    final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
-    final int[] exchangeScores = sortedExchangeScores.get()[ply];
-    final double nodeEval = depth <= QUIET_FUTILITY_DEPTH && !inCheckAtNode ?
-            getCachedEvaluation(board) : Double.NaN;
-
-    if (ttMoveCode != TranspositionTable.NO_MOVE) {
-      moveToFront(sortedMoves, exchangeScores, indexOfMoveCode(sortedMoves, ttMoveCode));
-    }
-
-    for (int moveIndex = 0; moveIndex < sortedMoves.size(); moveIndex++) {
-      final Move move = sortedMoves.get(moveIndex);
-      if (move.isAttack() && depth < 3 && movesSearched > 2 &&
-              exchangeScores[moveIndex] < SEE_PRUNING_THRESHOLD) {
-        continue;
-      }
-
-      // A quiet move cannot find a shorter mate once a mate is the bound, so futility is not
-      // applied against a winning mate bound. A pruned move is skipped before it is made, legal
-      // or not, so whether it gives check is answered without making it.
-      if (((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode)
-              && beta < MATE_THRESHOLD)
-              || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode,
-                      nodeEval - currentBeta) && currentBeta > -MATE_THRESHOLD))
-              && !AttackDetector.givesCheck(board, move)) {
-        continue;
-      }
-
-      board.makeMove(move);
-      if (board.currentPlayer().getOpponent().isInCheck()) {
-        board.unmakeMove();
-        continue;
-      }
-
-      final boolean givesCheck = board.currentPlayer().isInCheck();
-
-      double currentValue;
-      try {
-        int newDepth = depth - 1;
-        // A check that evades a check is not extended, so no two consecutive plies are both
-        // extended and a chain of checks by both sides loses depth.
-        if (givesCheck && !inCheckAtNode) {
-          newDepth++;
-        }
-
-        if (firstMove) {
-          currentValue = max(board, newDepth, alpha, currentBeta, ply + 1, true);
-        } else {
-          int reduction = 0;
-          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
-            reduction = 1 + (movesSearched / 6);
-            if (reduction > 3) reduction = 3;
-          }
-
-          currentValue = max(board, newDepth - reduction, currentBeta - 0.1, currentBeta,
-                  ply + 1, true);
-
-          // A reduced search that lowers beta is not evidence at this node's depth, so the move
-          // is searched again against the same window at its unreduced depth before its score is
-          // allowed to lower beta or cut this node off. Without this the node would store a
-          // bound at its own depth on the strength of a search shallower than that depth.
-          if (reduction > 0 && currentValue < currentBeta) {
-            currentValue = max(board, newDepth, currentBeta - 0.1, currentBeta, ply + 1, true);
-          }
-
-          if (currentValue < currentBeta && currentValue > alpha) {
-            currentValue = max(board, newDepth, alpha, currentBeta, ply + 1, true);
-          }
-        }
-      } finally {
-        board.unmakeMove();
-      }
-      if (currentValue < currentBeta) {
-        currentBeta = currentValue;
-        bestFoundMove = move;
-
-        if (currentBeta <= alpha) {
-          if (!move.isAttack()) {
-            if (!move.equals(killers[0][ply])) {
-              killers[1][ply] = killers[0][ply];
-              killers[0][ply] = move;
-            }
-            recordHistory(board, move, depth);
-            penalizeSearchedQuiets(board, quietsSearched, quietCount, depth);
-          }
-
-          recordCounterMove(board, move);
-
-          storeIfSearching(zobristHash, scoreToTable(alpha, ply), depth,
-                  TranspositionTable.UPPERBOUND, bestFoundMove);
-          return alpha;
-        }
-      }
-
-      if (!move.isAttack() && quietCount < MAX_TRACKED_QUIETS) {
-        quietsSearched[quietCount++] = move;
-      }
-
-      firstMove = false;
-      movesSearched++;
-    }
-
-    // No legal move was searched. Neither the static exchange skip nor late move pruning in the
-    // loop can fire until three legal moves have been counted, so this can only mean the
-    // position has no legal move.
-    if (movesSearched == 0) {
-      return terminalScore(board, ply);
-    }
-
-    byte nodeType = TranspositionTable.EXACT;
-    if (currentBeta <= alpha) {
-      nodeType = TranspositionTable.UPPERBOUND;
-    } else if (currentBeta >= beta) {
-      nodeType = TranspositionTable.LOWERBOUND;
-    }
-    storeIfSearching(zobristHash, scoreToTable(currentBeta, ply), depth, nodeType, bestFoundMove);
-
-    return currentBeta;
-  }
-
-  /**
    * Implements quiescence search to handle tactical sequences involving captures
    * and checks to avoid the horizon effect in evaluation.
    * <p>
@@ -1558,14 +1343,15 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * A checkmate is scored as a mate by the evasion search this node delegates to when the side to
    * move is in check. A stalemate is not detected here and scores as the static evaluation.
    *
+   * Scores, bounds and the returned value are all from the point of view of the side to move.
+   *
    * @param board The current board position.
    * @param alpha The alpha bound.
    * @param beta The beta bound.
    * @param ply The current search ply.
-   * @param maximizing True if this is a maximizing node, false for minimizing.
-   * @return The quiescence search evaluation score.
+   * @return The quiescence search score of the position for the side to move.
    */
-  private double quiescenceSearch(Board board, double alpha, double beta, int ply, boolean maximizing) {
+  private double quiescenceSearch(Board board, double alpha, double beta, int ply) {
     SearchStats stats = threadStats.get();
     stats.boardsEvaluated++;
     if (limitReached(stats)) {
@@ -1573,11 +1359,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     }
 
     if (searchStopped) {
-      return getCachedEvaluation(board);
+      return evaluateForSideToMove(board);
     }
 
     if (ply >= MAX_PLY) {
-      return getCachedEvaluation(board);
+      return evaluateForSideToMove(board);
     }
 
     long zobristHash = board.getZobristHash();
@@ -1600,31 +1386,20 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     // this node can reach and must not narrow the window or cut the node off. Evasions are searched
     // at the ply of this node rather than the next one, because no move was made on the way in.
     if (board.currentPlayer().isInCheck()) {
-      return maximizing ?
-              max(board, 1, alpha, beta, ply, true) :
-              min(board, 1, alpha, beta, ply, true);
+      return negamax(board, 1, alpha, beta, ply, true);
     }
 
     final double originalAlpha = alpha;
     final double originalBeta = beta;
 
-    double standPat = getCachedEvaluation(board);
+    double standPat = evaluateForSideToMove(board);
 
-    if (maximizing) {
-      if (standPat >= beta) {
-        transpositionTable.store(zobristHash, scoreToTable(beta, ply), 0,
-                TranspositionTable.LOWERBOUND, null);
-        return beta;
-      }
-      if (standPat > alpha) alpha = standPat;
-    } else {
-      if (standPat <= alpha) {
-        transpositionTable.store(zobristHash, scoreToTable(alpha, ply), 0,
-                TranspositionTable.UPPERBOUND, null);
-        return alpha;
-      }
-      if (standPat < beta) beta = standPat;
+    if (standPat >= beta) {
+      transpositionTable.store(zobristHash, scoreToTable(beta, ply), 0,
+              TranspositionTable.LOWERBOUND, null);
+      return beta;
     }
+    if (standPat > alpha) alpha = standPat;
 
     final Collection<Move> legalMoves = board.currentPlayer().getLegalMoves();
 
@@ -1675,9 +1450,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       // The exchange score does not count a promotion, so a capture that promotes is never
       // judged by it here.
       final boolean prunedByDelta = !givesCheck && !(move instanceof Move.PawnPromotion) &&
-              (maximizing ?
-                      standPat + seeScore + DELTA_PRUNING_VALUE <= alpha :
-                      standPat - seeScore - DELTA_PRUNING_VALUE >= beta);
+              standPat + seeScore + DELTA_PRUNING_VALUE <= alpha;
 
       if (!legal || prunedByExchange || prunedByDelta) {
         board.unmakeMove();
@@ -1686,25 +1459,21 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
       double score;
       try {
-        score = quiescenceSearch(board, alpha, beta, ply + 1, !maximizing);
+        score = -quiescenceSearch(board, -beta, -alpha, ply + 1);
       } finally {
         board.unmakeMove();
       }
 
-      if (maximizing) {
-        if (score > alpha) alpha = score;
-      } else {
-        if (score < beta) beta = score;
-      }
+      if (score > alpha) alpha = score;
 
       if (alpha >= beta) {
-        storeIfSearching(zobristHash, scoreToTable(maximizing ? beta : alpha, ply), 0,
-                maximizing ? TranspositionTable.LOWERBOUND : TranspositionTable.UPPERBOUND, null);
-        return maximizing ? beta : alpha;
+        storeIfSearching(zobristHash, scoreToTable(beta, ply), 0,
+                TranspositionTable.LOWERBOUND, null);
+        return beta;
       }
     }
 
-    double finalScore = maximizing ? alpha : beta;
+    double finalScore = alpha;
     byte nodeType = TranspositionTable.EXACT;
     if (finalScore <= originalAlpha) {
       nodeType = TranspositionTable.UPPERBOUND;

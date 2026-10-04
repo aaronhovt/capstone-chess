@@ -32,7 +32,10 @@ public class TranspositionTable {
     /** The Zobrist hash key uniquely identifying the chess position. */
     long key;
 
-    /** The evaluation score for the position at the specified search depth. */
+    /**
+     * The evaluation score for the position at the specified search depth, from the point of view
+     * of the side to move. The node type classifies it as a bound from that same point of view.
+     */
     double score;
 
     /** The search depth at which this position was evaluated. */
