@@ -160,11 +160,29 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /** The width of a zero window, being the smallest score separation the search distinguishes. */
   private static final double ZERO_WINDOW = 0.1;
 
-  /** The move count threshold for applying late move reductions. */
-  private static final int LMR_THRESHOLD = 9;
+  /** The constant term of the late move reduction formula, in plies. */
+  private static final double LMR_BASE = 0.75;
 
-  /** The reduction scale factor used in late move reductions. */
-  private static final double LMR_SCALE = 0.9;
+  /**
+   * The divisor of the product of the logarithms of remaining depth and move number in the late
+   * move reduction formula.
+   */
+  private static final double LMR_DIVISOR = 2.25;
+
+  /**
+   * The late move reduction in plies, indexed by remaining depth and then by move number, each
+   * counted from one and capped at the last index.
+   */
+  private static final int[][] LATE_MOVE_REDUCTIONS = new int[64][64];
+
+  static {
+    for (int depth = 1; depth < LATE_MOVE_REDUCTIONS.length; depth++) {
+      for (int moveNumber = 1; moveNumber < LATE_MOVE_REDUCTIONS[depth].length; moveNumber++) {
+        LATE_MOVE_REDUCTIONS[depth][moveNumber] =
+                (int) (LMR_BASE + Math.log(depth) * Math.log(moveNumber) / LMR_DIVISOR);
+      }
+    }
+  }
 
   /**
    * The margin added to a capture's static exchange score when testing whether the capture can
@@ -1033,6 +1051,21 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
+   * Returns the number of plies by which the search of a move is reduced, from the remaining depth
+   * at the node and the move's place in the order of moves searched there. Depths and move numbers
+   * past the end of the table read its last entry.
+   *
+   * @param depth The remaining search depth at the node, at least one.
+   * @param moveNumber The move's number among the legal moves searched at the node, counted from
+   *                   one.
+   * @return The reduction in plies.
+   */
+  private static int lateMoveReduction(final int depth, final int moveNumber) {
+    final int lastIndex = LATE_MOVE_REDUCTIONS.length - 1;
+    return LATE_MOVE_REDUCTIONS[Math.min(depth, lastIndex)][Math.min(moveNumber, lastIndex)];
+  }
+
+  /**
    * Returns whether a move, not yet made on the board, may be skipped without a search because it
    * is a quiet move late in the move order at a shallow node. A capture, a promotion, and any move
    * at a node in check are never prunable. A checking move is not prunable either, which the
@@ -1262,8 +1295,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         } else {
           int reduction = 0;
           if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
-            reduction = 1 + (movesSearched / 6);
-            if (reduction > 3) reduction = 3;
+            reduction = lateMoveReduction(depth, movesSearched + 1);
           }
 
           currentValue = -negamax(board, newDepth - reduction, -(currentAlpha + 0.1), -currentAlpha,
