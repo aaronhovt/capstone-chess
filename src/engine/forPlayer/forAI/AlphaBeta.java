@@ -1302,6 +1302,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
             if (reduction > 0 && MoveSorter.historyOf(move, this, historySide) > 0) {
               reduction--;
             }
+            // A move at an open-window node is reduced one ply less.
+            if (reduction > 0 && openWindow) {
+              reduction--;
+            }
           }
 
           currentValue = -negamax(board, newDepth - reduction, -(currentAlpha + 0.1), -currentAlpha,
