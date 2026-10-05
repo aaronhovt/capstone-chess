@@ -1248,6 +1248,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
     final int[] exchangeScores = sortedExchangeScores.get()[ply];
+    final int historySide = historySideOf(board);
     final double nodeEval = depth <= QUIET_FUTILITY_DEPTH && !inCheckAtNode ?
             evaluateForSideToMove(board) : Double.NaN;
 
@@ -1296,6 +1297,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           int reduction = 0;
           if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
             reduction = lateMoveReduction(depth, movesSearched + 1);
+            // A quiet move with a positive history score is reduced one ply less. The score is read
+            // for the side that played the move, captured before the move was made.
+            if (reduction > 0 && MoveSorter.historyOf(move, this, historySide) > 0) {
+              reduction--;
+            }
           }
 
           currentValue = -negamax(board, newDepth - reduction, -(currentAlpha + 0.1), -currentAlpha,
