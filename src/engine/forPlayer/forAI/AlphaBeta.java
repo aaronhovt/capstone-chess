@@ -185,10 +185,22 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * The margin added to a capture's static exchange score when testing whether the capture can
-   * raise the score of a quiescence node past its bound.
+   * The margin added to the static exchange score of a pawn capture when testing whether the
+   * capture can raise the score of a quiescence node past its bound.
    */
-  private static final double DELTA_PRUNING_VALUE = 5;
+  private static final double PAWN_CAPTURE_DELTA_MARGIN = 105;
+
+  /**
+   * The margin added to the static exchange score of a knight or bishop capture when testing
+   * whether the capture can raise the score of a quiescence node past its bound.
+   */
+  private static final double MINOR_CAPTURE_DELTA_MARGIN = 165;
+
+  /**
+   * The margin added to the static exchange score of a rook capture when testing whether the
+   * capture can raise the score of a quiescence node past its bound.
+   */
+  private static final double ROOK_CAPTURE_DELTA_MARGIN = 285;
 
   /** The evaluation margin for razoring pruning technique. */
   private static final double RAZOR_MARGIN = 150;
@@ -1492,7 +1504,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       // The exchange score does not count a promotion, so a capture that promotes is never
       // judged by it here.
       final boolean prunedByDelta = !givesCheck && !(move instanceof Move.PawnPromotion) &&
-              standPat + seeScore + DELTA_PRUNING_VALUE <= alpha;
+              standPat + seeScore + deltaMarginOf(move) <= alpha;
 
       if (!legal || prunedByExchange || prunedByDelta) {
         board.unmakeMove();
@@ -1537,6 +1549,22 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     return move.isAttack() ||
             (move instanceof Move.PawnPromotion &&
                     move.getPromotionPiece().getPieceType() == Piece.PieceType.QUEEN);
+  }
+
+  /**
+   * Returns the delta pruning margin for a capture, chosen by the type of the piece it captures.
+   * A queen capture has an infinite margin, so it is never delta pruned.
+   *
+   * @param move The capture to test, not a promotion.
+   * @return The margin added to the capture's static exchange score.
+   */
+  private static double deltaMarginOf(final Move move) {
+    return switch (move.getAttackedPiece().getPieceType()) {
+      case PAWN -> PAWN_CAPTURE_DELTA_MARGIN;
+      case KNIGHT, BISHOP -> MINOR_CAPTURE_DELTA_MARGIN;
+      case ROOK -> ROOK_CAPTURE_DELTA_MARGIN;
+      default -> Double.POSITIVE_INFINITY;
+    };
   }
 
   /**
