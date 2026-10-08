@@ -1,6 +1,5 @@
 package engine.forPlayer.forAI;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ComparisonChain;
 import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
@@ -35,8 +34,8 @@ import static engine.forBoard.Move.MoveFactory;
  */
 public class AlphaBeta extends Observable implements MoveStrategy {
 
-  /** The evaluator used to assess board positions, selected at the start of each search. */
-  private volatile BoardEvaluator evaluator;
+  /** The evaluator used to assess board positions. */
+  private final BoardEvaluator evaluator = TaperedEvaluator.get();
 
   /** The depth used by {@link #execute(Board)} when a caller supplies no depth of its own. */
   private final int maxDepth;
@@ -583,11 +582,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     this.boardsEvaluated.set(0);
     this.transpositionTable.incrementAge();
 
-    final BoardEvaluator previousEvaluator = this.evaluator;
-    this.evaluator = determineGameState(board);
-    if (this.evaluator != previousEvaluator) {
-      this.evaluationCache.clear();
-    }
     this.evaluationCache.resetStatistics();
     halveHistoryHeuristic();
 
@@ -1663,18 +1657,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         }
       }
     }
-  }
-
-  /**
-   * Determines the appropriate board evaluator based on the current game state.
-   * Uses game phase detection to select between opening, middlegame, and endgame evaluators.
-   *
-   * @param board The current board position.
-   * @return The appropriate board evaluator for the game state.
-   */
-  @VisibleForTesting
-  private BoardEvaluator determineGameState(final Board board) {
-    return GameStateDetector.get().determineEvaluator(board);
   }
 
   /**

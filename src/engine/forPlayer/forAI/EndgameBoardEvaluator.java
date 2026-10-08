@@ -346,6 +346,20 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
+   * Returns whether neither side can win with the material on the given board, by the rule
+   * {@link #evaluate} scores as zero.
+   *
+   * @param board The current state of the chess board.
+   * @return True if the material on the board is drawn, false otherwise.
+   */
+  boolean isDrawnByMaterial(final Board board) {
+    final Collection<Piece> whitePieces = board.whitePlayer().getActivePieces();
+    final Collection<Piece> blackPieces = board.blackPlayer().getActivePieces();
+    return isDrawnByMaterial(new Material(countPieceTypes(whitePieces),
+            countPieceTypes(blackPieces), hasOppositeColoredBishops(whitePieces, blackPieces)));
+  }
+
+  /**
    * Returns the factor by which the score is scaled toward a draw. The score is scaled by
    * {@link #OPPOSITE_BISHOPS_FEW_PAWNS_SCALE} when the sides hold bishops on opposite colours and
    * two or fewer pawns each, by {@link #OPPOSITE_BISHOPS_SCALE} when they hold bishops on opposite

@@ -7,10 +7,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The GameStateDetector class provides precise identification of the current chess game phase
- * and selects the appropriate evaluation function based on comprehensive position analysis.
- * This class replaces the TaperedEvaluator with specialized evaluators for opening,
- * middlegame, and endgame positions, enhancing evaluation accuracy.
+ * The GameStateDetector class classifies a position as opening, middlegame or endgame from its
+ * material, development, ply count, pawn structure and king placement.
  *
  * @author Aaron Ho
  */
@@ -45,24 +43,6 @@ public class GameStateDetector {
    */
   public static GameStateDetector get() {
     return INSTANCE;
-  }
-
-  /**
-   * Determines the appropriate evaluator for the current board position
-   * based on detailed analysis of the game state.
-   *
-   * @param board The current chess board.
-   * @return The appropriate BoardEvaluator for the detected game phase.
-   */
-  public BoardEvaluator determineEvaluator(final Board board) {
-    GamePhase gamePhase = detectGamePhase(board);
-
-    return switch (gamePhase) {
-      case OPENING -> OpeningGameEvaluator.get();
-      case MIDDLEGAME -> MiddlegameBoardEvaluator.get();
-      case ENDGAME -> EndgameBoardEvaluator.get();
-      default -> MiddlegameBoardEvaluator.get();
-    };
   }
 
   /**

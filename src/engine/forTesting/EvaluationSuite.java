@@ -5,6 +5,7 @@ import engine.forPlayer.forAI.BoardEvaluator;
 import engine.forPlayer.forAI.EndgameBoardEvaluator;
 import engine.forPlayer.forAI.MiddlegameBoardEvaluator;
 import engine.forPlayer.forAI.OpeningGameEvaluator;
+import engine.forPlayer.forAI.TaperedEvaluator;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -80,8 +81,8 @@ public class EvaluationSuite {
   /** The rank of an en passant target square when black is to move. */
   private static final char BLACK_EN_PASSANT_RANK = '3';
 
-  /** The format of a table header naming the three evaluator columns. */
-  private static final String HEADER_FORMAT = "  %-32s%12s%12s%12s%n";
+  /** The format of a table header naming the four evaluator columns. */
+  private static final String HEADER_FORMAT = "  %-32s%12s%12s%12s%12s%n";
 
   /** The format of a table header naming a single value column. */
   private static final String AGREEMENT_HEADER_FORMAT = "  %-32s%12s%n";
@@ -89,11 +90,11 @@ public class EvaluationSuite {
   /** The format of a table row carrying the spread between the highest and lowest evaluator score. */
   private static final String AGREEMENT_ROW_FORMAT = "  %-32s%12.2f%n";
 
-  /** The format of a table row carrying a number for each of the three evaluators. */
-  private static final String SCORE_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f%n";
+  /** The format of a table row carrying a number for each of the four evaluators. */
+  private static final String SCORE_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f%12.2f%n";
 
   /** The format of a mirror check row, whose numbers are followed by a verdict. */
-  private static final String MIRROR_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f  %s%n";
+  private static final String MIRROR_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f%12.2f  %s%n";
 
   /** The format of a table row carrying an explanation in place of numbers. */
   private static final String NOTE_ROW_FORMAT = "  %-32s%s%n";
@@ -105,7 +106,8 @@ public class EvaluationSuite {
   private static final List<NamedEvaluator> EVALUATORS = List.of(
           new NamedEvaluator("opening", OpeningGameEvaluator.get()),
           new NamedEvaluator("middlegame", MiddlegameBoardEvaluator.get()),
-          new NamedEvaluator("endgame", EndgameBoardEvaluator.get()));
+          new NamedEvaluator("endgame", EndgameBoardEvaluator.get()),
+          new NamedEvaluator("tapered", TaperedEvaluator.get()));
 
   /**
    * The positions the suite measures. Each is a position whose evaluation is expected to be close
@@ -206,7 +208,7 @@ public class EvaluationSuite {
 
   /**
    * Prints the spread between the highest and lowest score any evaluator gives each position. The
-   * three evaluators are not calibrated onto a common scale, so this number is the size of that
+   * evaluators are not calibrated onto a common scale, so this number is the size of that
    * miscalibration at the position rather than a defect in any one evaluator. No verdict is
    * reached, since no threshold has been established for how far the evaluators may agree.
    *
@@ -273,7 +275,7 @@ public class EvaluationSuite {
         symmetric++;
       }
       System.out.printf(MIRROR_ROW_FORMAT, position.name(), residuals[0], residuals[1],
-              residuals[2], withinTolerance ? "PASS" : "FAIL");
+              residuals[2], residuals[3], withinTolerance ? "PASS" : "FAIL");
       if (verbose) {
         System.out.printf(DETAIL_FORMAT, position.mirrorFen());
         for (int index = 0; index < EVALUATORS.size(); index++) {
@@ -338,7 +340,7 @@ public class EvaluationSuite {
    */
   private static void printHeader() {
     System.out.printf(HEADER_FORMAT, "position", EVALUATORS.get(0).name(),
-            EVALUATORS.get(1).name(), EVALUATORS.get(2).name());
+            EVALUATORS.get(1).name(), EVALUATORS.get(2).name(), EVALUATORS.get(3).name());
   }
 
   /**
@@ -348,7 +350,7 @@ public class EvaluationSuite {
    * @param values The numbers, in the order the evaluators are listed in.
    */
   private static void printScoreRow(final String name, final double[] values) {
-    System.out.printf(SCORE_ROW_FORMAT, name, values[0], values[1], values[2]);
+    System.out.printf(SCORE_ROW_FORMAT, name, values[0], values[1], values[2], values[3]);
   }
 
   /**
