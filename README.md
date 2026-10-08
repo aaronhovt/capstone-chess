@@ -160,8 +160,8 @@ be built this way, which sets the oldest ref a comparison can reach back to.
 | `engine.forTesting` | 5,795 | Perft, tactical, evaluation, and bench suites, FEN parsing, the opening book, and the self-play harness. |
 | `engine.forUCI` | 433 | The UCI adapter. |
 
-Outside the source tree, `art/` holds the piece and board artwork, `book/` holds the opening book,
-`lib/` holds the vendored dependencies, and `src/javadocs/` holds the generated API documentation.
+Outside the source tree, `art/` holds the piece artwork, `book/` holds the opening book, and `lib/`
+holds the vendored dependencies.
 
 ## Current Capability
 

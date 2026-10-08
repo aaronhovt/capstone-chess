@@ -1,7 +1,1 @@
-docs/* linguist-documentation=true
-*.html linguist-documentation=true
 lib/* linguist-vendored=true
-src/javadocs/** linguist-documentation=true
-src/script-dir/** linguist-vendored=true
-src/*.js linguist-documentation=true
-src/*.css linguist-documentation=true
