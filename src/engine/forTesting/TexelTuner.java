@@ -8,6 +8,7 @@ import engine.forPlayer.forAI.GameStateDetector;
 import engine.forPlayer.forAI.GameStateDetector.GamePhase;
 import engine.forPlayer.forAI.MiddlegameBoardEvaluator;
 import engine.forPlayer.forAI.OpeningGameEvaluator;
+import engine.forPlayer.forAI.TaperedEvaluator;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -24,13 +25,15 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * The TexelTuner class tunes the weights of one evaluator against the results of the games a set
+ * The TexelTuner class tunes the weights of an evaluator against the results of the games a set
  * of quiet positions was taken from, by the Texel method. The error of a set of weights is the mean
  * squared difference between each position's game result, scored one for a white win, one half for
  * a draw and zero for a black win, and the expected score 1 / (1 + 10^(-K * eval / 400)), where
  * eval is the evaluator's score of the position from white's side. The tuner adjusts one weight at
  * a time, stepping it up for as long as each step lowers the error and, if the first step up does
  * not, stepping it down the same way, and sweeps over every weight until a full sweep changes none.
+ * The tapered evaluator is tuned through the middlegame and endgame weights together, and each of
+ * its weight names is prefixed with the name of the evaluator that holds it and a dot.
  * <p>
  * The positions are read from an EPD file whose lines hold the first four fields of a FEN record
  * followed by {@code c9 "1-0";}, {@code c9 "0-1";} or {@code c9 "1/2-1/2";}. Each position is
@@ -116,13 +119,142 @@ public class TexelTuner {
    *
    * @param name The name used on the command line.
    * @param evaluator The evaluator.
-   * @param weights The evaluator's weights.
+   * @param weights The weights tuned for the evaluator.
    * @param defaultMix The share of the error each phase holds when no phases are named, indexed by
    *                   phase ordinal. A phase with a share of zero is not used, and a negative
    *                   share leaves the phase at its natural share of the positions.
    */
-  private record Target(String name, BoardEvaluator evaluator, EvaluationWeights weights,
+  private record Target(String name, BoardEvaluator evaluator, TunedWeights weights,
                         double[] defaultMix) { }
+
+  /**
+   * The weights of one or more evaluators, addressed by a single index that runs through each set
+   * of weights in turn. When there is more than one set, each name is prefixed with the name of its
+   * set and a dot.
+   */
+  private static final class TunedWeights {
+
+    /** The sets of weights, in index order. */
+    private final List<EvaluationWeights> sets;
+
+    /** The prefix of the names in each set, in the order of the sets. */
+    private final List<String> prefixes;
+
+    /**
+     * Constructs a view over the given sets of weights.
+     *
+     * @param sets The sets of weights, in index order.
+     * @param prefixes The prefix of the names in each set, in the order of the sets.
+     */
+    private TunedWeights(final List<EvaluationWeights> sets, final List<String> prefixes) {
+      this.sets = sets;
+      this.prefixes = prefixes;
+    }
+
+    /**
+     * Returns a view over one set of weights, whose names are not prefixed.
+     *
+     * @param weights The set of weights.
+     * @return The view.
+     */
+    private static TunedWeights of(final EvaluationWeights weights) {
+      return new TunedWeights(List.of(weights), List.of(""));
+    }
+
+    /**
+     * Returns a view over two sets of weights, the first set's indices before the second's, with
+     * each name prefixed by its set's name and a dot.
+     *
+     * @param firstName The name of the first set.
+     * @param first The first set of weights.
+     * @param secondName The name of the second set.
+     * @param second The second set of weights.
+     * @return The view.
+     */
+    private static TunedWeights joined(final String firstName, final EvaluationWeights first,
+                                       final String secondName, final EvaluationWeights second) {
+      return new TunedWeights(List.of(first, second), List.of(firstName + ".", secondName + "."));
+    }
+
+    /**
+     * Returns the number of weights in every set together.
+     *
+     * @return The number of weights.
+     */
+    private int size() {
+      int size = 0;
+      for (final EvaluationWeights set : sets) {
+        size += set.size();
+      }
+      return size;
+    }
+
+    /**
+     * Returns the name of the weight at the given index, with its set's prefix.
+     *
+     * @param index The index of the weight.
+     * @return The name of the weight.
+     */
+    private String name(final int index) {
+      final int set = setOf(index);
+      return prefixes.get(set) + sets.get(set).name(indexInSet(index, set));
+    }
+
+    /**
+     * Returns the value of the weight at the given index.
+     *
+     * @param index The index of the weight.
+     * @return The value of the weight.
+     */
+    private double get(final int index) {
+      final int set = setOf(index);
+      return sets.get(set).get(indexInSet(index, set));
+    }
+
+    /**
+     * Sets the value of the weight at the given index, which runs its set's change action.
+     *
+     * @param index The index of the weight.
+     * @param value The new value of the weight.
+     */
+    private void set(final int index, final double value) {
+      final int set = setOf(index);
+      sets.get(set).set(indexInSet(index, set), value);
+    }
+
+    /**
+     * Returns the position in the list of sets of the set holding the weight at the given index.
+     *
+     * @param index The index of the weight.
+     * @return The position of its set.
+     * @throws IndexOutOfBoundsException If no weight has the index.
+     */
+    private int setOf(final int index) {
+      int end = 0;
+      for (int set = 0; set < sets.size(); set++) {
+        end += sets.get(set).size();
+        if (index < end) {
+          return set;
+        }
+      }
+      throw new IndexOutOfBoundsException("No weight has index " + index);
+    }
+
+    /**
+     * Returns the index within the given set of the weight at the given index.
+     *
+     * @param index The index of the weight.
+     * @param set The position of the set holding it.
+     * @return The weight's index within its set.
+     */
+    private int indexInSet(final int index, final int set) {
+      int first = 0;
+      for (int earlier = 0; earlier < set; earlier++) {
+        first += sets.get(earlier).size();
+      }
+      return index - first;
+    }
+  }
 
   /** The share marking a used phase that keeps its natural share of the positions. */
   private static final double NATURAL_SHARE = -1;
@@ -235,7 +367,7 @@ public class TexelTuner {
       return;
     }
 
-    final EvaluationWeights weights = target.weights();
+    final TunedWeights weights = target.weights();
     if (resume) {
       loadCheckpoint(checkpoint, weights);
       System.out.println("Resumed from " + checkpoint);
@@ -311,7 +443,7 @@ public class TexelTuner {
    * @throws Exception If a worker fails or the checkpoint cannot be written.
    */
   private void tune(final double k, final int maxSweeps, final Path checkpoint) throws Exception {
-    final EvaluationWeights weights = target.weights();
+    final TunedWeights weights = target.weights();
     final int size = weights.size();
     final double[] initial = new double[size];
     final double[] steps = new double[size];
@@ -319,8 +451,8 @@ public class TexelTuner {
       initial[i] = weights.get(i);
       steps[i] = step(initial[i]);
     }
-    final int fullIndex = indexOf(weights, FULL_MATERIAL_WEIGHT);
-    final int zeroIndex = indexOf(weights, ZERO_MATERIAL_WEIGHT);
+    final int fullIndex = indexOfUnprefixed(weights, FULL_MATERIAL_WEIGHT);
+    final int zeroIndex = indexOfUnprefixed(weights, ZERO_MATERIAL_WEIGHT);
 
     double bestError = error(k);
     System.out.printf(Locale.ROOT, "Starting error %.8f at K = %.4f%n", bestError, k);
@@ -566,7 +698,7 @@ public class TexelTuner {
    * @param zeroIndex The index of the zero material weight, or -1.
    * @return True if the weights are admissible.
    */
-  private static boolean admissible(final EvaluationWeights weights, final int fullIndex,
+  private static boolean admissible(final TunedWeights weights, final int fullIndex,
                                     final int zeroIndex) {
     return fullIndex < 0 || zeroIndex < 0 || weights.get(fullIndex) > weights.get(zeroIndex);
   }
@@ -578,9 +710,26 @@ public class TexelTuner {
    * @param name The name.
    * @return The weight's index, or -1 if there is none by that name.
    */
-  private static int indexOf(final EvaluationWeights weights, final String name) {
+  private static int indexOf(final TunedWeights weights, final String name) {
     for (int i = 0; i < weights.size(); i++) {
       if (weights.name(i).equals(name)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Returns the index of the weight whose name, once any set prefix is removed, is the given name.
+   *
+   * @param weights The weights.
+   * @param name The name without a prefix.
+   * @return The first such weight's index, or -1 if there is none.
+   */
+  private static int indexOfUnprefixed(final TunedWeights weights, final String name) {
+    for (int i = 0; i < weights.size(); i++) {
+      final String candidate = weights.name(i);
+      if (candidate.equals(name) || candidate.endsWith("." + name)) {
         return i;
       }
     }
@@ -636,7 +785,7 @@ public class TexelTuner {
    * @param sweep The sweep just finished.
    * @throws IOException If the file cannot be written.
    */
-  private static void writeCheckpoint(final Path checkpoint, final EvaluationWeights weights,
+  private static void writeCheckpoint(final Path checkpoint, final TunedWeights weights,
                                       final double k, final double error, final int sweep)
           throws IOException {
     if (checkpoint.getParent() != null) {
@@ -660,7 +809,7 @@ public class TexelTuner {
    * @throws IOException If the file cannot be read.
    * @throws IllegalArgumentException If the file names a weight that does not exist.
    */
-  private static void loadCheckpoint(final Path checkpoint, final EvaluationWeights weights)
+  private static void loadCheckpoint(final Path checkpoint, final TunedWeights weights)
           throws IOException {
     for (final String line : Files.readAllLines(checkpoint, StandardCharsets.UTF_8)) {
       if (line.isBlank() || line.startsWith("#")) {
@@ -689,18 +838,23 @@ public class TexelTuner {
   /**
    * Returns the tuning target with the given name.
    *
-   * @param name The name: opening, middlegame or endgame.
+   * @param name The name: opening, middlegame, endgame or tapered.
    * @return The target.
    * @throws IllegalArgumentException If the name is unknown.
    */
   private static Target target(final String name) {
     return switch (name.toLowerCase(Locale.ROOT)) {
       case "opening" -> new Target("opening", OpeningGameEvaluator.get(),
-              OpeningGameEvaluator.weights(), new double[] {NATURAL_SHARE, NATURAL_SHARE, 0});
+              TunedWeights.of(OpeningGameEvaluator.weights()),
+              new double[] {NATURAL_SHARE, NATURAL_SHARE, 0});
       case "middlegame" -> new Target("middlegame", MiddlegameBoardEvaluator.get(),
-              MiddlegameBoardEvaluator.weights(), new double[] {15, 56, 29});
+              TunedWeights.of(MiddlegameBoardEvaluator.weights()), new double[] {15, 56, 29});
       case "endgame" -> new Target("endgame", EndgameBoardEvaluator.get(),
-              EndgameBoardEvaluator.weights(), new double[] {0, 0, NATURAL_SHARE});
+              TunedWeights.of(EndgameBoardEvaluator.weights()), new double[] {0, 0, NATURAL_SHARE});
+      case "tapered" -> new Target("tapered", TaperedEvaluator.get(),
+              TunedWeights.joined("middlegame", MiddlegameBoardEvaluator.weights(),
+                      "endgame", EndgameBoardEvaluator.weights()),
+              new double[] {NATURAL_SHARE, NATURAL_SHARE, NATURAL_SHARE});
       default -> throw new IllegalArgumentException("Unknown evaluator: " + name);
     };
   }
@@ -789,7 +943,7 @@ public class TexelTuner {
   private static void printUsage() {
     System.out.println("""
             Usage:
-              TexelTuner <epd file> --evaluator=<opening|middlegame|endgame> [options]
+              TexelTuner <epd file> --evaluator=<opening|middlegame|endgame|tapered> [options]
 
             Options:
               --phases=<list>       comma separated phases to tune on (opening, middlegame,
@@ -799,7 +953,10 @@ public class TexelTuner {
                                     positions are weighted so it holds that share of the
                                     error. Give --phases or --mix, not both. Defaults:
                                     middlegame uses that mix, endgame uses endgame,
-                                    opening uses opening and middlegame.
+                                    opening uses opening and middlegame, tapered uses
+                                    every phase. Tapered tunes the middlegame and
+                                    endgame weights together, named middlegame.<NAME>
+                                    and endgame.<NAME>.
               --k=<value>           scaling constant to hold fixed. Fitted when absent.
               --fit-k-only          fit K, print it and the error, and stop.
               --limit=<n>           read at most n lines of the file.
