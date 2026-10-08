@@ -1960,7 +1960,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * player defends it, or when it is worth more than a pawn and stands on a square an opposing
    * pawn attacks. Only the largest such threat is charged, at {@link #THREAT_FRACTION} of the
    * threatened piece's value, so the score this term can produce is bounded by a quarter of a
-   * queen. The king is not scored.
+   * queen. The king is not scored. When {@link #THREAT_FRACTION} is zero or negative no threat can
+   * be charged, and the pieces are not examined.
    *
    * @param player The player whose piece safety is being evaluated.
    * @param board The current chess board state.
@@ -1970,6 +1971,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   private double pieceSafetyEvaluation(final Player player, final Board board,
                                        final MoveTargets opponentTargets) {
     double largestThreat = 0;
+    final double threatFraction = WEIGHTS.get(THREAT_FRACTION);
+    if (threatFraction <= 0) {
+      return -largestThreat;
+    }
+
     final Collection<Piece> playerPieces = player.getActivePieces();
     final int[] attackCount = opponentTargets.destinationCount();
     final long pawnAttacks = opponentTargets.pawnDestinations();
@@ -1986,7 +1992,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
               && attackCount[position] > countDefenders(playerPieces, position, board);
 
       if (outnumbered || harriedByPawn) {
-        largestThreat = Math.max(largestThreat, pieceValue * WEIGHTS.get(THREAT_FRACTION));
+        largestThreat = Math.max(largestThreat, pieceValue * threatFraction);
       }
     }
 

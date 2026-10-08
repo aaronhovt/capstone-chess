@@ -17,7 +17,6 @@ import java.awt.event.MouseListener;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.IOException;
 import java.util.List;
 import java.util.*;
 
@@ -70,9 +69,6 @@ public final class Table extends Observable {
   /** The file path for the icons representing chess pieces. */
   private final String pieceIconPath;
 
-  /** Indicates whether legal moves should be highlighted on the board. */
-  private boolean highlightLegalMoves;
-
   /**
    * The search currently running, or null when none is. Only ever read or written on the event
    * dispatch thread: the watcher assigns it when it starts a worker, and the worker clears it
@@ -117,9 +113,6 @@ public final class Table extends Observable {
    */
   private static final Map<String, ImageIcon> PIECE_ICON_CACHE = new HashMap<>();
 
-  /** The green dot overlay used to mark legal move destinations, loaded once on first use. */
-  private static ImageIcon greenDotIcon;
-
   /** The single instance of the Table class (singleton). */
   private static final Table Instance = new Table();
 
@@ -136,7 +129,6 @@ public final class Table extends Observable {
     gameFrame.setLayout(new BorderLayout());
     this.chessBoard = Board.createStandardBoard();
     this.boardDirection = BoardDirection.NORMAL;
-    this.highlightLegalMoves = false;
     this.pieceIconPath = "art/simple/";
     this.gameHistoryPanel = new GameHistoryPanel();
     this.debugPanel = new DebugPanel();
@@ -233,15 +225,6 @@ public final class Table extends Observable {
   }
 
   /**
-   * Retrieves the current status of legal move highlighting on the chess board.
-   *
-   * @return True if legal move highlighting is enabled, false otherwise.
-   */
-  private boolean getHighlightLegalMoves() {
-    return this.highlightLegalMoves;
-  }
-
-  /**
    * Refreshes and updates the graphical user interface to reflect the current game state.
    * Updates the game history panel, redraws the chess board, and updates the debug panel.
    */
@@ -278,20 +261,6 @@ public final class Table extends Observable {
     final int y = (dim.height - h) / 2;
     frame.setLocation(x, y);
     frame.pack();
-  }
-
-  /**
-   * Returns the green dot overlay used to highlight legal move destinations, reading it from
-   * disk on the first call and reusing that instance afterward.
-   *
-   * @return The green dot icon.
-   * @throws IOException If the image cannot be read.
-   */
-  private static ImageIcon greenDot() throws IOException {
-    if (greenDotIcon == null) {
-      greenDotIcon = new ImageIcon(ImageIO.read(new File("art/misc/green_dot.png")));
-    }
-    return greenDotIcon;
   }
 
   /**
@@ -346,9 +315,7 @@ public final class Table extends Observable {
   }
 
   /**
-   * Creates a JMenu with options for customizing user preferences and settings.
-   * Users can choose tile colors, chess piece images, highlight legal moves,
-   * and toggle book moves usage.
+   * Creates the Preferences menu, which holds the option to flip the board.
    *
    * @return The JMenu containing user preferences and settings.
    */
@@ -362,10 +329,6 @@ public final class Table extends Observable {
     });
 
     preferencesMenu.add(flipBoardMenuItem);
-    preferencesMenu.addSeparator();
-    final JCheckBoxMenuItem cbLegalMoveHighlighter = new JCheckBoxMenuItem("Highlight Legal Moves", false);
-    cbLegalMoveHighlighter.addActionListener(e -> highlightLegalMoves = cbLegalMoveHighlighter.isSelected());
-    preferencesMenu.add(cbLegalMoveHighlighter);
     return preferencesMenu;
   }
 
@@ -897,8 +860,8 @@ public final class Table extends Observable {
 
   /**
    * The TilePanel class represents a graphical panel for an individual tile on the chessboard.
-   * Each TilePanel displays a single tile with its associated piece, legal move highlights,
-   * and other visual elements.
+   * Each TilePanel displays a single tile with its associated piece, the border marking a
+   * selected piece, and the background marking the computer's last move.
    */
   private class TilePanel extends JPanel {
 
@@ -1027,7 +990,6 @@ public final class Table extends Observable {
         assignTileColor();
         assignTilePieceIcon(board);
         highlightTileBorder(board);
-        highlightLegals(board);
         highlightAIMove();
         validate();
         repaint();
@@ -1060,38 +1022,6 @@ public final class Table extends Observable {
           setBackground(Color.red);
         }
       }
-    }
-
-    /**
-     * Highlights legal move destinations on the tile panel.
-     *
-     * @param board The current state of the chess board.
-     */
-    private void highlightLegals(final Board board) {
-      if (!Table.get().getHighlightLegalMoves()) {
-        return;
-      }
-      for (final Move move : pieceLegalMoves(board)) {
-        if (move.getDestinationCoordinate() == this.tileId) {
-          try {
-            add(new JLabel(greenDot()));
-          } catch (final IOException e) {
-            System.out.println("Exception in highlightLegals in Table.java");
-          }
-        }
-      }
-    }
-
-    /**
-     * Retrieves the collection of legal moves for the currently selected piece.
-     *
-     * @param board The current state of the chess board.
-     * @return A collection of legal moves for the selected piece.
-     */
-    private Collection < Move > pieceLegalMoves(final Board board) {
-      if (humanMovedPiece != null && humanMovedPiece.getPieceAllegiance() == board.currentPlayer().getAlliance()) {
-        return humanMovedPiece.calculateLegalMoves(board);
-      } return Collections.emptyList();
     }
 
     /**
