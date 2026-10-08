@@ -239,34 +239,18 @@ public final class Table extends Observable {
   }
 
   /**
-   * Populates the menu bar with Preferences and Options menus.
+   * Populates the menu bar with the Options menu.
    *
    * @param tableMenuBar The JMenuBar to populate.
    */
   private void populateMenuBar(final JMenuBar tableMenuBar) {
-    tableMenuBar.add(createPreferencesMenu());
     tableMenuBar.add(createOptionsMenu());
   }
 
   /**
-   * Centers the provided JFrame on the screen.
-   *
-   * @param frame The JFrame to be centered.
-   */
-  private static void center(final JFrame frame) {
-    final Dimension dim = Toolkit.getDefaultToolkit().getScreenSize();
-    final int w = Toolkit.getDefaultToolkit().getScreenSize().width;
-    final int h = Toolkit.getDefaultToolkit().getScreenSize().height;
-    final int x = (dim.width - w) / 2;
-    final int y = (dim.height - h) / 2;
-    frame.setLocation(x, y);
-    frame.pack();
-  }
-
-  /**
    * Creates a JMenu with options to interact with the game.
-   * Includes starting a new game, evaluating the board, inspecting game state,
-   * undoing moves, and setting up game parameters.
+   * Includes starting a new game, undoing moves, loading a position from FEN,
+   * setting up game parameters, and flipping the board.
    *
    * @return The JMenu containing gameplay options.
    */
@@ -278,24 +262,6 @@ public final class Table extends Observable {
     final JMenuItem resetMenuItem = new JMenuItem("New Game", KeyEvent.VK_P);
     resetMenuItem.addActionListener(e -> undoAllMoves());
     optionsMenu.add(resetMenuItem);
-
-    final JMenuItem legalMovesMenuItem = new JMenuItem("Current State", KeyEvent.VK_L);
-    legalMovesMenuItem.addActionListener(e -> {
-      System.out.println(chessBoard.getWhitePieces());
-      System.out.println(chessBoard.getBlackPieces());
-      System.out.println(playerInfo(chessBoard.currentPlayer()));
-      System.out.println(playerInfo(chessBoard.currentPlayer().getOpponent()));
-    }); optionsMenu.add(legalMovesMenuItem);
-
-    final JMenuItem showBoardValueItem = new JMenuItem("Show board value", KeyEvent.VK_1);
-    showBoardValueItem.addActionListener(e -> {
-      int boardValue = -20000;
-      for (final Piece piece : chessBoard.getWhitePieces()) {
-        boardValue += piece.getPieceValue();
-      } for (final Piece piece : chessBoard.getBlackPieces()) {
-        boardValue += piece.getPieceValue();
-      } debugPanel.addText(Integer.toString(boardValue)); debugPanel.redo();
-    }); optionsMenu.add(showBoardValueItem);
 
     final JMenuItem undoMoveMenuItem = new JMenuItem("Undo last move", KeyEvent.VK_M);
     undoMoveMenuItem.addActionListener(e -> undoLastMove());
@@ -311,41 +277,14 @@ public final class Table extends Observable {
       Table.get().setupUpdate(Table.get().getGameSetup());
     }); optionsMenu.add(setupGameMenuItem);
 
-    return optionsMenu;
-  }
-
-  /**
-   * Creates the Preferences menu, which holds the option to flip the board.
-   *
-   * @return The JMenu containing user preferences and settings.
-   */
-  private JMenu createPreferencesMenu() {
-    final JMenu preferencesMenu = new JMenu("Preferences");
     final JMenuItem flipBoardMenuItem = new JMenuItem("Flip board");
-
     flipBoardMenuItem.addActionListener(e -> {
       boardDirection = boardDirection.opposite();
       boardPanel.drawBoard(chessBoard);
     });
+    optionsMenu.add(flipBoardMenuItem);
 
-    preferencesMenu.add(flipBoardMenuItem);
-    return preferencesMenu;
-  }
-
-  /**
-   * Constructs a string containing details about the given player's alliance, legal moves,
-   * check status, checkmate status, and castling status.
-   *
-   * @param player The player for which to generate the information.
-   * @return A string representation of the player's status and legal moves.
-   */
-  private static String playerInfo(final Player player) {
-    return ("Player is: " + player.getAlliance() +
-            "\nlegal moves (" + player.getLegalMoves().size() + ") = " + player.getLegalMoves() +
-            "\ninCheck = " + player.isInCheck() +
-            "\nisInCheckMate = " + player.isInCheckMate() +
-            "\nisCastled = " + player.isCastled()) +
-            "\n";
+    return optionsMenu;
   }
 
   /**

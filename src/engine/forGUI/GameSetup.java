@@ -75,10 +75,7 @@ class GameSetup extends JDialog {
       blackPlayerType = blackComputerButton.isSelected() ? PlayerType.COMPUTER : PlayerType.HUMAN;
       GameSetup.this.setVisible(false);
     });
-    cancelButton.addActionListener(e -> {
-      System.out.println("Cancel");
-      GameSetup.this.setVisible(false);
-    });
+    cancelButton.addActionListener(e -> GameSetup.this.setVisible(false));
     myPanel.add(cancelButton);
     myPanel.add(okButton);
     setLocationRelativeTo(frame);

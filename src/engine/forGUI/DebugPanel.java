@@ -49,16 +49,6 @@ class DebugPanel extends JPanel implements Observer {
   }
 
   /**
-   * Sets the text content of the debug panel to the specified message.
-   * Uses SwingUtilities.invokeLater to ensure thread-safe text updates.
-   *
-   * @param text The message text to be displayed in the debug panel.
-   */
-  public void addText(final String text) {
-    SwingUtilities.invokeLater(() -> this.jTextArea.setText(text));
-  }
-
-  /**
    * Updates the content of the debug panel based on changes in the observed object.
    * Automatically called when an Observable object notifies its observers of a change.
    *
