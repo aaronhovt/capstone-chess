@@ -61,8 +61,11 @@ public final class TaperedEvaluator implements BoardEvaluator {
       return 0;
     }
 
-    return (phase * MiddlegameBoardEvaluator.get().evaluate(board) +
-            (FULL_PHASE - phase) * EndgameBoardEvaluator.get().evaluate(board)) / FULL_PHASE;
+    final LegalMoveTally whiteTally = LegalMoveTally.of(board, board.whitePlayer());
+    final LegalMoveTally blackTally = LegalMoveTally.of(board, board.blackPlayer());
+    return (phase * MiddlegameBoardEvaluator.get().evaluate(board, whiteTally, blackTally) +
+            (FULL_PHASE - phase) * EndgameBoardEvaluator.get().evaluate(board, whiteTally,
+                    blackTally)) / FULL_PHASE;
   }
 
   /**

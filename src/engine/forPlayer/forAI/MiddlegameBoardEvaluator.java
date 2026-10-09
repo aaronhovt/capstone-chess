@@ -4,7 +4,6 @@ import com.google.common.annotations.VisibleForTesting;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
-import engine.forBoard.Move;
 import engine.forPiece.*;
 import engine.forPlayer.Player;
 
@@ -330,23 +329,17 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   private static final long[] KING_ZONES = computeKingZones();
 
-  /**
-   * The space count a white move earns by landing on each tile, indexed by tile. A tile counts
-   * once for lying in white's forward half and once for lying in the extended centre.
-   */
-  private static final int[] WHITE_SPACE_WEIGHTS = computeSpaceWeights(Alliance.WHITE);
+  /** The tiles in white's forward half of the board, as one bit per tile. */
+  private static final long WHITE_FORWARD_HALF = computeForwardHalf(Alliance.WHITE);
 
-  /**
-   * The space count a black move earns by landing on each tile, indexed by tile. A tile counts
-   * once for lying in black's forward half and once for lying in the extended centre.
-   */
-  private static final int[] BLACK_SPACE_WEIGHTS = computeSpaceWeights(Alliance.BLACK);
+  /** The tiles in black's forward half of the board, as one bit per tile. */
+  private static final long BLACK_FORWARD_HALF = computeForwardHalf(Alliance.BLACK);
 
-  /** The tiles on which a white pawn promotes, as one bit per tile. */
-  private static final long WHITE_PROMOTION_TILES = computePromotionTiles(Alliance.WHITE);
+  /** The tiles of the extended centre, the sixteen central tiles, as one bit per tile. */
+  private static final long EXTENDED_CENTRE = computeExtendedCentre();
 
-  /** The tiles on which a black pawn promotes, as one bit per tile. */
-  private static final long BLACK_PROMOTION_TILES = computePromotionTiles(Alliance.BLACK);
+  /** Every tile, as one bit per tile. */
+  private static final long ALL_TILES = -1L;
 
   /**
    * The tiles forming the pawn shield of a white king standing on each tile, indexed by tile, as
@@ -420,8 +413,23 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   @Override
   public double evaluate(final Board board) {
-    final MoveStatistics whiteStatistics = moveStatistics(board, board.whitePlayer());
-    final MoveStatistics blackStatistics = moveStatistics(board, board.blackPlayer());
+    return evaluate(board, LegalMoveTally.of(board, board.whitePlayer()),
+            LegalMoveTally.of(board, board.blackPlayer()));
+  }
+
+  /**
+   * Evaluates the given board as {@link #evaluate(Board)} does, from tallies of both players'
+   * legal moves on that board.
+   *
+   * @param board The current state of the chess board.
+   * @param whiteTally The tally of white's legal moves on the board.
+   * @param blackTally The tally of black's legal moves on the board.
+   * @return The evaluation score of the board.
+   */
+  double evaluate(final Board board, final LegalMoveTally whiteTally,
+                  final LegalMoveTally blackTally) {
+    final MoveStatistics whiteStatistics = moveStatistics(board.whitePlayer(), whiteTally);
+    final MoveStatistics blackStatistics = moveStatistics(board.blackPlayer(), blackTally);
     final PawnStructure whitePawns = pawnStructure(board.whitePlayer());
     final PawnStructure blackPawns = pawnStructure(board.blackPlayer());
     final PieceLayout whiteLayout = pieceLayout(board.whitePlayer());
@@ -472,8 +480,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param moveCountByPieceType The number of legal moves per moving piece type, indexed by
    *                             {@link Piece.PieceType#ordinal()}.
    * @param destinationCount The number of legal moves landing on each tile, indexed by tile.
-   * @param pawnDestinationCount The number of legal pawn moves landing on each tile, indexed by
-   *                             tile.
+   * @param pawnDestinations The tiles on which at least one legal pawn move lands, as one bit
+   *                         per tile.
    * @param spaceCount The space count accumulated over the move destinations, which counts a
    *                   destination once for lying in the player's forward half and once for lying
    *                   in the extended centre.
@@ -486,77 +494,44 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private record MoveStatistics(int moveCount,
                                 int[] moveCountByPieceType,
                                 int[] destinationCount,
-                                int[] pawnDestinationCount,
+                                long pawnDestinations,
                                 int spaceCount,
                                 int nearKingSquareCount,
                                 int[] nearKingCountByPieceType) {
   }
 
   /**
-   * Counts the given player's legal moves from each piece's destination squares and returns the
-   * quantities the scoring terms read from them, without generating the player's legal move
-   * list. A pawn move onto the promotion rank counts once per promotion piece, and the player's
-   * castling moves count as king moves.
+   * Returns the quantities the scoring terms read from the given player's legal moves, taken from
+   * the tally of those moves.
    *
-   * @param board The current state of the chess board.
-   * @param player The player whose legal moves are being counted.
+   * @param player The player whose legal moves were tallied.
+   * @param tally The tally of that player's legal moves.
    * @return The statistics of that player's legal moves.
    */
-  private MoveStatistics moveStatistics(final Board board, final Player player) {
-    final int[] spaceWeights = player.getAlliance().isWhite() ?
-            WHITE_SPACE_WEIGHTS :
-            BLACK_SPACE_WEIGHTS;
-    final long promotionTiles = player.getAlliance().isWhite() ?
-            WHITE_PROMOTION_TILES :
-            BLACK_PROMOTION_TILES;
+  private MoveStatistics moveStatistics(final Player player, final LegalMoveTally tally) {
+    final long forwardHalf = player.getAlliance().isWhite() ?
+            WHITE_FORWARD_HALF :
+            BLACK_FORWARD_HALF;
     final long opposingKingZone =
             KING_ZONES[player.getOpponent().getPlayerKing().getPiecePosition()];
 
-    long castleDestinations = 0L;
-    for (final Move castle : player.getCastleMoves()) {
-      castleDestinations |= 1L << castle.getDestinationCoordinate();
-    }
-
     final int[] moveCountByPieceType = new int[Piece.PieceType.values().length];
-    final int[] destinationCount = new int[BoardUtils.NUM_TILES];
-    final int[] pawnDestinationCount = new int[BoardUtils.NUM_TILES];
     final int[] nearKingCountByPieceType = new int[Piece.PieceType.values().length];
-    int moveCount = 0;
     int spaceCount = 0;
     int nearKingSquareCount = 0;
 
-    for (final Piece piece : player.getActivePieces()) {
-      final Piece.PieceType pieceType = piece.getPieceType();
-      final boolean isPawn = pieceType == Piece.PieceType.PAWN;
+    for (int piece = 0; piece < tally.pieceCount(); piece++) {
+      final int pieceType = tally.pieceType(piece).ordinal();
+      final int nearKingMoves = tally.movesOnto(piece, opposingKingZone);
 
-      long destinations = piece.legalDestinations(board);
-      if (pieceType == Piece.PieceType.KING) {
-        destinations |= castleDestinations;
-      }
-
-      for (long remaining = destinations; remaining != 0L; remaining &= remaining - 1) {
-        final int destination = Long.numberOfTrailingZeros(remaining);
-        final int moves = isPawn && ((promotionTiles >>> destination) & 1L) != 0L ? 4 : 1;
-
-        moveCount += moves;
-        moveCountByPieceType[pieceType.ordinal()] += moves;
-        destinationCount[destination] += moves;
-
-        if (isPawn) {
-          pawnDestinationCount[destination] += moves;
-        }
-
-        spaceCount += spaceWeights[destination] * moves;
-
-        if (((opposingKingZone >>> destination) & 1L) != 0L) {
-          nearKingSquareCount += moves;
-          nearKingCountByPieceType[pieceType.ordinal()] += moves;
-        }
-      }
+      moveCountByPieceType[pieceType] += tally.movesOnto(piece, ALL_TILES);
+      spaceCount += tally.movesOnto(piece, forwardHalf) + tally.movesOnto(piece, EXTENDED_CENTRE);
+      nearKingSquareCount += nearKingMoves;
+      nearKingCountByPieceType[pieceType] += nearKingMoves;
     }
 
-    return new MoveStatistics(moveCount, moveCountByPieceType, destinationCount,
-            pawnDestinationCount, spaceCount, nearKingSquareCount, nearKingCountByPieceType);
+    return new MoveStatistics(tally.moveCount(), moveCountByPieceType, tally.destinationCount(),
+            tally.pawnDestinations(), spaceCount, nearKingSquareCount, nearKingCountByPieceType);
   }
 
   /**
@@ -1615,7 +1590,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     double largestThreat = 0;
 
     final int[] squareAttackCount = opponentStatistics.destinationCount();
-    final int[] squarePawnAttackCount = opponentStatistics.pawnDestinationCount();
+    final long pawnAttacks = opponentStatistics.pawnDestinations();
     final int[] defenderCount = new int[BoardUtils.NUM_TILES];
 
     for (final Piece piece : playerPieces) {
@@ -1631,7 +1606,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       final int pieceValue = piece.getPieceValue();
 
       final boolean outnumbered = attackCount > protectionCount;
-      final boolean harriedByPawn = squarePawnAttackCount[position] > 0
+      final boolean harriedByPawn = ((pawnAttacks >>> position) & 1L) != 0L
               && pieceValue > Piece.PieceType.PAWN.getPieceValue();
 
       if (outnumbered || harriedByPawn) {
@@ -2020,48 +1995,43 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Builds the table of the space count a move of the given alliance earns by landing on each
-   * tile. A tile counts once for lying in the alliance's forward half and once for lying in the
-   * extended centre.
+   * Builds the set of tiles in the given alliance's forward half of the board.
    *
-   * @param alliance The alliance whose moves the table scores.
-   * @return The space count of each tile, indexed by tile.
+   * @param alliance The alliance.
+   * @return The tiles, as one bit per tile.
    */
-  private static int[] computeSpaceWeights(final Alliance alliance) {
-    final int[] spaceWeights = new int[BoardUtils.NUM_TILES];
+  private static long computeForwardHalf(final Alliance alliance) {
+    long forwardHalf = 0L;
+
+    for (int tile = 0; tile < BoardUtils.NUM_TILES; tile++) {
+      final int rank = tile / 8;
+
+      if ((alliance.isWhite() && rank < 4) || (!alliance.isWhite() && rank > 3)) {
+        forwardHalf |= 1L << tile;
+      }
+    }
+
+    return forwardHalf;
+  }
+
+  /**
+   * Builds the set of tiles of the extended centre, the tiles on files c to f of ranks 3 to 6.
+   *
+   * @return The tiles, as one bit per tile.
+   */
+  private static long computeExtendedCentre() {
+    long extendedCentre = 0L;
 
     for (int tile = 0; tile < BoardUtils.NUM_TILES; tile++) {
       final int rank = tile / 8;
       final int file = tile % 8;
 
-      if ((alliance.isWhite() && rank < 4) || (!alliance.isWhite() && rank > 3)) {
-        spaceWeights[tile]++;
-      }
-
       if (file >= 2 && file <= 5 && rank >= 2 && rank <= 5) {
-        spaceWeights[tile]++;
+        extendedCentre |= 1L << tile;
       }
     }
 
-    return spaceWeights;
-  }
-
-  /**
-   * Builds the set of tiles on which a pawn of the given alliance promotes.
-   *
-   * @param alliance The alliance of the pawn.
-   * @return The promotion tiles, as one bit per tile.
-   */
-  private static long computePromotionTiles(final Alliance alliance) {
-    long promotionTiles = 0L;
-
-    for (int tile = 0; tile < BoardUtils.NUM_TILES; tile++) {
-      if (alliance.isPawnPromotionSquare(tile)) {
-        promotionTiles |= 1L << tile;
-      }
-    }
-
-    return promotionTiles;
+    return extendedCentre;
   }
 
   /**

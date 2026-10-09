@@ -4,7 +4,6 @@ import com.google.common.annotations.VisibleForTesting;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
-import engine.forBoard.Move;
 import engine.forPiece.*;
 import engine.forPlayer.Player;
 
@@ -247,12 +246,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   /** The number of distinct piece types. */
   private static final int PIECE_TYPE_COUNT = Piece.PieceType.values().length;
 
-  /** The tiles on which a white pawn promotes, as one bit per tile. */
-  private static final long WHITE_PROMOTION_TILES = computePromotionTiles(Alliance.WHITE);
-
-  /** The tiles on which a black pawn promotes, as one bit per tile. */
-  private static final long BLACK_PROMOTION_TILES = computePromotionTiles(Alliance.BLACK);
-
   /** Private constructor to prevent instantiation outside of class. */
   private EndgameBoardEvaluator() {}
 
@@ -284,6 +277,21 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   @Override
   public double evaluate(final Board board) {
+    return evaluate(board, LegalMoveTally.of(board, board.whitePlayer()),
+            LegalMoveTally.of(board, board.blackPlayer()));
+  }
+
+  /**
+   * Evaluates the given board as {@link #evaluate(Board)} does, from tallies of both players'
+   * legal moves on that board.
+   *
+   * @param board The current state of the chess board.
+   * @param whiteTally The tally of white's legal moves on the board.
+   * @param blackTally The tally of black's legal moves on the board.
+   * @return The evaluation score of the board position.
+   */
+  double evaluate(final Board board, final LegalMoveTally whiteTally,
+                  final LegalMoveTally blackTally) {
     final List<Piece> whitePawns = getPlayerPawns(board.whitePlayer());
     final List<Piece> blackPawns = getPlayerPawns(board.blackPlayer());
     final long whitePawnOccupancy = PawnLists.occupancy(whitePawns);
@@ -300,14 +308,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       return 0;
     }
 
-    final MoveTargets whiteTargets = moveTargets(board, board.whitePlayer());
-    final MoveTargets blackTargets = moveTargets(board, board.blackPlayer());
     final PawnStructureCache.Entry pawnStructure = pawnStructureScores(board, pawns);
 
-    return (score(board.whitePlayer(), board, pawns, pawnStructure, material, whiteTargets,
-                    blackTargets) -
-            score(board.blackPlayer(), board, pawns, pawnStructure, material, blackTargets,
-                    whiteTargets)) * drawishScale(material);
+    return (score(board.whitePlayer(), board, pawns, pawnStructure, material, whiteTally,
+                    blackTally) -
+            score(board.blackPlayer(), board, pawns, pawnStructure, material, blackTally,
+                    whiteTally)) * drawishScale(material);
   }
 
   /**
@@ -497,64 +503,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * The destinations of one player's legal moves. The array belongs to this record and must not
-   * be modified by a caller.
-   *
-   * @param moveCount The number of legal moves.
-   * @param destinationCount The number of legal moves ending on each tile, indexed by tile.
-   * @param pawnDestinations The tiles on which at least one pawn move ends, as one bit per tile.
-   */
-  private record MoveTargets(int moveCount, int[] destinationCount, long pawnDestinations) { }
-
-  /**
-   * Counts the given player's legal moves from each piece's destination squares, without
-   * generating the player's legal move list. A pawn move onto the promotion rank counts once per
-   * promotion piece, and the player's castling moves count as king moves.
-   *
-   * @param board The current state of the chess board.
-   * @param player The player whose legal moves are being counted.
-   * @return The destinations of that player's legal moves.
-   */
-  private static MoveTargets moveTargets(final Board board, final Player player) {
-    final long promotionTiles = player.getAlliance().isWhite() ?
-            WHITE_PROMOTION_TILES :
-            BLACK_PROMOTION_TILES;
-
-    long castleDestinations = 0L;
-    for (final Move castle : player.getCastleMoves()) {
-      castleDestinations |= 1L << castle.getDestinationCoordinate();
-    }
-
-    final int[] destinationCount = new int[BoardUtils.NUM_TILES];
-    long pawnDestinations = 0L;
-    int moveCount = 0;
-
-    for (final Piece piece : player.getActivePieces()) {
-      final Piece.PieceType pieceType = piece.getPieceType();
-      final boolean isPawn = pieceType == Piece.PieceType.PAWN;
-
-      long destinations = piece.legalDestinations(board);
-      if (pieceType == Piece.PieceType.KING) {
-        destinations |= castleDestinations;
-      }
-
-      if (isPawn) {
-        pawnDestinations |= destinations;
-      }
-
-      for (long remaining = destinations; remaining != 0L; remaining &= remaining - 1) {
-        final int destination = Long.numberOfTrailingZeros(remaining);
-        final int moves = isPawn && ((promotionTiles >>> destination) & 1L) != 0L ? 4 : 1;
-
-        moveCount += moves;
-        destinationCount[destination] += moves;
-      }
-    }
-
-    return new MoveTargets(moveCount, destinationCount, pawnDestinations);
-  }
-
-  /**
    * Calculates the overall score of the current board position for a given player
    * using modern chess engine evaluation principles tuned for endgame positions.
    * The evaluation combines material assessment, king activity, passed pawn evaluation,
@@ -572,7 +520,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   @VisibleForTesting
   private double score(final Player player, final Board board, final PawnLists pawns,
                        final PawnStructureCache.Entry pawnStructure, final Material material,
-                       final MoveTargets playerTargets, final MoveTargets opponentTargets) {
+                       final LegalMoveTally playerTargets, final LegalMoveTally opponentTargets) {
     return materialEvaluation(player, material) +
             kingActivityEvaluation(player, pawns, opponentTargets) +
             passedPawnEvaluation(player, board, pawns) +
@@ -773,7 +721,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @return The king activity evaluation score.
    */
   private double kingActivityEvaluation(final Player player, final PawnLists pawns,
-                                        final MoveTargets opponentTargets) {
+                                        final LegalMoveTally opponentTargets) {
     double kingActivityScore = 0;
     final King playerKing = player.getPlayerKing();
     final King opponentKing = player.getOpponent().getPlayerKing();
@@ -879,7 +827,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param opponentTargets The destinations of the opponent's legal moves.
    * @return The king exposure evaluation score.
    */
-  private double evaluateKingExposure(final Player player, final MoveTargets opponentTargets) {
+  private double evaluateKingExposure(final Player player, final LegalMoveTally opponentTargets) {
     double exposureScore = 0;
     final int[] destinationCount = opponentTargets.destinationCount();
     final King playerKing = player.getPlayerKing();
@@ -1936,7 +1884,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @return The mobility evaluation score.
    */
   private double mobilityEvaluation(final Player player, final Material material,
-                                    final MoveTargets playerTargets) {
+                                    final LegalMoveTally playerTargets) {
     double mobilityScore = 0;
 
     double mobilityWeight = 1.0;
@@ -1969,7 +1917,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @return The piece safety evaluation score.
    */
   private double pieceSafetyEvaluation(final Player player, final Board board,
-                                       final MoveTargets opponentTargets) {
+                                       final LegalMoveTally opponentTargets) {
     double largestThreat = 0;
     final double threatFraction = WEIGHTS.get(THREAT_FRACTION);
     if (threatFraction <= 0) {
@@ -2048,24 +1996,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final int rank2 = position2 / 8;
 
     return Math.max(Math.abs(file1 - file2), Math.abs(rank1 - rank2));
-  }
-
-  /**
-   * Builds the set of tiles on which a pawn of the given alliance promotes.
-   *
-   * @param alliance The alliance of the pawn.
-   * @return The promotion tiles, as one bit per tile.
-   */
-  private static long computePromotionTiles(final Alliance alliance) {
-    long promotionTiles = 0L;
-
-    for (int tile = 0; tile < BoardUtils.NUM_TILES; tile++) {
-      if (alliance.isPawnPromotionSquare(tile)) {
-        promotionTiles |= 1L << tile;
-      }
-    }
-
-    return promotionTiles;
   }
 
   /**
