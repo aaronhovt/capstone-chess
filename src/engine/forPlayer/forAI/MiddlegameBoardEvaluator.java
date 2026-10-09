@@ -402,24 +402,28 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   @Override
   public double evaluate(final Board board) {
     return evaluate(board, LegalMoveTally.of(board, board.whitePlayer()),
-            LegalMoveTally.of(board, board.blackPlayer()));
+            LegalMoveTally.of(board, board.blackPlayer()),
+            PawnSpans.Pawns.of(board.whitePlayer()), PawnSpans.Pawns.of(board.blackPlayer()));
   }
 
   /**
    * Evaluates the given board as {@link #evaluate(Board)} does, from tallies of both players'
-   * legal moves on that board.
+   * legal moves and the placement of both players' pawns on that board.
    *
    * @param board The current state of the chess board.
    * @param whiteTally The tally of white's legal moves on the board.
    * @param blackTally The tally of black's legal moves on the board.
+   * @param whitePlacement The placement of white's pawns on the board.
+   * @param blackPlacement The placement of black's pawns on the board.
    * @return The evaluation score of the board.
    */
   double evaluate(final Board board, final LegalMoveTally whiteTally,
-                  final LegalMoveTally blackTally) {
+                  final LegalMoveTally blackTally, final PawnSpans.Pawns whitePlacement,
+                  final PawnSpans.Pawns blackPlacement) {
     final MoveStatistics whiteStatistics = moveStatistics(board.whitePlayer(), whiteTally);
     final MoveStatistics blackStatistics = moveStatistics(board.blackPlayer(), blackTally);
-    final PawnStructure whitePawns = pawnStructure(board.whitePlayer());
-    final PawnStructure blackPawns = pawnStructure(board.blackPlayer());
+    final PawnStructure whitePawns = pawnStructure(board.whitePlayer(), whitePlacement);
+    final PawnStructure blackPawns = pawnStructure(board.blackPlayer(), blackPlacement);
     final PieceLayout whiteLayout = pieceLayout(board.whitePlayer());
     final PieceLayout blackLayout = pieceLayout(board.blackPlayer());
     final PawnStructureCache.Entry pawnStructureScores =
@@ -563,46 +567,22 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Walks the given player's active pieces once and returns the placement facts of that player's
-   * pawns.
+   * Returns the structure of the given player's pawns, adding to their placement the squares they
+   * attack and their count on each square colour.
    *
    * @param player The player whose pawns are being read.
+   * @param pawns The placement of that player's pawns.
    * @return The structure of that player's pawns.
    */
-  private PawnStructure pawnStructure(final Player player) {
-    final Collection<Piece> playerPieces = player.getActivePieces();
-    final Alliance alliance = player.getAlliance();
-
-    int pawnCount = 0;
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() == Piece.PieceType.PAWN) {
-        pawnCount++;
-      }
-    }
-
-    final int[] positions = new int[pawnCount];
-    final int[] countByFile = new int[8];
-    final int[] rearmostRankByFile = new int[8];
-    final int[] filesByRank = new int[8];
+  private PawnStructure pawnStructure(final Player player, final PawnSpans.Pawns pawns) {
     final int[] attackCountBySquare = new int[BoardUtils.NUM_TILES];
-    final int attackedRankStep = alliance.isWhite() ? -1 : 1;
-    long occupancy = 0L;
+    final int attackedRankStep = player.getAlliance().isWhite() ? -1 : 1;
     int lightSquareCount = 0;
     int darkSquareCount = 0;
-    int index = 0;
 
-    for (final Piece piece : playerPieces) {
-      if (piece.getPieceType() != Piece.PieceType.PAWN) {
-        continue;
-      }
-
-      final int position = piece.getPiecePosition();
+    for (final int position : pawns.positions()) {
       final int file = position % 8;
       final int rank = position / 8;
-
-      positions[index++] = position;
-      occupancy |= 1L << position;
-      filesByRank[rank] |= 1 << file;
 
       if ((rank + file) % 2 == 0) {
         lightSquareCount++;
@@ -611,30 +591,19 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       }
 
       final int attackedRank = rank + attackedRankStep;
-
       if (attackedRank >= 0 && attackedRank < 8) {
         if (file > 0) {
           attackCountBySquare[(attackedRank * 8) + (file - 1)]++;
         }
-
         if (file < 7) {
           attackCountBySquare[(attackedRank * 8) + (file + 1)]++;
         }
       }
-
-      if (countByFile[file] == 0) {
-        rearmostRankByFile[file] = rank;
-      } else if (alliance.isWhite()) {
-        rearmostRankByFile[file] = Math.max(rearmostRankByFile[file], rank);
-      } else {
-        rearmostRankByFile[file] = Math.min(rearmostRankByFile[file], rank);
-      }
-
-      countByFile[file]++;
     }
 
-    return new PawnStructure(positions, occupancy, countByFile, rearmostRankByFile, filesByRank,
-            attackCountBySquare, lightSquareCount, darkSquareCount);
+    return new PawnStructure(pawns.positions(), pawns.occupancy(), pawns.countByFile(),
+            pawns.rearmostRankByFile(), pawns.filesByRank(), attackCountBySquare,
+            lightSquareCount, darkSquareCount);
   }
 
   /**

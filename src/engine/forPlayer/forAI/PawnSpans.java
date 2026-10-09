@@ -2,11 +2,16 @@ package engine.forPlayer.forAI;
 
 import engine.Alliance;
 import engine.forBoard.BoardUtils;
+import engine.forPiece.Piece;
+import engine.forPlayer.Player;
+
+import java.util.Collection;
 
 /**
  * The PawnSpans class holds the front span of a pawn on each tile: the tiles ahead of it, on its
  * own file and the files beside it, up to and including the rank furthest from its own side. A
- * pawn is passed when no opposing pawn stands in its front span.
+ * pawn is passed when no opposing pawn stands in its front span. It also reads the placement of
+ * one player's pawns, which both evaluators score from.
  *
  * @author Aaron Ho
  */
@@ -20,6 +25,72 @@ final class PawnSpans {
 
   /** Private constructor to prevent instantiation. */
   private PawnSpans() {}
+
+  /**
+   * The placement of one player's pawns. The arrays belong to this record and must not be modified
+   * by a caller. Rank indices run from zero on black's back rank to seven on white's.
+   *
+   * @param positions The tiles holding the pawns, in the order the player lists its pieces.
+   * @param occupancy The tiles holding the pawns, as one bit per tile.
+   * @param countByFile The number of pawns on each file, indexed by file.
+   * @param rearmostRankByFile The rank of the rearmost pawn on each file, indexed by file. A file
+   *                           without a pawn holds zero.
+   * @param filesByRank The files holding a pawn on each rank, as one bit per file, indexed by rank.
+   */
+  record Pawns(int[] positions, long occupancy, int[] countByFile, int[] rearmostRankByFile,
+               int[] filesByRank) {
+
+    /**
+     * Reads the placement of the given player's pawns.
+     *
+     * @param player The player whose pawns are read.
+     * @return The placement of that player's pawns.
+     */
+    static Pawns of(final Player player) {
+      final Collection<Piece> playerPieces = player.getActivePieces();
+      final boolean isWhite = player.getAlliance().isWhite();
+
+      int pawnCount = 0;
+      for (final Piece piece : playerPieces) {
+        if (piece.getPieceType() == Piece.PieceType.PAWN) {
+          pawnCount++;
+        }
+      }
+
+      final int[] positions = new int[pawnCount];
+      final int[] countByFile = new int[8];
+      final int[] rearmostRankByFile = new int[8];
+      final int[] filesByRank = new int[8];
+      long occupancy = 0L;
+      int index = 0;
+
+      for (final Piece piece : playerPieces) {
+        if (piece.getPieceType() != Piece.PieceType.PAWN) {
+          continue;
+        }
+
+        final int position = piece.getPiecePosition();
+        final int file = position % 8;
+        final int rank = position / 8;
+
+        positions[index++] = position;
+        occupancy |= 1L << position;
+        filesByRank[rank] |= 1 << file;
+
+        if (countByFile[file] == 0) {
+          rearmostRankByFile[file] = rank;
+        } else if (isWhite) {
+          rearmostRankByFile[file] = Math.max(rearmostRankByFile[file], rank);
+        } else {
+          rearmostRankByFile[file] = Math.min(rearmostRankByFile[file], rank);
+        }
+
+        countByFile[file]++;
+      }
+
+      return new Pawns(positions, occupancy, countByFile, rearmostRankByFile, filesByRank);
+    }
+  }
 
   /**
    * Returns the front span of a pawn of the given alliance standing on the given tile.
