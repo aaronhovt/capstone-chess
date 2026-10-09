@@ -905,8 +905,8 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Checks if a pawn is a passed pawn by verifying that no opposing pawns
-   * block its path to promotion on the same file or adjacent files.
+   * Checks if a pawn is a passed pawn, which is the case when no opposing pawn stands in its front
+   * span.
    *
    * @param pawn The pawn to check.
    * @param opponentPawnOccupancy The opponent's pawn occupancy, as one bit per tile.
@@ -915,26 +915,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   private boolean isPassedPawn(final Piece pawn, final long opponentPawnOccupancy,
                                final Alliance alliance) {
-    final int pawnPosition = pawn.getPiecePosition();
-    final int pawnFile = pawnPosition % 8;
-    final int pawnRank = pawnPosition / 8;
-    final int rankDirection = alliance.isWhite() ? -1 : 1;
-
-    for (int rank = pawnRank + rankDirection; alliance.isWhite() ? (rank >= 0) : (rank < 8); rank += rankDirection) {
-      if (isPawnAtPosition(opponentPawnOccupancy, rank * 8 + pawnFile)) {
-        return false;
-      }
-
-      if (pawnFile > 0 && isPawnAtPosition(opponentPawnOccupancy, rank * 8 + (pawnFile - 1))) {
-        return false;
-      }
-
-      if (pawnFile < 7 && isPawnAtPosition(opponentPawnOccupancy, rank * 8 + (pawnFile + 1))) {
-        return false;
-      }
-    }
-
-    return true;
+    return (PawnSpans.frontSpan(alliance, pawn.getPiecePosition()) & opponentPawnOccupancy) == 0L;
   }
 
   /**
