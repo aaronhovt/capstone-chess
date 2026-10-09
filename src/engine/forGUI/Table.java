@@ -6,7 +6,6 @@ import engine.forPiece.Piece;
 import engine.forPlayer.Player;
 import engine.forPlayer.forAI.AlphaBeta;
 import engine.forTesting.FenParser;
-import org.apache.commons.io.output.ByteArrayOutputStream;
 
 import javax.imageio.ImageIO;
 import javax.swing.*;
@@ -16,6 +15,7 @@ import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.util.List;
 import java.util.*;
