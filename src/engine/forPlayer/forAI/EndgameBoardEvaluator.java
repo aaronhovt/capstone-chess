@@ -8,7 +8,6 @@ import engine.forPiece.*;
 import engine.forPlayer.Player;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * The EndgameBoardEvaluator class provides specialized evaluation functions for chess endgame positions.
@@ -1547,9 +1546,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   private double rookEndgameEvaluation(final Player player, final Board board,
                                        final PawnLists pawns) {
     double rookScore = 0;
-    final List<Piece> playerRooks = player.getActivePieces().stream()
-            .filter(p -> p.getPieceType() == Piece.PieceType.ROOK)
-            .collect(Collectors.toList());
+    final List<Piece> playerRooks = piecesOfType(player, Piece.PieceType.ROOK);
 
     if (playerRooks.isEmpty()) {
       return 0;
@@ -1729,9 +1726,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   private double bishopEndgameEvaluation(final Player player, final Board board,
                                          final PawnLists pawns, final Material material) {
     double bishopScore = 0;
-    final List<Piece> playerBishops = player.getActivePieces().stream()
-            .filter(p -> p.getPieceType() == Piece.PieceType.BISHOP)
-            .collect(Collectors.toList());
+    final List<Piece> playerBishops = piecesOfType(player, Piece.PieceType.BISHOP);
 
     if (playerBishops.isEmpty()) {
       return 0;
@@ -2005,8 +2000,26 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @return A list of the player's pawn pieces.
    */
   private static List<Piece> getPlayerPawns(final Player player) {
-    return player.getActivePieces().stream()
-            .filter(piece -> piece.getPieceType() == Piece.PieceType.PAWN)
-            .collect(Collectors.toList());
+    return piecesOfType(player, Piece.PieceType.PAWN);
+  }
+
+  /**
+   * Returns the given player's pieces of the given type, in the order the player lists its
+   * pieces.
+   *
+   * @param player The player whose pieces are requested.
+   * @param type The piece type to keep.
+   * @return A new list of the player's pieces of that type.
+   */
+  private static List<Piece> piecesOfType(final Player player, final Piece.PieceType type) {
+    final List<Piece> pieces = new ArrayList<>();
+
+    for (final Piece piece : player.getActivePieces()) {
+      if (piece.getPieceType() == type) {
+        pieces.add(piece);
+      }
+    }
+
+    return pieces;
   }
 }
