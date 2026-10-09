@@ -224,15 +224,6 @@ public class EngineProcess implements AutoCloseable {
   }
 
   /**
-   * Returns the command line this engine was started from.
-   *
-   * @return The command line, already split into its arguments.
-   */
-  public List<String> getCommand() {
-    return this.command;
-  }
-
-  /**
    * Asks the process to quit, kills it if it does not, and closes the log file. Does nothing that
    * can throw, so that it is safe to call while handling a fault.
    */

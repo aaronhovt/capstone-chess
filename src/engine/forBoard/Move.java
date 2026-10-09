@@ -953,15 +953,6 @@ public abstract class Move {
     }
 
     /**
-     * Gets the rook involved in the castling move.
-     *
-     * @return The castle rook.
-     */
-    Rook getCastleRook() {
-      return this.castleRook;
-    }
-
-    /**
      * Checks if this move is a castling move.
      *
      * @return True since it is a castling move.

@@ -18,7 +18,7 @@ import java.util.Arrays;
  * of each alliance attacks from are tabulated separately per alliance.
  * <p>
  * Whatever occupies the square being tested is disregarded, except that a square held by a piece of
- * the attacking side is reported as unattacked, matching {@link Piece#attacksSquare(int, Board)}.
+ * the attacking side is reported as unattacked.
  *
  * @author Aaron Ho
  */

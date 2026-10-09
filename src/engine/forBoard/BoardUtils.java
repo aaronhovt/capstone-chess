@@ -1,7 +1,6 @@
 package engine.forBoard;
 
 import engine.Alliance;
-import engine.forPiece.Piece;
 import engine.forPlayer.Player;
 
 import java.util.Arrays;
@@ -204,22 +203,6 @@ public enum BoardUtils {
     } finally {
       move.unmakeMove(board, undo);
     }
-  }
-
-  /**
-   * Calculates the Modified Value, Victim, The Least Value, Victim Attacker (MVVLVA) score for a move.
-   * This scoring system is used for move ordering in search algorithms, prioritizing captures of valuable
-   * pieces by less valuable pieces.
-   *
-   * @param move The move for which to calculate the MVVLVA score.
-   * @return The MVVLVA score.
-   */
-  public static int mvvlva(final Move move) {
-    final Piece movingPiece = move.getMovedPiece();
-    if (move.isAttack()) {
-      final Piece attackedPiece = move.getAttackedPiece();
-      return (attackedPiece.getPieceValue() - movingPiece.getPieceValue() + Piece.PieceType.KING.getPieceValue()) * 100;
-    } return Piece.PieceType.KING.getPieceValue() - movingPiece.getPieceValue();
   }
 
   /**

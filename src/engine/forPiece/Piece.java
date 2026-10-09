@@ -183,24 +183,6 @@ public abstract class Piece {
   public abstract void addDefendedSquares(final Board board, final int[] defenderCounts);
 
   /**
-   * Determines whether this piece attacks the given square on the given board, without
-   * allocating any {@link Move} objects. A defended square is attacked unless a piece of this
-   * piece's own alliance stands on it, so this mirrors exactly the destinations {@link
-   * #calculateLegalMoves(Board)} would produce for this piece.
-   *
-   * @param targetSquare The square to test.
-   * @param board The current board.
-   * @return True if this piece attacks targetSquare, false otherwise.
-   */
-  public boolean attacksSquare(final int targetSquare, final Board board) {
-    if (!defendsSquare(targetSquare, board)) {
-      return false;
-    }
-    final Piece pieceAtTarget = board.getPiece(targetSquare);
-    return pieceAtTarget == null || pieceAtTarget.getPieceAllegiance() != this.pieceAlliance;
-  }
-
-  /**
    * Overrides the `equals` method to compare two pieces for equality.
    *
    * @param other The object to compare with.
@@ -296,15 +278,6 @@ public abstract class Piece {
               final String pieceName) {
       this.value = val;
       this.pieceName = pieceName;
-    }
-
-    /**
-     * Checks if the piece in question is a minor piece (e.g., bishop or knight).
-     *
-     * @return True if the piece is a minor piece, false otherwise. 
-     */
-    public boolean isMinorPiece() {
-      return this.getPieceValue() < 400;
     }
   }
 }

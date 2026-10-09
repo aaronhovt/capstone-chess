@@ -11,10 +11,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.stream.Collectors;
 
 import static engine.forPiece.Piece.PieceType.KING;
-import static java.util.stream.Collectors.collectingAndThen;
 
 /**
  * The Player class represents an abstract chess player, providing the foundation for player-specific
@@ -190,19 +188,6 @@ public abstract class Player {
     }
     playerLegals.addAll(calculateKingCastles(playerLegals));
     return Collections.unmodifiableList(playerLegals);
-  }
-
-  /**
-   * Calculates all moves that attack a specific tile on the board.
-   *
-   * @param tile The tile coordinate to check for attacks.
-   * @param moves The collection of moves to examine.
-   * @return An unmodifiable collection of moves that attack the specified tile.
-   */
-  public static Collection<Move> calculateAttacksOnTile(final int tile, final Collection<Move> moves) {
-    return moves.stream()
-            .filter(move -> move.getDestinationCoordinate() == tile)
-            .collect(collectingAndThen(Collectors.toList(), Collections::unmodifiableList));
   }
 
   /**
