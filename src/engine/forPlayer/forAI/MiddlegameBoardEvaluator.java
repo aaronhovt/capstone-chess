@@ -333,6 +333,37 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private static final int PASSED_PAWN_OPPOSING_KING =
           WEIGHTS.add("PASSED_PAWN_OPPOSING_KING", 14);
 
+  /** The further bonus per passed pawn within two ranks of promotion. */
+  private static final int PASSED_PAWN_NEAR_PROMOTION =
+          WEIGHTS.add("PASSED_PAWN_NEAR_PROMOTION", 0);
+
+  /** The further bonus per passed pawn three or four ranks from promotion. */
+  private static final int PASSED_PAWN_MIDWAY = WEIGHTS.add("PASSED_PAWN_MIDWAY", 0);
+
+  /** The further bonus per passed pawn with no piece ahead of it on its file. */
+  private static final int PASSED_PAWN_CLEAR_PATH = WEIGHTS.add("PASSED_PAWN_CLEAR_PATH", 0);
+
+  /** The bonus per pair of passed pawns on adjacent files. */
+  private static final int CONNECTED_PASSED_PAWNS = WEIGHTS.add("CONNECTED_PASSED_PAWNS", 0);
+
+  /** The further bonus per such pair whose more advanced pawn is near promotion. */
+  private static final int CONNECTED_PASSED_PAWNS_ADVANCED =
+          WEIGHTS.add("CONNECTED_PASSED_PAWNS_ADVANCED", 0);
+
+  /** The bonus per own knight, bishop, rook or queen within one tile of a passed pawn. */
+  private static final int PASSED_PAWN_ESCORT = WEIGHTS.add("PASSED_PAWN_ESCORT", 0);
+
+  /** The bonus per own knight, bishop, rook or queen two tiles from a passed pawn. */
+  private static final int PASSED_PAWN_NEAR_ESCORT =
+          WEIGHTS.add("PASSED_PAWN_NEAR_ESCORT", 0);
+
+  /** The bonus per rook behind its own passed pawn on the same file. */
+  private static final int ROOK_BEHIND_OWN_PASSER = WEIGHTS.add("ROOK_BEHIND_OWN_PASSER", 0);
+
+  /** The bonus per rook behind an opposing passed pawn on the same file. */
+  private static final int ROOK_BEHIND_OPPOSING_PASSER =
+          WEIGHTS.add("ROOK_BEHIND_OPPOSING_PASSER", 0);
+
   /**
    * The value of both players' knights, bishops, rooks and queens combined at and above which the
    * king safety, space control and attacking potential terms count in full.
@@ -810,7 +841,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
             kingWeight * spaceControlEvaluation(playerStatistics, opponentStatistics) +
             kingWeight * attackingPotentialEvaluation(player, playerStatistics, opponentLayout) +
             specialPatternsEvaluation(player, board, playerPawns, opponentPawns, playerLayout) +
-            kingActivityEvaluation(player, playerPawns, opponentPawns);
+            kingActivityEvaluation(player, playerPawns, opponentPawns) +
+            passedPawnSupportEvaluation(player, playerPawns, opponentPawns, playerLayout,
+                    opponentLayout);
   }
 
   /**
@@ -1048,9 +1081,10 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Evaluates passed pawns, which are more valuable in the middlegame. The bonus for a passed
-   * pawn whose stop square no opponent piece controls is left to
-   * {@link #evaluateUncontrolledStopSquares}.
+   * Evaluates passed pawns, which are more valuable in the middlegame, and pairs of passed pawns
+   * on adjacent files. The bonus for a passed pawn whose stop square no opponent piece controls is
+   * left to {@link #evaluateUncontrolledStopSquares}, and the terms that read pieces other than
+   * pawns to {@link #passedPawnSupportEvaluation}.
    *
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
@@ -1061,17 +1095,44 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
                                      final PawnStructure opponentPawns,
                                      final Alliance alliance) {
     double passedPawnScore = 0;
+    final int[] passedPawns = new int[playerPawns.positions().length];
+    int passedCount = 0;
 
     for (final int pawnPosition : playerPawns.positions()) {
       if (isPassedPawn(pawnPosition, opponentPawns, alliance)) {
         final int rank = pawnPosition / 8;
         final int advancementBonus = alliance.isWhite() ? 7 - rank : rank;
+        final int ranksFromPromotion = 7 - advancementBonus;
 
         passedPawnScore += WEIGHTS.get(PASSED_PAWN) +
                 (advancementBonus * WEIGHTS.get(PASSED_PAWN_RANK));
 
         if (isPawnProtected(pawnPosition, playerPawns, alliance)) {
           passedPawnScore += WEIGHTS.get(PASSED_PAWN_PROTECTED);
+        }
+
+        if (ranksFromPromotion <= 2) {
+          passedPawnScore += WEIGHTS.get(PASSED_PAWN_NEAR_PROMOTION);
+        } else if (ranksFromPromotion <= 4) {
+          passedPawnScore += WEIGHTS.get(PASSED_PAWN_MIDWAY);
+        }
+
+        passedPawns[passedCount++] = pawnPosition;
+      }
+    }
+
+    for (int i = 0; i < passedCount; i++) {
+      for (int j = i + 1; j < passedCount; j++) {
+        if (Math.abs(passedPawns[i] % 8 - passedPawns[j] % 8) == 1) {
+          passedPawnScore += WEIGHTS.get(CONNECTED_PASSED_PAWNS);
+
+          final int advancedRank = alliance.isWhite() ?
+                  Math.min(passedPawns[i] / 8, passedPawns[j] / 8) :
+                  Math.max(passedPawns[i] / 8, passedPawns[j] / 8);
+
+          if (alliance.isWhite() ? advancedRank <= 2 : advancedRank >= 5) {
+            passedPawnScore += WEIGHTS.get(CONNECTED_PASSED_PAWNS_ADVANCED);
+          }
         }
       }
     }
@@ -1737,6 +1798,88 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     }
 
     return attackScore;
+  }
+
+  /**
+   * Evaluates the support the player's pieces give passed pawns, by the terms the endgame
+   * evaluator also scores: a clear file ahead of each passed pawn, the player's knights, bishops,
+   * rooks and queens within two tiles of it, and the player's rooks standing behind a passed pawn
+   * of either player on the same file, behind as seen from the player's side.
+   *
+   * @param player The player whose passed pawn support is being evaluated.
+   * @param playerPawns The structure of the player's pawns.
+   * @param opponentPawns The structure of the opponent's pawns.
+   * @param playerLayout The layout of the player's pieces.
+   * @param opponentLayout The layout of the opponent's pieces.
+   * @return The passed pawn support evaluation score.
+   */
+  private double passedPawnSupportEvaluation(final Player player,
+                                             final PawnStructure playerPawns,
+                                             final PawnStructure opponentPawns,
+                                             final PieceLayout playerLayout,
+                                             final PieceLayout opponentLayout) {
+    final Alliance alliance = player.getAlliance();
+    final Alliance opponentAlliance = player.getOpponent().getAlliance();
+    final long occupancy = playerLayout.nonKingPieces() | opponentLayout.nonKingPieces() |
+            (1L << player.getPlayerKing().getPiecePosition()) |
+            (1L << player.getOpponent().getPlayerKing().getPiecePosition());
+    final long escorts = playerLayout.knights() | playerLayout.bishops() |
+            playerLayout.rooks() | playerLayout.queens();
+    double supportScore = 0;
+    long playerPassers = 0L;
+
+    for (final int pawnPosition : playerPawns.positions()) {
+      final long frontSpan = PawnSpans.frontSpan(alliance, pawnPosition);
+
+      if ((frontSpan & opponentPawns.occupancy()) != 0L) {
+        continue;
+      }
+
+      playerPassers |= 1L << pawnPosition;
+
+      if ((frontSpan & (FILE_TILES << (pawnPosition % 8)) & occupancy) == 0L) {
+        supportScore += WEIGHTS.get(PASSED_PAWN_CLEAR_PATH);
+      }
+
+      final long beside = KING_NEIGHBOURHOODS[pawnPosition];
+      supportScore += Long.bitCount(escorts & beside) * WEIGHTS.get(PASSED_PAWN_ESCORT) +
+              Long.bitCount(escorts & KING_ZONES[pawnPosition] & ~beside) *
+                      WEIGHTS.get(PASSED_PAWN_NEAR_ESCORT);
+    }
+
+    final long rooks = playerLayout.rooks();
+    if (rooks == 0L) {
+      return supportScore;
+    }
+
+    long opponentPassers = 0L;
+    for (final int pawnPosition : opponentPawns.positions()) {
+      if ((PawnSpans.frontSpan(opponentAlliance, pawnPosition) & playerPawns.occupancy()) == 0L) {
+        opponentPassers |= 1L << pawnPosition;
+      }
+    }
+
+    for (long remaining = rooks; remaining != 0L; remaining &= remaining - 1) {
+      final int rookPosition = Long.numberOfTrailingZeros(remaining);
+      final long rookFile = FILE_TILES << (rookPosition % 8);
+      final int rookRank = rookPosition / 8;
+
+      for (long passers = playerPassers & rookFile; passers != 0L; passers &= passers - 1) {
+        final int pawnRank = Long.numberOfTrailingZeros(passers) / 8;
+        if (alliance.isWhite() ? rookRank > pawnRank : rookRank < pawnRank) {
+          supportScore += WEIGHTS.get(ROOK_BEHIND_OWN_PASSER);
+        }
+      }
+
+      for (long passers = opponentPassers & rookFile; passers != 0L; passers &= passers - 1) {
+        final int pawnRank = Long.numberOfTrailingZeros(passers) / 8;
+        if (alliance.isWhite() ? rookRank > pawnRank : rookRank < pawnRank) {
+          supportScore += WEIGHTS.get(ROOK_BEHIND_OPPOSING_PASSER);
+        }
+      }
+    }
+
+    return supportScore;
   }
 
   /**
