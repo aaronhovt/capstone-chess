@@ -3,8 +3,13 @@ package engine.forTesting;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -54,6 +59,12 @@ import java.util.concurrent.Executors;
  * The arbiter uses the move generation of the build it was compiled from, not that of either
  * engine, so a move generation fault shared by both engines would be invisible here. That is what
  * {@link PerftSuite} covers.
+ * <p>
+ * Every pair that reaches a result is appended to a results file as soon as it ends, after a line
+ * recording the settings that decide the games. A match stopped part way, by a crash or by hand,
+ * can be resumed from that file: the pairs it records are counted again rather than played, and
+ * only the rest are played. A resumed match must be played under the same settings, apart from the
+ * number of pairs played at once, the timeout, the log directory and verbose output.
  *
  * @author Aaron Ho
  */
@@ -100,6 +111,22 @@ public class SelfPlayMatch {
 
   /** The directory the engine logs are written to when no other directory is given. */
   private static final String DEFAULT_LOG_DIRECTORY = "out/match-logs";
+
+  /** The name of the results file, in the log directory, when no other file is given. */
+  private static final String DEFAULT_RESULTS_FILE_NAME = "results.txt";
+
+  /** The first line of a results file. */
+  private static final String RESULTS_TITLE =
+          "# SelfPlayMatch results: the settings, then one line per finished pair";
+
+  /** The word starting the line of a results file that records the settings. */
+  private static final String RESULTS_SETTINGS_WORD = "settings";
+
+  /** The word starting each line of a results file that records a finished pair. */
+  private static final String RESULTS_PAIR_WORD = "pair";
+
+  /** The number of fields on a pair line of a results file, the leading word included. */
+  private static final int RESULTS_PAIR_FIELDS = 14;
 
   /** The number of openings played when no other number is given. */
   private static final int DEFAULT_PAIRS = 1;
@@ -177,8 +204,23 @@ public class SelfPlayMatch {
     }
 
     printHeader(settings, lines);
+    final ResultsFile results;
+    try {
+      results = ResultsFile.open(settings, lines.size());
+    } catch (final IOException exception) {
+      System.out.println("The results file " + settings.resultsPath() + " could not be opened: " +
+              exception.getMessage());
+      System.exit(USAGE_STATUS);
+      return;
+    } catch (final IllegalArgumentException exception) {
+      System.out.println(exception.getMessage());
+      System.exit(USAGE_STATUS);
+      return;
+    }
+
     final long start = System.nanoTime();
-    final Tally tally = runMatch(settings, lines);
+    final Tally tally = runMatch(settings, lines, results);
+    results.close();
     final long elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
     printTally(tally, lines.size(), workerCount(settings, lines), elapsedMillis,
             settings.sequentialTest());
@@ -198,9 +240,12 @@ public class SelfPlayMatch {
    *
    * @param settings The settings the match is played under.
    * @param lines The openings the match is played from, each of them played twice.
+   * @param results The results file the finished pairs are recorded in, holding the pairs of a
+   *                resumed match.
    * @return What the games came to and what stopped the match, if anything did.
    */
-  private static Tally runMatch(final Settings settings, final List<BookLine> lines) {
+  private static Tally runMatch(final Settings settings, final List<BookLine> lines,
+                                final ResultsFile results) {
     final List<String> commandA;
     final List<String> commandB;
     try {
@@ -212,7 +257,10 @@ public class SelfPlayMatch {
     }
 
     final int workers = workerCount(settings, lines);
-    final Coordinator coordinator = new Coordinator(lines, settings.sequentialTest());
+    final Coordinator coordinator = new Coordinator(lines, settings.sequentialTest(), results);
+    if (!coordinator.hasPairsLeft()) {
+      return coordinator.tally();
+    }
     try (ExecutorService pool = Executors.newFixedThreadPool(workers)) {
       for (int worker = 1; worker <= workers; worker++) {
         final int number = worker;
@@ -264,7 +312,8 @@ public class SelfPlayMatch {
         if (pair < 0) {
           return;
         }
-        coordinator.finish(playPair(settings, pair + 1, lines.get(pair), engineA, engineB));
+        coordinator.finish(pair,
+                playPair(settings, pair + 1, lines.get(pair), engineA, engineB));
       }
     } catch (final EngineProcess.Fault fault) {
       coordinator.fail(workers == 1 ? fault.getMessage() :
@@ -847,6 +896,9 @@ public class SelfPlayMatch {
             DEFAULT_TIMEOUT_SECONDS + " by default");
     System.out.println("  --logs <directory>   where the engine logs are written, " +
             DEFAULT_LOG_DIRECTORY + " by default");
+    System.out.println("  --results <file>     where every finished pair is recorded, " +
+            DEFAULT_RESULTS_FILE_NAME + " in the log directory by default");
+    System.out.println("  --resume             continue the match the results file records");
     System.out.println("  --verbose            report every move and the moves of every game");
     System.out.println("  --help               print this message");
     System.out.println();
@@ -864,6 +916,11 @@ public class SelfPlayMatch {
     System.out.println("counted, so a match on several workers may hold more pairs than the same");
     System.out.println("match on one. Each worker holds two engine processes and each process");
     System.out.println("holds its own hash, so --concurrency multiplies the memory a match needs.");
+    System.out.println();
+    System.out.println("A fresh match renames an existing results file to <name>.previous.<ext>");
+    System.out.println("before writing its own. A resumed match must be given the same settings,");
+    System.out.println("apart from --concurrency, --timeout, --logs and --verbose, and the same");
+    System.out.println("engines: a working tree jar keeps its path when the tree changes.");
     System.out.println();
     System.out.println("Engine A plays White in the first game of every pair. An engine command");
     System.out.println("line is one argument. Whitespace inside it separates its arguments except");
@@ -1095,9 +1152,15 @@ public class SelfPlayMatch {
     private final MatchStatistics.SequentialTest test;
 
     /** What the pairs finished so far have come to. */
-    private final Accumulator accumulator = new Accumulator();
+    private final Accumulator accumulator;
 
-    /** The next pair to hand out. */
+    /** Whether each pair has reached a result, indexed by its position in the list of lines. */
+    private final boolean[] finished;
+
+    /** The results file each finished pair is recorded in. */
+    private final ResultsFile results;
+
+    /** The next pair to hand out, unless it has already reached a result. */
     private int cursor;
 
     /** What stopped the match, or null if nothing has. */
@@ -1107,43 +1170,80 @@ public class SelfPlayMatch {
     private boolean stopped;
 
     /**
-     * Constructs a coordinator over the pairs of a match.
+     * Constructs a coordinator over the pairs of a match, starting from the pairs the results file
+     * already records. A match whose recorded games have already settled the sequential test hands
+     * out no pair.
      *
      * @param lines The openings the match is played from, one for each pair.
      * @param test The hypotheses the games are weighed between, or null if the match holds no
      *             test.
+     * @param results The results file the finished pairs are recorded in.
      */
-    private Coordinator(final List<BookLine> lines, final MatchStatistics.SequentialTest test) {
+    private Coordinator(final List<BookLine> lines, final MatchStatistics.SequentialTest test,
+                        final ResultsFile results) {
       this.lines = lines;
       this.test = test;
+      this.results = results;
+      this.accumulator = results.accumulator();
+      this.finished = results.finished();
+      this.stopped = test != null && this.accumulator.played > 0 &&
+              new MatchStatistics(this.accumulator.engineAWins, this.accumulator.engineBWins,
+                      this.accumulator.draws).conclude(test) !=
+                      MatchStatistics.Conclusion.UNDECIDED;
     }
 
     /**
-     * Hands out the next pair to play.
+     * Reports whether a pair remains to be handed out.
+     *
+     * @return True if the match is not stopped and holds a pair that has not reached a result.
+     */
+    private synchronized boolean hasPairsLeft() {
+      skipFinished();
+      return !this.stopped && this.cursor < this.lines.size();
+    }
+
+    /**
+     * Hands out the next pair to play, passing over pairs that have already reached a result.
      *
      * @return The position of the next opening in the list of lines, or minus one if the match
      *         holds no further pair to play.
      */
     private synchronized int nextPair() {
+      skipFinished();
       if (this.stopped || this.cursor >= this.lines.size()) {
         return -1;
       }
       return this.cursor++;
     }
 
+    /** Moves the cursor past the pairs that have already reached a result. */
+    private void skipFinished() {
+      while (this.cursor < this.lines.size() && this.finished[this.cursor]) {
+        this.cursor++;
+      }
+    }
+
     /**
-     * Reports one finished pair, counts its games, and weighs the sequential test on the games
-     * counted so far.
+     * Reports one finished pair, counts its games, records it in the results file, and weighs the
+     * sequential test on the games counted so far. A pair stopped by a failure is counted but not
+     * recorded, so a resumed match plays it again.
      *
+     * @param pair The position of the pair's opening in the list of lines.
      * @param result What the games of the pair came to and the lines reporting them.
      */
-    private synchronized void finish(final PairResult result) {
+    private synchronized void finish(final int pair, final PairResult result) {
       for (final String line : result.report()) {
         System.out.println(line);
       }
       this.accumulator.add(result);
       if (result.failure() != null) {
         fail(result.failure());
+        return;
+      }
+      try {
+        this.results.record(pair, result);
+      } catch (final IOException exception) {
+        fail("the results file could not be written: " + exception.getMessage());
         return;
       }
       if (settled(this.test, this.accumulator)) {
@@ -1170,6 +1270,287 @@ public class SelfPlayMatch {
      */
     private synchronized Tally tally() {
       return this.accumulator.tally(this.failure);
+    }
+  }
+
+  /**
+   * The ResultsFile class records the pairs of a match in a file as they finish, and reads a file
+   * back to resume the match it records. The file holds a title line, a line naming the settings
+   * that decide the games, and one line for each finished pair. A line left incomplete by a crash
+   * is passed over when the file is read.
+   */
+  private static final class ResultsFile {
+
+    /** The file. */
+    private final Path path;
+
+    /** The writer each finished pair is appended through. */
+    private final BufferedWriter writer;
+
+    /** What the pairs the file already recorded when it was opened came to. */
+    private final Accumulator accumulator;
+
+    /** Whether the file recorded each pair when it was opened, indexed by pair. */
+    private final boolean[] finished;
+
+    /**
+     * Constructs a results file that has been opened for writing.
+     *
+     * @param path The file.
+     * @param writer The writer each finished pair is appended through.
+     * @param accumulator What the pairs the file already recorded came to.
+     * @param finished Whether the file recorded each pair, indexed by pair.
+     */
+    private ResultsFile(final Path path, final BufferedWriter writer,
+                        final Accumulator accumulator, final boolean[] finished) {
+      this.path = path;
+      this.writer = writer;
+      this.accumulator = accumulator;
+      this.finished = finished;
+    }
+
+    /**
+     * Opens the results file a match records its pairs in. A fresh match renames any file already
+     * at the path to its previous name and writes a new one. A resumed match reads the pairs the
+     * file records, reports what they came to, and appends to the file.
+     *
+     * @param settings The settings the match is played under.
+     * @param pairs The number of pairs the match holds.
+     * @return The opened results file.
+     * @throws IOException If the file cannot be read, renamed or written.
+     * @throws IllegalArgumentException If a resumed match has no results file, or the file was
+     *                                  written under other settings.
+     */
+    private static ResultsFile open(final Settings settings, final int pairs) throws IOException {
+      final Path path = Path.of(settings.resultsPath());
+      final String settingsLine = RESULTS_SETTINGS_WORD + " " + fingerprint(settings);
+      final Accumulator accumulator = new Accumulator();
+      final boolean[] finished = new boolean[pairs];
+
+      if (!settings.resume()) {
+        if (path.getParent() != null) {
+          Files.createDirectories(path.getParent());
+        }
+        if (Files.exists(path)) {
+          Files.move(path, previousPath(path), StandardCopyOption.REPLACE_EXISTING);
+        }
+        final BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8);
+        writer.write(RESULTS_TITLE);
+        writer.newLine();
+        writer.write(settingsLine);
+        writer.newLine();
+        writer.flush();
+        return new ResultsFile(path, writer, accumulator, finished);
+      }
+
+      if (!Files.exists(path)) {
+        throw new IllegalArgumentException("The results file " + path + " does not exist, so " +
+                "there is no match to resume");
+      }
+      final String content = Files.readString(path, StandardCharsets.UTF_8);
+      final List<String> fileLines = content.lines().toList();
+      final String recorded = fileLines.stream()
+              .filter(line -> line.startsWith(RESULTS_SETTINGS_WORD + " "))
+              .findFirst()
+              .orElse("none");
+      if (!settingsLine.equals(recorded)) {
+        throw new IllegalArgumentException("The results file " + path + " records a match " +
+                "played under other settings, so it cannot be resumed." +
+                System.lineSeparator() + "  recorded: " + recorded +
+                System.lineSeparator() + "  given:    " + settingsLine);
+      }
+
+      int recordedPairs = 0;
+      int skippedLines = 0;
+      for (final String line : fileLines) {
+        if (!line.startsWith(RESULTS_PAIR_WORD + " ")) {
+          continue;
+        }
+        final PairResult result = parsePair(line, pairs, finished);
+        if (result == null) {
+          skippedLines++;
+          continue;
+        }
+        accumulator.add(result);
+        recordedPairs++;
+      }
+
+      final BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8,
+              StandardOpenOption.APPEND);
+      if (!content.isEmpty() && !content.endsWith("\n")) {
+        writer.newLine();
+        writer.flush();
+      }
+      reportResumption(path, recordedPairs, skippedLines, accumulator,
+              settings.sequentialTest());
+      return new ResultsFile(path, writer, accumulator, finished);
+    }
+
+    /**
+     * Reads one pair line, marking its pair finished.
+     *
+     * @param line The line to read.
+     * @param pairs The number of pairs the match holds.
+     * @param finished Whether each pair has already been read, indexed by pair.
+     * @return What the pair came to, or null if the line is incomplete, names no pair of the match,
+     *         or repeats a pair already read.
+     */
+    private static PairResult parsePair(final String line, final int pairs,
+                                        final boolean[] finished) {
+      final String[] fields = line.trim().split(" ");
+      if (fields.length != RESULTS_PAIR_FIELDS) {
+        return null;
+      }
+      try {
+        final int pair = Integer.parseInt(fields[1]);
+        if (pair < 0 || pair >= pairs || finished[pair]) {
+          return null;
+        }
+        final PairResult result = new PairResult(Integer.parseInt(fields[2]),
+                Integer.parseInt(fields[3]), Integer.parseInt(fields[4]),
+                Integer.parseInt(fields[5]), Integer.parseInt(fields[6]),
+                parseTotals(fields, 8), parseTotals(fields, 11), Long.parseLong(fields[7]), null,
+                List.of());
+        finished[pair] = true;
+        return result;
+      } catch (final NumberFormatException exception) {
+        return null;
+      }
+    }
+
+    /**
+     * Reads the search totals of one engine from the fields of a pair line.
+     *
+     * @param fields The fields of the line.
+     * @param first The position of the first of the three fields holding the totals.
+     * @return The search totals.
+     * @throws NumberFormatException If a field is not a number.
+     */
+    private static SearchTotals parseTotals(final String[] fields, final int first) {
+      final SearchTotals totals = new SearchTotals();
+      totals.searches = Integer.parseInt(fields[first]);
+      totals.depthSearches = Integer.parseInt(fields[first + 1]);
+      totals.depth = Long.parseLong(fields[first + 2]);
+      return totals;
+    }
+
+    /**
+     * Reports what the pairs read back from a results file came to.
+     *
+     * @param path The file.
+     * @param recordedPairs The number of pairs read back.
+     * @param skippedLines The number of pair lines passed over.
+     * @param accumulator What the pairs read back came to.
+     * @param test The hypotheses the games are weighed between, or null if the match holds no test.
+     */
+    private static void reportResumption(final Path path, final int recordedPairs,
+                                         final int skippedLines, final Accumulator accumulator,
+                                         final MatchStatistics.SequentialTest test) {
+      System.out.println("Resumed from " + path + ": " + recordedPairs + " pairs, " +
+              accumulator.played + " games, A wins " + accumulator.engineAWins + ", B wins " +
+              accumulator.engineBWins + ", drawn " + accumulator.draws +
+              (skippedLines == 0 ? "" : ", " + skippedLines + " unreadable pair " +
+                      (skippedLines == 1 ? "line" : "lines") + " passed over"));
+      if (test != null && accumulator.played > 0) {
+        final MatchStatistics statistics = new MatchStatistics(accumulator.engineAWins,
+                accumulator.engineBWins, accumulator.draws);
+        System.out.printf("  test    LLR %+.2f of %+.2f to %+.2f after %d games%n",
+                statistics.logLikelihoodRatio(test), test.lowerBound(), test.upperBound(),
+                statistics.games());
+      }
+      System.out.println();
+    }
+
+    /**
+     * Appends one finished pair to the file and flushes it.
+     *
+     * @param pair The position of the pair's opening in the list of lines.
+     * @param result What the games of the pair came to.
+     * @throws IOException If the file cannot be written.
+     */
+    private void record(final int pair, final PairResult result) throws IOException {
+      final SearchTotals a = result.engineATotals();
+      final SearchTotals b = result.engineBTotals();
+      this.writer.write(String.format("%s %d %d %d %d %d %d %d %d %d %d %d %d %d",
+              RESULTS_PAIR_WORD, pair, result.engineAWins(), result.engineBWins(), result.draws(),
+              result.played(), result.adjudicated(), result.gameMillis(), a.searches,
+              a.depthSearches, a.depth, b.searches, b.depthSearches, b.depth));
+      this.writer.newLine();
+      this.writer.flush();
+    }
+
+    /**
+     * Returns what the pairs the file recorded when it was opened came to. The accumulator is the
+     * one the match goes on counting into.
+     *
+     * @return The accumulator.
+     */
+    private Accumulator accumulator() {
+      return this.accumulator;
+    }
+
+    /**
+     * Returns whether the file recorded each pair when it was opened. The array is the one the
+     * match reads.
+     *
+     * @return Whether each pair was recorded, indexed by pair.
+     */
+    private boolean[] finished() {
+      return this.finished;
+    }
+
+    /** Closes the file, reporting rather than throwing if it cannot be closed. */
+    private void close() {
+      try {
+        this.writer.close();
+      } catch (final IOException exception) {
+        System.out.println("The results file " + this.path + " could not be closed: " +
+                exception.getMessage());
+      }
+    }
+
+    /**
+     * Names the settings that decide the games of a match, which a resumed match must share.
+     *
+     * @param settings The settings the match is played under.
+     * @return The settings written out on one line.
+     */
+    private static String fingerprint(final Settings settings) {
+      final MatchStatistics.SequentialTest test = settings.sequentialTest();
+      return String.join(" | ",
+              "engine-a " + settings.engineACommand(),
+              "engine-b " + settings.engineBCommand(),
+              "limit-a " + settings.limitA().description(),
+              "limit-b " + settings.limitB().description(),
+              "hash " + settings.tableSizeMB(),
+              "book " + (settings.useBook() ? settings.bookPath() : "off"),
+              "pairs " + settings.pairs(),
+              "seed " + settings.seed(),
+              "opening " + settings.openingIndex(),
+              "plycap " + settings.plyCap(),
+              "adjudication " + (settings.adjudicate() ?
+                      settings.resignScore() + " " + settings.resignPlies() + " " +
+                              settings.drawScore() + " " + settings.drawPlies() + " " +
+                              settings.drawAfter() :
+                      "off"),
+              "test " + (test == null ? "off" :
+                      test.nullElo() + " " + test.gainElo() + " " + test.falsePositiveRate() +
+                              " " + test.falseNegativeRate()));
+    }
+
+    /**
+     * Names the file an existing results file is renamed to when a fresh match starts: the same
+     * name with ".previous" before its extension.
+     *
+     * @param path The results file.
+     * @return The path it is renamed to.
+     */
+    private static Path previousPath(final Path path) {
+      final String name = path.getFileName().toString();
+      final int dot = name.lastIndexOf('.');
+      return path.resolveSibling(dot > 0 ?
+              name.substring(0, dot) + ".previous" + name.substring(dot) :
+              name + ".previous");
     }
   }
 
@@ -1208,6 +1589,8 @@ public class SelfPlayMatch {
    * @param concurrency The number of pairs played at once.
    * @param timeoutSeconds The longest an engine may take to answer.
    * @param logDirectory The directory the engine logs are written to.
+   * @param resultsPath The file every finished pair is appended to.
+   * @param resume True to continue the match the results file records rather than start anew.
    * @param verbose True to report every move and the moves of every game.
    */
   public record Settings(String engineACommand, String engineBCommand, EngineProcess.Limit limitA,
@@ -1216,7 +1599,8 @@ public class SelfPlayMatch {
                          boolean adjudicate, int resignScore, int resignPlies, int drawScore,
                          int drawPlies, int drawAfter,
                          MatchStatistics.SequentialTest sequentialTest, int concurrency,
-                         long timeoutSeconds, String logDirectory, boolean verbose) {
+                         long timeoutSeconds, String logDirectory, String resultsPath,
+                         boolean resume, boolean verbose) {
 
     /**
      * Reads settings from command line arguments. The argument --nodes sets the node limit of both
@@ -1276,6 +1660,8 @@ public class SelfPlayMatch {
       int concurrency = DEFAULT_CONCURRENCY;
       long timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
       String logDirectory = DEFAULT_LOG_DIRECTORY;
+      String resultsPath = null;
+      boolean resume = false;
       boolean verbose = false;
 
       for (int index = 0; index < args.length; index++) {
@@ -1297,6 +1683,10 @@ public class SelfPlayMatch {
         }
         if ("--verbose".equals(argument)) {
           verbose = true;
+          continue;
+        }
+        if ("--resume".equals(argument)) {
+          resume = true;
           continue;
         }
         final String value = valueOf(args, index, argument);
@@ -1375,6 +1765,7 @@ public class SelfPlayMatch {
           case "--concurrency" -> concurrency = (int) number(value, argument);
           case "--timeout" -> timeoutSeconds = number(value, argument);
           case "--logs" -> logDirectory = value;
+          case "--results" -> resultsPath = value;
           default -> throw new IllegalArgumentException("Unrecognised argument: " + argument);
         }
         index++;
@@ -1447,10 +1838,13 @@ public class SelfPlayMatch {
                   "--timeout, which is " + timeoutSeconds + " seconds");
         }
       }
+      if (resultsPath == null) {
+        resultsPath = Path.of(logDirectory, DEFAULT_RESULTS_FILE_NAME).toString();
+      }
       return new Settings(engineACommand, engineBCommand, limitA, limitB, tableSizeMB, bookPath,
               pairs, seed, openingIndex, useBook, plyCap, adjudicate, resignScore, resignPlies,
               drawScore, drawPlies, drawAfter, sequentialTest, concurrency, timeoutSeconds,
-              logDirectory, verbose);
+              logDirectory, resultsPath, resume, verbose);
     }
 
     /**
