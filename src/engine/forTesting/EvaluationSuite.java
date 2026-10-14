@@ -4,7 +4,6 @@ import engine.forBoard.Board;
 import engine.forPlayer.forAI.BoardEvaluator;
 import engine.forPlayer.forAI.EndgameBoardEvaluator;
 import engine.forPlayer.forAI.MiddlegameBoardEvaluator;
-import engine.forPlayer.forAI.OpeningGameEvaluator;
 import engine.forPlayer.forAI.TaperedEvaluator;
 
 import java.util.ArrayList;
@@ -17,9 +16,8 @@ import java.util.List;
  * its colour-mirrored twin, and the difference between evaluating a position with white to move
  * and with black to move.
  * <p>
- * No search is run. Every evaluator is called directly rather than through
- * {@link engine.forPlayer.forAI.GameStateDetector}, so each number is attributable to a named
- * evaluator and the phase detector is not part of the measurement. Every evaluator is run against
+ * No search is run. Every evaluator is called directly, so each number is attributable to a named
+ * evaluator. Every evaluator is run against
  * every position, including positions of a phase it would not normally be given, so that a defect
  * can be located in one evaluator or seen to be shared.
  * <p>
@@ -81,8 +79,8 @@ public class EvaluationSuite {
   /** The rank of an en passant target square when black is to move. */
   private static final char BLACK_EN_PASSANT_RANK = '3';
 
-  /** The format of a table header naming the four evaluator columns. */
-  private static final String HEADER_FORMAT = "  %-32s%12s%12s%12s%12s%n";
+  /** The format of a table header naming the three evaluator columns. */
+  private static final String HEADER_FORMAT = "  %-32s%12s%12s%12s%n";
 
   /** The format of a table header naming a single value column. */
   private static final String AGREEMENT_HEADER_FORMAT = "  %-32s%12s%n";
@@ -90,11 +88,11 @@ public class EvaluationSuite {
   /** The format of a table row carrying the spread between the highest and lowest evaluator score. */
   private static final String AGREEMENT_ROW_FORMAT = "  %-32s%12.2f%n";
 
-  /** The format of a table row carrying a number for each of the four evaluators. */
-  private static final String SCORE_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f%12.2f%n";
+  /** The format of a table row carrying a number for each of the three evaluators. */
+  private static final String SCORE_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f%n";
 
   /** The format of a mirror check row, whose numbers are followed by a verdict. */
-  private static final String MIRROR_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f%12.2f  %s%n";
+  private static final String MIRROR_ROW_FORMAT = "  %-32s%12.2f%12.2f%12.2f  %s%n";
 
   /** The format of a table row carrying an explanation in place of numbers. */
   private static final String NOTE_ROW_FORMAT = "  %-32s%s%n";
@@ -104,7 +102,6 @@ public class EvaluationSuite {
 
   /** The evaluators measured, each paired with the name used for its column. */
   private static final List<NamedEvaluator> EVALUATORS = List.of(
-          new NamedEvaluator("opening", OpeningGameEvaluator.get()),
           new NamedEvaluator("middlegame", MiddlegameBoardEvaluator.get()),
           new NamedEvaluator("endgame", EndgameBoardEvaluator.get()),
           new NamedEvaluator("tapered", TaperedEvaluator.get()));
@@ -275,7 +272,7 @@ public class EvaluationSuite {
         symmetric++;
       }
       System.out.printf(MIRROR_ROW_FORMAT, position.name(), residuals[0], residuals[1],
-              residuals[2], residuals[3], withinTolerance ? "PASS" : "FAIL");
+              residuals[2], withinTolerance ? "PASS" : "FAIL");
       if (verbose) {
         System.out.printf(DETAIL_FORMAT, position.mirrorFen());
         for (int index = 0; index < EVALUATORS.size(); index++) {
@@ -340,7 +337,7 @@ public class EvaluationSuite {
    */
   private static void printHeader() {
     System.out.printf(HEADER_FORMAT, "position", EVALUATORS.get(0).name(),
-            EVALUATORS.get(1).name(), EVALUATORS.get(2).name(), EVALUATORS.get(3).name());
+            EVALUATORS.get(1).name(), EVALUATORS.get(2).name());
   }
 
   /**
@@ -350,7 +347,7 @@ public class EvaluationSuite {
    * @param values The numbers, in the order the evaluators are listed in.
    */
   private static void printScoreRow(final String name, final double[] values) {
-    System.out.printf(SCORE_ROW_FORMAT, name, values[0], values[1], values[2], values[3]);
+    System.out.printf(SCORE_ROW_FORMAT, name, values[0], values[1], values[2]);
   }
 
   /**

@@ -1,13 +1,8 @@
 package engine.forTesting;
 
-import engine.forBoard.Board;
-import engine.forPlayer.forAI.BoardEvaluator;
 import engine.forPlayer.forAI.EndgameBoardEvaluator;
 import engine.forPlayer.forAI.EvaluationWeights;
-import engine.forPlayer.forAI.GameStateDetector;
-import engine.forPlayer.forAI.GameStateDetector.GamePhase;
 import engine.forPlayer.forAI.MiddlegameBoardEvaluator;
-import engine.forPlayer.forAI.OpeningGameEvaluator;
 import engine.forPlayer.forAI.TaperedEvaluator;
 
 import java.io.BufferedReader;
@@ -25,24 +20,20 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * The TexelTuner class tunes the weights of an evaluator against the results of the games a set
- * of quiet positions was taken from, by the Texel method. The error of a set of weights is the mean
+ * The TexelTuner class tunes the weights of the tapered evaluator against the results of the games
+ * a set of quiet positions was taken from, by the Texel method. The error of a set of weights is the mean
  * squared difference between each position's game result, scored one for a white win, one half for
  * a draw and zero for a black win, and the expected score 1 / (1 + 10^(-K * eval / 400)), where
  * eval is the evaluator's score of the position from white's side. The tuner adjusts one weight at
  * a time, stepping it up for as long as each step lowers the error and, if the first step up does
  * not, stepping it down the same way, and sweeps over every weight until a full sweep changes none.
- * The tapered evaluator is tuned through the middlegame and endgame weights together, and each of
- * its weight names is prefixed with the name of the evaluator that holds it and a dot.
+ * The tapered evaluator is tuned through the middlegame and endgame weights together, and each
+ * weight name is prefixed with the name of the evaluator that holds it and a dot.
  * <p>
  * The positions are read from an EPD file whose lines hold the first four fields of a FEN record
- * followed by {@code c9 "1-0";}, {@code c9 "0-1";} or {@code c9 "1/2-1/2";}. Each position is
- * assigned the phase the game state detector gives it as though 40 plies had been played, and only
- * the positions in the selected phases are used. Each phase either keeps its natural share of the
- * positions or is weighted so that it holds a given share of the error, so that an evaluator can
- * be fitted to the mix of phases it scores in search rather than the mix the file happens to hold.
- * Positions are held as FEN text and parsed again on every pass, because holding every board would
- * take several gigabytes.
+ * followed by {@code c9 "1-0";}, {@code c9 "0-1";} or {@code c9 "1/2-1/2";}, and every position
+ * read is used. Positions are held as FEN text and parsed again on every pass, because holding
+ * every board would take several gigabytes.
  * <p>
  * The scaling constant K is fitted to the evaluator's current weights unless it is given, and is
  * then held fixed while the weights are tuned, so that the tuned scores stay on the scale the
@@ -52,15 +43,6 @@ import java.util.concurrent.Future;
  * @author Aaron Ho
  */
 public class TexelTuner {
-
-  /** The flag naming the evaluator to tune. */
-  private static final String EVALUATOR_FLAG_PREFIX = "--evaluator=";
-
-  /** The flag naming the phases whose positions are used. */
-  private static final String PHASES_FLAG_PREFIX = "--phases=";
-
-  /** The flag naming the phases whose positions are used and the share of the error each holds. */
-  private static final String MIX_FLAG_PREFIX = "--mix=";
 
   /** The flag giving the scaling constant instead of fitting it. */
   private static final String K_FLAG_PREFIX = "--k=";
@@ -86,9 +68,6 @@ public class TexelTuner {
   /** The flag that prints the usage text. */
   private static final String HELP_FLAG = "--help";
 
-  /** The fullmove number given to every position so the detector treats it as reached at ply 40. */
-  private static final String PHASE_DETECTION_COUNTERS = " 0 21";
-
   /** The marker separating the FEN fields of an EPD line from its result. */
   private static final String RESULT_MARKER = " c9 \"";
 
@@ -111,21 +90,7 @@ public class TexelTuner {
   private static final String ZERO_MATERIAL_WEIGHT = "KING_TERMS_ZERO_MATERIAL";
 
   /** A position read from the file. */
-  private record Position(String fen, double result, GamePhase phase) { }
-
-  /**
-   * An evaluator that can be tuned, together with the share of the error each phase holds by
-   * default.
-   *
-   * @param name The name used on the command line.
-   * @param evaluator The evaluator.
-   * @param weights The weights tuned for the evaluator.
-   * @param defaultMix The share of the error each phase holds when no phases are named, indexed by
-   *                   phase ordinal. A phase with a share of zero is not used, and a negative
-   *                   share leaves the phase at its natural share of the positions.
-   */
-  private record Target(String name, BoardEvaluator evaluator, TunedWeights weights,
-                        double[] defaultMix) { }
+  private record Position(String fen, double result) { }
 
   /**
    * The weights of one or more evaluators, addressed by a single index that runs through each set
@@ -149,16 +114,6 @@ public class TexelTuner {
     private TunedWeights(final List<EvaluationWeights> sets, final List<String> prefixes) {
       this.sets = sets;
       this.prefixes = prefixes;
-    }
-
-    /**
-     * Returns a view over one set of weights, whose names are not prefixed.
-     *
-     * @param weights The set of weights.
-     * @return The view.
-     */
-    private static TunedWeights of(final EvaluationWeights weights) {
-      return new TunedWeights(List.of(weights), List.of(""));
     }
 
     /**
@@ -256,9 +211,6 @@ public class TexelTuner {
     }
   }
 
-  /** The share marking a used phase that keeps its natural share of the positions. */
-  private static final double NATURAL_SHARE = -1;
-
   /**
    * Runs the tuner from the command line.
    *
@@ -267,8 +219,6 @@ public class TexelTuner {
    */
   public static void main(final String[] args) throws Exception {
     Path file = null;
-    Target target = null;
-    double[] mix = null;
     double k = Double.NaN;
     int limit = Integer.MAX_VALUE;
     int threads = Math.max(1, Runtime.getRuntime().availableProcessors() - 2);
@@ -282,18 +232,6 @@ public class TexelTuner {
         if (HELP_FLAG.equals(argument)) {
           printUsage();
           return;
-        } else if (argument.startsWith(EVALUATOR_FLAG_PREFIX)) {
-          target = target(argument.substring(EVALUATOR_FLAG_PREFIX.length()));
-        } else if (argument.startsWith(PHASES_FLAG_PREFIX)) {
-          if (mix != null) {
-            throw new IllegalArgumentException("Give either --phases or --mix, not both.");
-          }
-          mix = parsePhases(argument.substring(PHASES_FLAG_PREFIX.length()));
-        } else if (argument.startsWith(MIX_FLAG_PREFIX)) {
-          if (mix != null) {
-            throw new IllegalArgumentException("Give either --phases or --mix, not both.");
-          }
-          mix = parseMix(argument.substring(MIX_FLAG_PREFIX.length()));
         } else if (argument.startsWith(K_FLAG_PREFIX)) {
           k = Double.parseDouble(argument.substring(K_FLAG_PREFIX.length()));
         } else if (argument.startsWith(LIMIT_FLAG_PREFIX)) {
@@ -320,54 +258,26 @@ public class TexelTuner {
       return;
     }
 
-    if (file == null || target == null || limit < 1 || threads < 1 || sweeps < 0) {
-      System.out.println("An EPD file and an evaluator are required, and the limit, thread " +
-              "count and sweep count must be positive.");
+    if (file == null || limit < 1 || threads < 1 || sweeps < 0) {
+      System.out.println("An EPD file is required, and the limit, thread count and sweep count " +
+              "must be positive.");
       printUsage();
       return;
     }
-    if (mix == null) {
-      mix = target.defaultMix();
-    }
     if (checkpoint == null) {
-      checkpoint = Path.of("data", "tuned-" + target.name() + ".txt");
+      checkpoint = Path.of("data", "tuned-tapered.txt");
     }
 
-    final List<Position> all = load(file, limit);
-    final List<Position> positions = new ArrayList<>();
-    final int[] phaseCounts = new int[GamePhase.values().length];
-    final int[] usedCounts = new int[GamePhase.values().length];
-    for (final Position position : all) {
-      final int phase = position.phase().ordinal();
-      phaseCounts[phase]++;
-      if (mix[phase] != 0) {
-        usedCounts[phase]++;
-        positions.add(position);
-      }
-    }
-    System.out.printf(Locale.ROOT, "Read %d positions: %d opening, %d middlegame, %d endgame.%n",
-            all.size(), phaseCounts[GamePhase.OPENING.ordinal()],
-            phaseCounts[GamePhase.MIDDLEGAME.ordinal()], phaseCounts[GamePhase.ENDGAME.ordinal()]);
-
-    final double[] phaseWeights = new double[mix.length];
-    for (final GamePhase phase : GamePhase.values()) {
-      final int index = phase.ordinal();
-      if (mix[index] > 0 && usedCounts[index] == 0) {
-        System.out.println("No positions are in the " + phase + " phase, which the mix uses.");
-        return;
-      }
-      phaseWeights[index] = mix[index] > 0 ? mix[index] / usedCounts[index] :
-              mix[index] == NATURAL_SHARE ? 1.0 : 0.0;
-    }
-    System.out.printf(Locale.ROOT, "Tuning the %s evaluator on %d positions with %d threads, " +
-                    "error shares %s.%n", target.name(), positions.size(), threads,
-            describeShares(phaseWeights, usedCounts));
+    final List<Position> positions = load(file, limit);
+    System.out.printf(Locale.ROOT, "Tuning the tapered evaluator on %d positions with %d threads.%n",
+            positions.size(), threads);
     if (positions.isEmpty()) {
-      System.out.println("No positions are in the selected phases.");
+      System.out.println("The file holds no positions.");
       return;
     }
 
-    final TunedWeights weights = target.weights();
+    final TunedWeights weights = TunedWeights.joined("middlegame",
+            MiddlegameBoardEvaluator.weights(), "endgame", EndgameBoardEvaluator.weights());
     if (resume) {
       loadCheckpoint(checkpoint, weights);
       System.out.println("Resumed from " + checkpoint);
@@ -375,7 +285,7 @@ public class TexelTuner {
 
     final ExecutorService executor = Executors.newFixedThreadPool(threads);
     try {
-      final TexelTuner tuner = new TexelTuner(target, positions, phaseWeights, executor, threads);
+      final TexelTuner tuner = new TexelTuner(weights, positions, executor, threads);
       if (Double.isNaN(k)) {
         k = tuner.fitK();
         System.out.printf(Locale.ROOT, "Fitted K = %.4f%n", k);
@@ -390,17 +300,11 @@ public class TexelTuner {
     }
   }
 
-  /** The evaluator being tuned and its weights. */
-  private final Target target;
+  /** The weights being tuned. */
+  private final TunedWeights weights;
 
   /** The positions the error is measured over. */
   private final List<Position> positions;
-
-  /** The weight of each position's squared error, indexed by the position's phase ordinal. */
-  private final double[] phaseWeights;
-
-  /** The sum of the weights of all the positions. */
-  private final double totalWeight;
 
   /** The worker threads that evaluate the positions. */
   private final ExecutorService executor;
@@ -411,26 +315,17 @@ public class TexelTuner {
   /**
    * Constructs a tuner.
    *
-   * @param target The evaluator to tune.
+   * @param weights The weights to tune.
    * @param positions The positions the error is measured over.
-   * @param phaseWeights The weight of each position's squared error, indexed by phase ordinal.
    * @param executor The worker threads that evaluate the positions.
    * @param threads The number of worker threads.
    */
-  private TexelTuner(final Target target, final List<Position> positions,
-                     final double[] phaseWeights, final ExecutorService executor,
-                     final int threads) {
-    this.target = target;
+  private TexelTuner(final TunedWeights weights, final List<Position> positions,
+                     final ExecutorService executor, final int threads) {
+    this.weights = weights;
     this.positions = positions;
-    this.phaseWeights = phaseWeights;
     this.executor = executor;
     this.chunkCount = Math.min(positions.size(), threads * CHUNKS_PER_THREAD);
-
-    double total = 0;
-    for (final Position position : positions) {
-      total += phaseWeights[position.phase().ordinal()];
-    }
-    this.totalWeight = total;
   }
 
   /**
@@ -443,7 +338,6 @@ public class TexelTuner {
    * @throws Exception If a worker fails or the checkpoint cannot be written.
    */
   private void tune(final double k, final int maxSweeps, final Path checkpoint) throws Exception {
-    final TunedWeights weights = target.weights();
     final int size = weights.size();
     final double[] initial = new double[size];
     final double[] steps = new double[size];
@@ -549,7 +443,7 @@ public class TexelTuner {
    * Returns the error of the current weights at the given scaling constant.
    *
    * @param k The scaling constant.
-   * @return The weighted mean squared error over the positions.
+   * @return The mean squared error over the positions.
    * @throws Exception If a worker fails.
    */
   private double error(final double k) throws Exception {
@@ -566,7 +460,7 @@ public class TexelTuner {
         return sum;
       }));
     }
-    return collect(sums) / totalWeight;
+    return collect(sums) / positions.size();
   }
 
   /**
@@ -574,27 +468,27 @@ public class TexelTuner {
    *
    * @param evaluations The evaluation of each position, in position order.
    * @param k The scaling constant.
-   * @return The weighted mean squared error over the positions.
+   * @return The mean squared error over the positions.
    */
   private double error(final double[] evaluations, final double k) {
     double sum = 0;
     for (int i = 0; i < evaluations.length; i++) {
       sum += squaredError(positions.get(i), evaluations[i], k);
     }
-    return sum / totalWeight;
+    return sum / positions.size();
   }
 
   /**
-   * Returns a position's squared error, multiplied by the weight of its phase.
+   * Returns a position's squared error.
    *
    * @param position The position.
    * @param evaluation The evaluation of the position from white's side.
    * @param k The scaling constant.
-   * @return The weighted squared error.
+   * @return The squared error.
    */
   private double squaredError(final Position position, final double evaluation, final double k) {
     final double difference = position.result() - expectedScore(evaluation, k);
-    return phaseWeights[position.phase().ordinal()] * difference * difference;
+    return difference * difference;
   }
 
   /**
@@ -631,13 +525,13 @@ public class TexelTuner {
   }
 
   /**
-   * Evaluates a position from white's side with the evaluator being tuned.
+   * Evaluates a position from white's side with the tapered evaluator.
    *
    * @param position The position.
    * @return The evaluator's score.
    */
   private double evaluate(final Position position) {
-    return target.evaluator().evaluate(FenParser.parse(position.fen()));
+    return TaperedEvaluator.get().evaluate(FenParser.parse(position.fen()));
   }
 
   /**
@@ -746,7 +640,6 @@ public class TexelTuner {
    * @throws IllegalArgumentException If a line is not in the expected form.
    */
   private static List<Position> load(final Path file, final int limit) throws IOException {
-    final GameStateDetector detector = GameStateDetector.get();
     final List<Position> positions = new ArrayList<>();
     try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
       String line;
@@ -767,8 +660,7 @@ public class TexelTuner {
           case "1/2-1/2" -> 0.5;
           default -> throw new IllegalArgumentException("Unknown result in line: " + line);
         };
-        final Board board = FenParser.parse(fen + PHASE_DETECTION_COUNTERS);
-        positions.add(new Position(fen, result, detector.detectGamePhase(board)));
+        positions.add(new Position(fen, result));
       }
     }
     return positions;
@@ -835,140 +727,28 @@ public class TexelTuner {
     return text.contains(".") ? text.replaceAll("0+$", "").replaceAll("\\.$", "") : text;
   }
 
-  /**
-   * Returns the tuning target with the given name.
-   *
-   * @param name The name: opening, middlegame, endgame or tapered.
-   * @return The target.
-   * @throws IllegalArgumentException If the name is unknown.
-   */
-  private static Target target(final String name) {
-    return switch (name.toLowerCase(Locale.ROOT)) {
-      case "opening" -> new Target("opening", OpeningGameEvaluator.get(),
-              TunedWeights.of(OpeningGameEvaluator.weights()),
-              new double[] {NATURAL_SHARE, NATURAL_SHARE, 0});
-      case "middlegame" -> new Target("middlegame", MiddlegameBoardEvaluator.get(),
-              TunedWeights.of(MiddlegameBoardEvaluator.weights()), new double[] {15, 56, 29});
-      case "endgame" -> new Target("endgame", EndgameBoardEvaluator.get(),
-              TunedWeights.of(EndgameBoardEvaluator.weights()), new double[] {0, 0, NATURAL_SHARE});
-      case "tapered" -> new Target("tapered", TaperedEvaluator.get(),
-              TunedWeights.joined("middlegame", MiddlegameBoardEvaluator.weights(),
-                      "endgame", EndgameBoardEvaluator.weights()),
-              new double[] {NATURAL_SHARE, NATURAL_SHARE, NATURAL_SHARE});
-      default -> throw new IllegalArgumentException("Unknown evaluator: " + name);
-    };
-  }
-
-  /**
-   * Parses a comma separated list of phase names, in any case, into a mix in which every named
-   * phase keeps its natural share of the positions.
-   *
-   * @param value The list.
-   * @return The mix, indexed by phase ordinal.
-   * @throws IllegalArgumentException If a name is unknown or the list names no phase.
-   */
-  private static double[] parsePhases(final String value) {
-    final double[] mix = new double[GamePhase.values().length];
-    boolean any = false;
-    for (final String name : value.split(",")) {
-      if (!name.isBlank()) {
-        mix[GamePhase.valueOf(name.trim().toUpperCase(Locale.ROOT)).ordinal()] = NATURAL_SHARE;
-        any = true;
-      }
-    }
-    if (!any) {
-      throw new IllegalArgumentException("No phases named: " + value);
-    }
-    return mix;
-  }
-
-  /**
-   * Parses a comma separated list of {@code phase:share} pairs, in any case, into a mix in which
-   * each named phase holds the given share of the error. Shares are relative and need not sum to
-   * any total.
-   *
-   * @param value The list.
-   * @return The mix, indexed by phase ordinal.
-   * @throws IllegalArgumentException If a pair is malformed, a name is unknown, a share is not
-   *         positive or the list names no phase.
-   */
-  private static double[] parseMix(final String value) {
-    final double[] mix = new double[GamePhase.values().length];
-    boolean any = false;
-    for (final String pair : value.split(",")) {
-      if (pair.isBlank()) {
-        continue;
-      }
-      final String[] parts = pair.split(":");
-      if (parts.length != 2) {
-        throw new IllegalArgumentException("A mix entry must be phase:share: " + pair);
-      }
-      final double share = Double.parseDouble(parts[1].trim());
-      if (!(share > 0)) {
-        throw new IllegalArgumentException("A share must be positive: " + pair);
-      }
-      mix[GamePhase.valueOf(parts[0].trim().toUpperCase(Locale.ROOT)).ordinal()] = share;
-      any = true;
-    }
-    if (!any) {
-      throw new IllegalArgumentException("No phases named: " + value);
-    }
-    return mix;
-  }
-
-  /**
-   * Describes the share of the error each used phase holds.
-   *
-   * @param phaseWeights The weight of each position's squared error, indexed by phase ordinal.
-   * @param usedCounts The number of positions used in each phase, indexed by phase ordinal.
-   * @return A description such as {@code opening 15.0%, middlegame 56.0%, endgame 29.0%}.
-   */
-  private static String describeShares(final double[] phaseWeights, final int[] usedCounts) {
-    double total = 0;
-    for (int i = 0; i < phaseWeights.length; i++) {
-      total += phaseWeights[i] * usedCounts[i];
-    }
-    final List<String> parts = new ArrayList<>();
-    for (final GamePhase phase : GamePhase.values()) {
-      final int i = phase.ordinal();
-      if (phaseWeights[i] > 0) {
-        parts.add(String.format(Locale.ROOT, "%s %.1f%%", phase.name().toLowerCase(Locale.ROOT),
-                100 * phaseWeights[i] * usedCounts[i] / total));
-      }
-    }
-    return String.join(", ", parts);
-  }
-
   /** Prints the command line usage. */
   private static void printUsage() {
     System.out.println("""
             Usage:
-              TexelTuner <epd file> --evaluator=<opening|middlegame|endgame|tapered> [options]
+              TexelTuner <epd file> [options]
+
+            Tunes the tapered evaluator's middlegame and endgame weights together, named
+            middlegame.<NAME> and endgame.<NAME>.
 
             Options:
-              --phases=<list>       comma separated phases to tune on (opening, middlegame,
-                                    endgame), each at its natural share of the positions.
-              --mix=<list>          comma separated phase:share pairs, such as
-                                    opening:15,middlegame:56,endgame:29. Each phase's
-                                    positions are weighted so it holds that share of the
-                                    error. Give --phases or --mix, not both. Defaults:
-                                    middlegame uses that mix, endgame uses endgame,
-                                    opening uses opening and middlegame, tapered uses
-                                    every phase. Tapered tunes the middlegame and
-                                    endgame weights together, named middlegame.<NAME>
-                                    and endgame.<NAME>.
               --k=<value>           scaling constant to hold fixed. Fitted when absent.
               --fit-k-only          fit K, print it and the error, and stop.
               --limit=<n>           read at most n lines of the file.
               --threads=<n>         worker threads. Defaults to the processor count less two.
               --sweeps=<n>          stop after n sweeps over the weights.
               --checkpoint=<file>   where the weights are written after every sweep.
-                                    Defaults to data/tuned-<evaluator>.txt.
+                                    Defaults to data/tuned-tapered.txt.
               --resume              load the checkpoint file before tuning.
               --help                print this message.
 
             Compile and run from the repository root:
               javac -nowarn -cp "lib/*" -sourcepath src -d out/tuner src/engine/forTesting/TexelTuner.java
-              java -cp "out/tuner;lib/*" engine.forTesting.TexelTuner data/quiet-labeled.epd --evaluator=middlegame""");
+              java -cp "out/tuner;lib/*" engine.forTesting.TexelTuner data/quiet-labeled.epd""");
   }
 }

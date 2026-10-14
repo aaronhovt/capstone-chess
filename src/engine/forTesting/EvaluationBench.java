@@ -5,7 +5,6 @@ import engine.forBoard.Board;
 import engine.forPlayer.forAI.BoardEvaluator;
 import engine.forPlayer.forAI.EndgameBoardEvaluator;
 import engine.forPlayer.forAI.MiddlegameBoardEvaluator;
-import engine.forPlayer.forAI.OpeningGameEvaluator;
 import engine.forPlayer.forAI.TaperedEvaluator;
 
 import java.lang.management.ManagementFactory;
@@ -18,9 +17,8 @@ import java.util.List;
  * reports three quantities per evaluator: the bytes allocated per evaluation, the time taken per
  * evaluation, and a checksum over every score produced.
  * <p>
- * No search is run and no evaluator is reached through
- * {@link engine.forPlayer.forAI.GameStateDetector}, so every number is attributable to a named
- * evaluator. Every evaluator is measured on every position, including positions of a phase it
+ * No search is run and every evaluator is called directly, so every number is attributable to a
+ * named evaluator. Every evaluator is measured on every position, including positions of a phase it
  * would not normally be given, so that they are directly comparable.
  * <p>
  * The positions are parsed once and the resulting boards are reused for every pass. A player
@@ -98,7 +96,6 @@ public class EvaluationBench {
 
   /** The evaluators measured, each paired with the name used for its row. */
   private static final List<NamedEvaluator> EVALUATORS = List.of(
-          new NamedEvaluator("opening", OpeningGameEvaluator.get()),
           new NamedEvaluator("middlegame", MiddlegameBoardEvaluator.get()),
           new NamedEvaluator("endgame", EndgameBoardEvaluator.get()),
           new NamedEvaluator("tapered", TaperedEvaluator.get()));
