@@ -178,7 +178,9 @@ public class Perft {
   /**
    * Walks the legal move tree and returns a description of the first position at which either
    * {@link Board#copy()} or a {@link Board#makeNullMove()} and {@link Board#unmakeNullMove()}
-   * round trip fails to reproduce the position it was given. Nothing in the engine calls either
+   * round trip fails to reproduce the position it was given, or at which the board's bitboards
+   * disagree with its pieces, checked on arriving at each position and again after its moves
+   * have been unmade. Nothing in the engine calls either
    * of those yet, so this rather than a node count is what validates them.
    *
    * @param board The position from which to begin the walk. Mutated during the walk and restored
@@ -187,6 +189,10 @@ public class Perft {
    * @return A description of the first fault found, or null if every position checks out.
    */
   public static String findMutationDivergence(final Board board, final int depth) {
+    final String bitboardFault = describeBitboardFault(board);
+    if (bitboardFault != null) {
+      return bitboardFault + System.lineSeparator() + board;
+    }
     final String copyFault = describeCopyFault(board);
     if (copyFault != null) {
       return copyFault + System.lineSeparator() + board;
@@ -210,6 +216,42 @@ public class Perft {
         }
       } finally {
         board.unmakeMove();
+      }
+    }
+    final String unmadeFault = describeBitboardFault(board);
+    if (unmadeFault != null) {
+      return "After unmaking every move: " + unmadeFault + System.lineSeparator() + board;
+    }
+    return null;
+  }
+
+  /**
+   * Checks that the given board's bitboards and occupancies agree with the piece on every square.
+   *
+   * @param board The board to check.
+   * @return A description of the first disagreement found, or null if they all agree.
+   */
+  private static String describeBitboardFault(final Board board) {
+    for (final Alliance alliance : Alliance.values()) {
+      long occupancy = 0L;
+      for (final Piece.PieceType pieceType : Piece.PieceType.values()) {
+        long expected = 0L;
+        for (int coordinate = 0; coordinate < BoardUtils.NUM_TILES; coordinate++) {
+          final Piece piece = board.getPiece(coordinate);
+          if (piece != null && piece.getPieceAllegiance() == alliance && piece.getPieceType() == pieceType) {
+            expected |= 1L << coordinate;
+          }
+        }
+        if (board.getPieces(alliance, pieceType) != expected) {
+          return "Bitboard of " + alliance + " " + pieceType + " is " +
+                  Long.toHexString(board.getPieces(alliance, pieceType)) + ", expected " +
+                  Long.toHexString(expected) + ".";
+        }
+        occupancy |= expected;
+      }
+      if (board.getOccupancy(alliance) != occupancy) {
+        return "Occupancy of " + alliance + " is " + Long.toHexString(board.getOccupancy(alliance)) +
+                ", expected " + Long.toHexString(occupancy) + ".";
       }
     }
     return null;
@@ -244,6 +286,10 @@ public class Perft {
       if (clone.getPiece(coordinate) != board.getPiece(coordinate)) {
         return "Copy differs at square " + BoardUtils.getPositionAtCoordinate(coordinate) + ".";
       }
+    }
+    final String bitboardFault = describeBitboardFault(clone);
+    if (bitboardFault != null) {
+      return "Copy: " + bitboardFault;
     }
     if (clone.currentPlayer().getLegalMoves().size() != board.currentPlayer().getLegalMoves().size()) {
       return "Copy generates a different number of legal moves for the player to move.";

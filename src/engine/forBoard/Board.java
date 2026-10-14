@@ -38,6 +38,21 @@ public final class Board {
   /** The black pieces currently on the board. Kept in sync with boardConfig by placePiece/removePiece. */
   private List<Piece> blackPieces;
 
+  /** The number of piece types, and so the number of bitboards each alliance holds. */
+  private static final int PIECE_TYPE_COUNT = Piece.PieceType.values().length;
+
+  /**
+   * The squares holding each kind of piece, as one bit per tile, indexed by
+   * {@link #bitboardIndex}. Kept in sync with boardConfig by placePiece/removePiece.
+   */
+  private final long[] pieceBitboards;
+
+  /** The squares holding a white piece, as one bit per tile. Kept in sync with boardConfig by placePiece/removePiece. */
+  private long whiteOccupancy;
+
+  /** The squares holding a black piece, as one bit per tile. Kept in sync with boardConfig by placePiece/removePiece. */
+  private long blackOccupancy;
+
   /**
    * The white king currently on the board, or null if white has no king. Kept in sync by
    * {@link #placePiece(Piece)}. A king is never captured, and every king relocation removes the
@@ -165,6 +180,12 @@ public final class Board {
     this.boardConfig = builder.BoardConfigurations.clone();
     this.whitePieces = new ArrayList<>(calculateActivePieces(builder, Alliance.WHITE));
     this.blackPieces = new ArrayList<>(calculateActivePieces(builder, Alliance.BLACK));
+    this.pieceBitboards = new long[2 * PIECE_TYPE_COUNT];
+    for (final Piece piece : this.boardConfig) {
+      if (piece != null) {
+        setBit(piece);
+      }
+    }
     establishKings();
     this.enPassantPawn = builder.enPassantPawn;
     this.whitePlayer = new WhitePlayer(this);
@@ -205,6 +226,9 @@ public final class Board {
     this.boardConfig = source.boardConfig.clone();
     this.whitePieces = new ArrayList<>(source.whitePieces);
     this.blackPieces = new ArrayList<>(source.blackPieces);
+    this.pieceBitboards = source.pieceBitboards.clone();
+    this.whiteOccupancy = source.whiteOccupancy;
+    this.blackOccupancy = source.blackOccupancy;
     this.whiteKing = source.whiteKing;
     this.blackKing = source.blackKing;
     this.enPassantPawn = source.enPassantPawn;
@@ -412,6 +436,37 @@ public final class Board {
    */
   public Piece getPiece(final int coordinate) {
     return this.boardConfig[coordinate];
+  }
+
+  /**
+   * Returns the squares holding the given alliance's pieces of the given type. Bit n stands for
+   * tile n, the numbering {@link #getPiece(int)} uses.
+   *
+   * @param alliance The alliance of the pieces.
+   * @param pieceType The type of the pieces.
+   * @return The squares holding those pieces, as one bit per tile.
+   */
+  public long getPieces(final Alliance alliance, final Piece.PieceType pieceType) {
+    return this.pieceBitboards[bitboardIndex(alliance, pieceType)];
+  }
+
+  /**
+   * Returns the squares holding any of the given alliance's pieces. Bit n stands for tile n.
+   *
+   * @param alliance The alliance of the pieces.
+   * @return The squares holding that alliance's pieces, as one bit per tile.
+   */
+  public long getOccupancy(final Alliance alliance) {
+    return alliance.isWhite() ? this.whiteOccupancy : this.blackOccupancy;
+  }
+
+  /**
+   * Returns the squares holding any piece. Bit n stands for tile n.
+   *
+   * @return The occupied squares, as one bit per tile.
+   */
+  public long getOccupancy() {
+    return this.whiteOccupancy | this.blackOccupancy;
   }
 
   /**
@@ -660,14 +715,15 @@ public final class Board {
 
   /**
    * Places a piece on the board at its own reported position, adding it to the board's piece
-   * configuration and to the appropriate alliance's piece list, and recording it as that
-   * alliance's king if it is one. Used only by the mutating makeMove/unmakeMove path in the
-   * {@link Move} hierarchy.
+   * configuration, bitboards and the appropriate alliance's piece list, and recording it as that
+   * alliance's king if it is one. The square must be empty. Used only by the mutating
+   * makeMove/unmakeMove path in the {@link Move} hierarchy.
    *
    * @param piece The piece to place, at the square given by its own position.
    */
   void placePiece(final Piece piece) {
     this.boardConfig[piece.getPiecePosition()] = piece;
+    setBit(piece);
     final List<Piece> pieces = piece.getPieceAllegiance().isWhite() ? this.whitePieces : this.blackPieces;
     if (piece.getPieceType() == Piece.PieceType.KING) {
       recordKing((King) piece);
@@ -682,7 +738,7 @@ public final class Board {
 
   /**
    * Removes whatever piece occupies the given square, if any, from the board's piece
-   * configuration and from the appropriate alliance's piece list. Used only by the mutating
+   * configuration, bitboards and the appropriate alliance's piece list. Used only by the mutating
    * makeMove/unmakeMove path in the {@link Move} hierarchy.
    *
    * @param coordinate The square to clear.
@@ -693,6 +749,13 @@ public final class Board {
       return;
     }
     this.boardConfig[coordinate] = null;
+    final long bit = 1L << coordinate;
+    this.pieceBitboards[bitboardIndex(piece.getPieceAllegiance(), piece.getPieceType())] &= ~bit;
+    if (piece.getPieceAllegiance().isWhite()) {
+      this.whiteOccupancy &= ~bit;
+    } else {
+      this.blackOccupancy &= ~bit;
+    }
     final List<Piece> pieces = piece.getPieceAllegiance().isWhite() ? this.whitePieces : this.blackPieces;
     for (int index = 0; index < pieces.size(); index++) {
       if (pieces.get(index).getPiecePosition() == coordinate) {
@@ -700,6 +763,33 @@ public final class Board {
         return;
       }
     }
+  }
+
+  /**
+   * Sets the bit of the given piece's square in its bitboard and its alliance's occupancy.
+   *
+   * @param piece The piece to record, at the square given by its own position.
+   */
+  private void setBit(final Piece piece) {
+    final long bit = 1L << piece.getPiecePosition();
+    this.pieceBitboards[bitboardIndex(piece.getPieceAllegiance(), piece.getPieceType())] |= bit;
+    if (piece.getPieceAllegiance().isWhite()) {
+      this.whiteOccupancy |= bit;
+    } else {
+      this.blackOccupancy |= bit;
+    }
+  }
+
+  /**
+   * Returns the index in {@link #pieceBitboards} of the bitboard for the given alliance's pieces
+   * of the given type.
+   *
+   * @param alliance The alliance of the pieces.
+   * @param pieceType The type of the pieces.
+   * @return The index of that bitboard.
+   */
+  private static int bitboardIndex(final Alliance alliance, final Piece.PieceType pieceType) {
+    return (alliance.isWhite() ? 0 : PIECE_TYPE_COUNT) + pieceType.ordinal();
   }
 
   /**
