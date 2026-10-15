@@ -1,19 +1,17 @@
 package engine.forPiece;
 
-import com.google.common.collect.ImmutableTable;
-import com.google.common.collect.Table;
 import engine.Alliance;
 import engine.forBoard.BoardUtils;
 
 /**
  * The PieceUtils class provides utility methods for creating and accessing pre-computed instances
- * of moved chess pieces. This singleton enum uses Guava's ImmutableTable to store all possible
- * piece instances for each alliance and destination coordinate combination, optimizing performance
- * by avoiding repeated object creation during move generation.
+ * of moved chess pieces. This singleton enum holds one piece instance for each alliance and
+ * destination coordinate combination, so that move generation and move application never create
+ * a new piece for a pawn, knight, bishop, rook or queen move.
  * <p>
- * The class maintains separate tables for pawns, knights, bishops, rooks, and queens, allowing
- * efficient retrieval of moved piece instances based on alliance and destination coordinate.
- * All stored pieces are configured as having been moved (isFirstMove = false) with a move count of 1.
+ * The class maintains separate tables for pawns, knights, bishops, rooks, and queens, indexed by
+ * alliance and then by destination coordinate. All stored pieces are configured as having been
+ * moved (isFirstMove = false) with a move count of 1.
  *
  * @author dareTo81
  * @author Aaron Ho
@@ -26,30 +24,38 @@ enum PieceUtils {
    */
   Instance;
 
-  /**
-   * Table storing all possible moved Queen instances for each alliance and destination coordinate.
-   */
-  private final Table<Alliance, Integer, Queen> ALL_POSSIBLE_QUEENS = PieceUtils.createAllPossibleMovedQueens();
+  /** The number of alliances, and so the number of rows in each table. */
+  private static final int ALLIANCE_COUNT = 2;
 
   /**
-   * Table storing all possible moved Rook instances for each alliance and destination coordinate.
+   * Table storing all possible moved Queen instances, indexed by {@link #allianceIndex} and then
+   * by destination coordinate.
    */
-  private final Table<Alliance, Integer, Rook> ALL_POSSIBLE_ROOKS = PieceUtils.createAllPossibleMovedRooks();
+  private final Queen[][] ALL_POSSIBLE_QUEENS = PieceUtils.createAllPossibleMovedQueens();
 
   /**
-   * Table storing all possible moved Knight instances for each alliance and destination coordinate.
+   * Table storing all possible moved Rook instances, indexed by {@link #allianceIndex} and then
+   * by destination coordinate.
    */
-  private final Table<Alliance, Integer, Knight> ALL_POSSIBLE_KNIGHTS = PieceUtils.createAllPossibleMovedKnights();
+  private final Rook[][] ALL_POSSIBLE_ROOKS = PieceUtils.createAllPossibleMovedRooks();
 
   /**
-   * Table storing all possible moved Bishop instances for each alliance and destination coordinate.
+   * Table storing all possible moved Knight instances, indexed by {@link #allianceIndex} and then
+   * by destination coordinate.
    */
-  private final Table<Alliance, Integer, Bishop> ALL_POSSIBLE_BISHOPS = PieceUtils.createAllPossibleMovedBishops();
+  private final Knight[][] ALL_POSSIBLE_KNIGHTS = PieceUtils.createAllPossibleMovedKnights();
 
   /**
-   * Table storing all possible moved Pawn instances for each alliance and destination coordinate.
+   * Table storing all possible moved Bishop instances, indexed by {@link #allianceIndex} and then
+   * by destination coordinate.
    */
-  private final Table<Alliance, Integer, Pawn> ALL_POSSIBLE_PAWNS = PieceUtils.createAllPossibleMovedPawns();
+  private final Bishop[][] ALL_POSSIBLE_BISHOPS = PieceUtils.createAllPossibleMovedBishops();
+
+  /**
+   * Table storing all possible moved Pawn instances, indexed by {@link #allianceIndex} and then
+   * by destination coordinate.
+   */
+  private final Pawn[][] ALL_POSSIBLE_PAWNS = PieceUtils.createAllPossibleMovedPawns();
 
   /**
    * Retrieves a moved Pawn instance for the specified alliance and destination coordinate.
@@ -60,7 +66,7 @@ enum PieceUtils {
    */
   Pawn getMovedPawn(final Alliance alliance,
                     final int destinationCoordinate) {
-    return ALL_POSSIBLE_PAWNS.get(alliance, destinationCoordinate);
+    return ALL_POSSIBLE_PAWNS[allianceIndex(alliance)][destinationCoordinate];
   }
 
   /**
@@ -72,7 +78,7 @@ enum PieceUtils {
    */
   Knight getMovedKnight(final Alliance alliance,
                         final int destinationCoordinate) {
-    return ALL_POSSIBLE_KNIGHTS.get(alliance, destinationCoordinate);
+    return ALL_POSSIBLE_KNIGHTS[allianceIndex(alliance)][destinationCoordinate];
   }
 
   /**
@@ -84,7 +90,7 @@ enum PieceUtils {
    */
   Bishop getMovedBishop(final Alliance alliance,
                         final int destinationCoordinate) {
-    return ALL_POSSIBLE_BISHOPS.get(alliance, destinationCoordinate);
+    return ALL_POSSIBLE_BISHOPS[allianceIndex(alliance)][destinationCoordinate];
   }
 
   /**
@@ -96,7 +102,7 @@ enum PieceUtils {
    */
   Rook getMovedRook(final Alliance alliance,
                     final int destinationCoordinate) {
-    return ALL_POSSIBLE_ROOKS.get(alliance, destinationCoordinate);
+    return ALL_POSSIBLE_ROOKS[allianceIndex(alliance)][destinationCoordinate];
   }
 
   /**
@@ -108,86 +114,96 @@ enum PieceUtils {
    */
   Queen getMovedQueen(final Alliance alliance,
                       final int destinationCoordinate) {
-    return ALL_POSSIBLE_QUEENS.get(alliance, destinationCoordinate);
+    return ALL_POSSIBLE_QUEENS[allianceIndex(alliance)][destinationCoordinate];
   }
 
   /**
-   * Creates and populates an ImmutableTable containing all possible moved Pawn instances
-   * for each alliance and board coordinate combination.
+   * Returns the row of each table holding the given alliance's pieces.
    *
-   * @return An ImmutableTable containing all possible moved Pawn instances.
+   * @param alliance The alliance.
+   * @return The row index of that alliance.
    */
-  private static Table<Alliance, Integer, Pawn> createAllPossibleMovedPawns() {
-    final ImmutableTable.Builder<Alliance, Integer, Pawn> pieces = ImmutableTable.builder();
-    for(final Alliance alliance : Alliance.values()) {
-      for(int i = 0; i < BoardUtils.NUM_TILES; i++) {
-        pieces.put(alliance, i, new Pawn(alliance, i, false, 1));
-      }
-    }
-    return pieces.build();
+  private static int allianceIndex(final Alliance alliance) {
+    return alliance.isWhite() ? 0 : 1;
   }
 
   /**
-   * Creates and populates an ImmutableTable containing all possible moved Knight instances
+   * Creates and populates a table containing all possible moved Pawn instances
    * for each alliance and board coordinate combination.
    *
-   * @return An ImmutableTable containing all possible moved Knight instances.
+   * @return A table containing all possible moved Pawn instances.
    */
-  private static Table<Alliance, Integer, Knight> createAllPossibleMovedKnights() {
-    final ImmutableTable.Builder<Alliance, Integer, Knight> pieces = ImmutableTable.builder();
+  private static Pawn[][] createAllPossibleMovedPawns() {
+    final Pawn[][] pieces = new Pawn[ALLIANCE_COUNT][BoardUtils.NUM_TILES];
     for(final Alliance alliance : Alliance.values()) {
       for(int i = 0; i < BoardUtils.NUM_TILES; i++) {
-        pieces.put(alliance, i, new Knight(alliance, i, false, 1));
+        pieces[allianceIndex(alliance)][i] = new Pawn(alliance, i, false, 1);
       }
     }
-    return pieces.build();
+    return pieces;
   }
 
   /**
-   * Creates and populates an ImmutableTable containing all possible moved Bishop instances
+   * Creates and populates a table containing all possible moved Knight instances
    * for each alliance and board coordinate combination.
    *
-   * @return An ImmutableTable containing all possible moved Bishop instances.
+   * @return A table containing all possible moved Knight instances.
    */
-  private static Table<Alliance, Integer, Bishop> createAllPossibleMovedBishops() {
-    final ImmutableTable.Builder<Alliance, Integer, Bishop> pieces = ImmutableTable.builder();
+  private static Knight[][] createAllPossibleMovedKnights() {
+    final Knight[][] pieces = new Knight[ALLIANCE_COUNT][BoardUtils.NUM_TILES];
     for(final Alliance alliance : Alliance.values()) {
       for(int i = 0; i < BoardUtils.NUM_TILES; i++) {
-        pieces.put(alliance, i, new Bishop(alliance, i, false, 1));
+        pieces[allianceIndex(alliance)][i] = new Knight(alliance, i, false, 1);
       }
     }
-    return pieces.build();
+    return pieces;
   }
 
   /**
-   * Creates and populates an ImmutableTable containing all possible moved Rook instances
+   * Creates and populates a table containing all possible moved Bishop instances
    * for each alliance and board coordinate combination.
    *
-   * @return An ImmutableTable containing all possible moved Rook instances.
+   * @return A table containing all possible moved Bishop instances.
    */
-  private static Table<Alliance, Integer, Rook> createAllPossibleMovedRooks() {
-    final ImmutableTable.Builder<Alliance, Integer, Rook> pieces = ImmutableTable.builder();
+  private static Bishop[][] createAllPossibleMovedBishops() {
+    final Bishop[][] pieces = new Bishop[ALLIANCE_COUNT][BoardUtils.NUM_TILES];
     for(final Alliance alliance : Alliance.values()) {
       for(int i = 0; i < BoardUtils.NUM_TILES; i++) {
-        pieces.put(alliance, i, new Rook(alliance, i, false, 1));
+        pieces[allianceIndex(alliance)][i] = new Bishop(alliance, i, false, 1);
       }
     }
-    return pieces.build();
+    return pieces;
   }
 
   /**
-   * Creates and populates an ImmutableTable containing all possible moved Queen instances
+   * Creates and populates a table containing all possible moved Rook instances
    * for each alliance and board coordinate combination.
    *
-   * @return An ImmutableTable containing all possible moved Queen instances.
+   * @return A table containing all possible moved Rook instances.
    */
-  private static Table<Alliance, Integer, Queen> createAllPossibleMovedQueens() {
-    final ImmutableTable.Builder<Alliance, Integer, Queen> pieces = ImmutableTable.builder();
+  private static Rook[][] createAllPossibleMovedRooks() {
+    final Rook[][] pieces = new Rook[ALLIANCE_COUNT][BoardUtils.NUM_TILES];
     for(final Alliance alliance : Alliance.values()) {
       for(int i = 0; i < BoardUtils.NUM_TILES; i++) {
-        pieces.put(alliance, i, new Queen(alliance, i, false, 1));
+        pieces[allianceIndex(alliance)][i] = new Rook(alliance, i, false, 1);
       }
     }
-    return pieces.build();
+    return pieces;
+  }
+
+  /**
+   * Creates and populates a table containing all possible moved Queen instances
+   * for each alliance and board coordinate combination.
+   *
+   * @return A table containing all possible moved Queen instances.
+   */
+  private static Queen[][] createAllPossibleMovedQueens() {
+    final Queen[][] pieces = new Queen[ALLIANCE_COUNT][BoardUtils.NUM_TILES];
+    for(final Alliance alliance : Alliance.values()) {
+      for(int i = 0; i < BoardUtils.NUM_TILES; i++) {
+        pieces[allianceIndex(alliance)][i] = new Queen(alliance, i, false, 1);
+      }
+    }
+    return pieces;
   }
 }
