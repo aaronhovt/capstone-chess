@@ -7,6 +7,7 @@ import engine.forBoard.Move;
 import engine.forBoard.MoveCode;
 import engine.forBoard.MoveGenerator;
 import engine.forBoard.ZobristHashing;
+import engine.forPiece.King;
 import engine.forPiece.Pawn;
 import engine.forPiece.Piece;
 import engine.forPlayer.Player;
@@ -84,6 +85,47 @@ public class Perft {
         }
       } finally {
         board.unmakeMove();
+      }
+    }
+    return nodes;
+  }
+
+  /**
+   * Counts the leaf nodes reachable from the given position at exactly the given depth, as
+   * {@link #perft} does, but generating moves with {@link MoveGenerator} and applying them through
+   * {@link Board#makeMove(int)} and {@link Board#unmakeMove(int)}.
+   *
+   * @param board The position from which to count. Mutated during the walk and restored before
+   *              this method returns.
+   * @param depth The number of plies to walk before counting.
+   * @return The number of leaf nodes at the requested depth.
+   */
+  public static long perftInt(final Board board, final int depth) {
+    return depth <= 0 ? 1L : perftInt(board, depth, new int[depth + 1][MoveGenerator.MAX_MOVES]);
+  }
+
+  /**
+   * Counts the leaf nodes reachable from the given position at exactly the given depth with
+   * packed moves, writing each depth's moves into its own row of the given buffers.
+   *
+   * @param board The position from which to count.
+   * @param depth The number of plies to walk before counting, at least one.
+   * @param buffers The move arrays, indexed by remaining depth.
+   * @return The number of leaf nodes at the requested depth.
+   */
+  private static long perftInt(final Board board, final int depth, final int[][] buffers) {
+    final int[] moves = buffers[depth];
+    final int count = MoveGenerator.generate(board, board.currentPlayer().getAlliance(), moves);
+    long nodes = 0L;
+    for (int index = 0; index < count; index++) {
+      final int move = moves[index];
+      board.makeMove(move);
+      try {
+        if (!board.currentPlayer().getOpponent().isInCheck()) {
+          nodes += depth == 1 ? 1L : perftInt(board, depth - 1, buffers);
+        }
+      } finally {
+        board.unmakeMove(move);
       }
     }
     return nodes;
@@ -185,7 +227,9 @@ public class Perft {
    * round trip fails to reproduce the position it was given, or at which the board's bitboards or
    * piece lists disagree with its pieces, checked on arriving at each position and again after its
    * moves have been unmade, or at which unmaking a move does not restore the position's player
-   * objects, or at which {@link MoveGenerator} disagrees with either side's legal move list. Nothing in the engine calls either
+   * objects, or at which {@link MoveGenerator} disagrees with either side's legal move list, or
+   * at which applying, testing or reversing a move as a packed int disagrees with doing so as a
+   * {@link Move}. Nothing in the engine calls either
    * of those yet, so this rather than a node count is what validates them.
    *
    * @param board The position from which to begin the walk. Mutated during the walk and restored
@@ -216,10 +260,17 @@ public class Perft {
     final Player whitePlayer = board.whitePlayer();
     final Player blackPlayer = board.blackPlayer();
     final Player currentPlayer = board.currentPlayer();
+    final int[] codes = new int[MoveGenerator.MAX_MOVES];
+    MoveGenerator.generate(board, currentPlayer.getAlliance(), codes);
+    int moveIndex = 0;
     for (final Move move : board.currentPlayer().getLegalMoves()) {
       final String playerFault = describePlayerFault(board, whitePlayer, blackPlayer, currentPlayer);
       if (playerFault != null) {
         return "After unmaking a move: " + playerFault + System.lineSeparator() + board;
+      }
+      final String intMoveFault = describeIntMoveFault(board, move, codes[moveIndex++]);
+      if (intMoveFault != null) {
+        return move + ": " + intMoveFault + System.lineSeparator() + board;
       }
       board.makeMove(move);
       try {
@@ -273,6 +324,197 @@ public class Perft {
       }
     }
     return null;
+  }
+
+  /**
+   * Checks that applying the given packed move through {@link Board#makeMove(int)} leaves the
+   * position {@link Board#makeMove(Move)} leaves for the equal move, with pieces compared by
+   * value, that {@link Board#unmakeMove(int)} restores the board exactly, with pieces and players
+   * compared by identity, and that {@link Board#isLegal(int)} agrees with
+   * {@link Board#isLegal(Move)}.
+   *
+   * @param board The board, standing in the position the move belongs to. Restored before this
+   *              method returns.
+   * @param move The move.
+   * @param code The packed move equal to it.
+   * @return A description of the first difference found, or null if the two paths agree.
+   */
+  private static String describeIntMoveFault(final Board board, final Move move, final int code) {
+    final Snapshot before = Snapshot.of(board);
+    if (board.isLegal(move) != board.isLegal(code)) {
+      return "isLegal(int) answers " + board.isLegal(code) + ".";
+    }
+    final String unmovedFault = before.describeIdentityDifference(Snapshot.of(board));
+    if (unmovedFault != null) {
+      return "isLegal(int) did not restore the board: " + unmovedFault;
+    }
+
+    board.makeMove(move);
+    final Snapshot objectAfter = Snapshot.of(board);
+    board.unmakeMove();
+
+    board.makeMove(code);
+    try {
+      if (board.getTransitionCode() != code) {
+        return "makeMove(int) left transition code " + board.getTransitionCode() + ".";
+      }
+      final String valueFault = objectAfter.describeValueDifference(Snapshot.of(board));
+      if (valueFault != null) {
+        return "makeMove(int) differs from makeMove(Move): " + valueFault;
+      }
+      final String bitboardFault = describeBitboardFault(board);
+      if (bitboardFault != null) {
+        return "makeMove(int): " + bitboardFault;
+      }
+    } finally {
+      board.unmakeMove(code);
+    }
+    final String restoreFault = before.describeIdentityDifference(Snapshot.of(board));
+    if (restoreFault != null) {
+      return "unmakeMove(int) did not restore the board: " + restoreFault;
+    }
+    return describeBitboardFault(board);
+  }
+
+  /**
+   * The observable state of a board at one moment.
+   *
+   * @param pieces The piece on each square, or null.
+   * @param hash The Zobrist hash.
+   * @param enPassantPawn The en passant pawn, or null.
+   * @param halfMoveClock The halfmove clock.
+   * @param plyCount The ply count.
+   * @param repetitionCount The repetition count.
+   * @param transitionMove The transition move.
+   * @param transitionCode The transition code.
+   * @param whitePlayer The white player.
+   * @param blackPlayer The black player.
+   * @param currentPlayer The player to move.
+   * @param whiteKing The white king.
+   * @param blackKing The black king.
+   */
+  private record Snapshot(Piece[] pieces, long hash, Pawn enPassantPawn, int halfMoveClock,
+                          int plyCount, int repetitionCount, Move transitionMove,
+                          int transitionCode, Player whitePlayer, Player blackPlayer,
+                          Player currentPlayer, King whiteKing, King blackKing) {
+
+    /**
+     * Records the given board's state.
+     *
+     * @param board The board.
+     * @return Its state.
+     */
+    static Snapshot of(final Board board) {
+      final Piece[] pieces = new Piece[BoardUtils.NUM_TILES];
+      for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
+        pieces[square] = board.getPiece(square);
+      }
+      return new Snapshot(pieces, board.getZobristHash(), board.getEnPassantPawn(),
+              board.getHalfMoveClock(), board.getPlyCount(), board.repetitionCount(),
+              board.getTransitionMove(), board.getTransitionCode(), board.whitePlayer(),
+              board.blackPlayer(), board.currentPlayer(), board.getKing(Alliance.WHITE),
+              board.getKing(Alliance.BLACK));
+    }
+
+    /**
+     * Describes the first way the given state differs from this one, comparing pieces, kings
+     * and the en passant pawn by value and leaving out the transition move and the players
+     * other than the side to move.
+     *
+     * @param other The other state.
+     * @return A description of the difference, or null if there is none.
+     */
+    String describeValueDifference(final Snapshot other) {
+      for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
+        if (!samePiece(this.pieces[square], other.pieces[square])) {
+          return "the piece on " + BoardUtils.getPositionAtCoordinate(square) + " differs.";
+        }
+      }
+      if (!samePiece(this.whiteKing, other.whiteKing) || !samePiece(this.blackKing, other.blackKing)) {
+        return "a king differs.";
+      }
+      if (!samePiece(this.enPassantPawn, other.enPassantPawn)) {
+        return "the en passant pawn differs.";
+      }
+      return describeCountDifference(other);
+    }
+
+    /**
+     * Describes the first way the given state differs from this one, comparing pieces, kings,
+     * the en passant pawn, the transition move and the players by identity.
+     *
+     * @param other The other state.
+     * @return A description of the difference, or null if there is none.
+     */
+    String describeIdentityDifference(final Snapshot other) {
+      for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
+        if (this.pieces[square] != other.pieces[square]) {
+          return "the piece on " + BoardUtils.getPositionAtCoordinate(square) + " differs.";
+        }
+      }
+      if (this.whiteKing != other.whiteKing || this.blackKing != other.blackKing) {
+        return "a king differs.";
+      }
+      if (this.enPassantPawn != other.enPassantPawn) {
+        return "the en passant pawn differs.";
+      }
+      if (this.transitionMove != other.transitionMove || this.transitionCode != other.transitionCode) {
+        return "the transition move differs.";
+      }
+      if (this.whitePlayer != other.whitePlayer || this.blackPlayer != other.blackPlayer) {
+        return "a player differs.";
+      }
+      return describeCountDifference(other);
+    }
+
+    /**
+     * Describes the first way the given state's hash, clocks, counts or side to move differ from
+     * this one's.
+     *
+     * @param other The other state.
+     * @return A description of the difference, or null if there is none.
+     */
+    private String describeCountDifference(final Snapshot other) {
+      if (this.hash != other.hash) {
+        return "the hash differs.";
+      }
+      if (this.halfMoveClock != other.halfMoveClock) {
+        return "the halfmove clock differs.";
+      }
+      if (this.plyCount != other.plyCount || this.repetitionCount != other.repetitionCount) {
+        return "the ply or repetition count differs.";
+      }
+      if (this.currentPlayer.getAlliance() != other.currentPlayer.getAlliance()) {
+        return "the side to move differs.";
+      }
+      return null;
+    }
+
+    /**
+     * Determines whether two pieces are equal in type, alliance, square, moved status and, for
+     * kings, castling status and rights.
+     *
+     * @param first One piece, or null.
+     * @param second The other piece, or null.
+     * @return True if both are null or the pieces are equal in those respects.
+     */
+    private static boolean samePiece(final Piece first, final Piece second) {
+      if (first == null || second == null) {
+        return first == second;
+      }
+      if (first.getPieceType() != second.getPieceType() ||
+              first.getPieceAllegiance() != second.getPieceAllegiance() ||
+              first.getPiecePosition() != second.getPiecePosition() ||
+              first.isFirstMove() != second.isFirstMove()) {
+        return false;
+      }
+      if (first instanceof King firstKing && second instanceof King secondKing) {
+        return firstKing.isCastled() == secondKing.isCastled() &&
+                firstKing.isKingSideCastleCapable() == secondKing.isKingSideCastleCapable() &&
+                firstKing.isQueenSideCastleCapable() == secondKing.isQueenSideCastleCapable();
+      }
+      return true;
+    }
   }
 
   /**

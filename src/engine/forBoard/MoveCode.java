@@ -25,6 +25,9 @@ public final class MoveCode {
   /** The flag of a pawn's two-square advance. */
   public static final int PAWN_JUMP = 1 << 19;
 
+  /** The value standing for no move, or for the null move, which no packed move equals. */
+  public static final int NONE = -1;
+
   /** The bit position of the origin square. */
   private static final int ORIGIN_SHIFT = 9;
 
@@ -61,6 +64,34 @@ public final class MoveCode {
                        final Piece.PieceType promotionType, final int flags) {
     return origin << ORIGIN_SHIFT | destination << DESTINATION_SHIFT |
             (promotionType == null ? 0 : promotionType.ordinal() + 1) | flags;
+  }
+
+  /**
+   * Packs the given move, with the flags its kind carries.
+   *
+   * @param move The move, or the null move.
+   * @return The packed move, or {@link #NONE} for the null move.
+   */
+  public static int of(final Move move) {
+    if (move == Move.MoveFactory.getNullMove()) {
+      return NONE;
+    }
+    final Piece promotion = move.getPromotionPiece();
+    int flags = 0;
+    if (move.isAttack()) {
+      flags |= CAPTURE;
+    }
+    if (move instanceof Move.PawnEnPassantAttack) {
+      flags |= EN_PASSANT;
+    }
+    if (move.isCastlingMove()) {
+      flags |= CASTLE;
+    }
+    if (move instanceof Move.PawnJump) {
+      flags |= PAWN_JUMP;
+    }
+    return of(move.getCurrentCoordinate(), move.getDestinationCoordinate(),
+            promotion == null ? null : promotion.getPieceType(), flags);
   }
 
   /**

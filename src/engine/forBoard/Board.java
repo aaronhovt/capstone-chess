@@ -149,6 +149,65 @@ public final class Board {
   private int mutationDepth;
 
   /**
+   * The last move applied through {@link #makeMove(int)} and not yet reversed, as a
+   * {@link MoveCode}, or {@link MoveCode#NONE} if there is none. It is the transition move while
+   * {@link #transitionMove} is null.
+   */
+  private int transitionCode = MoveCode.NONE;
+
+  /** The initial length of the arrays holding what each move applied as an int replaced. */
+  private static final int UNDO_CAPACITY = 64;
+
+  /**
+   * The {@link #transitionCode} each move applied through {@link #makeMove(int)} replaced,
+   * indexed by the {@link #mutationDepth} before the move. Grown by replacement when full,
+   * together with the arrays below.
+   */
+  private int[] priorTransitionCodes = new int[UNDO_CAPACITY];
+
+  /**
+   * The moved piece, as it stood before the move, of each move applied through
+   * {@link #makeMove(int)}, indexed by the {@link #mutationDepth} before the move.
+   */
+  private Piece[] priorMovedPieces = new Piece[UNDO_CAPACITY];
+
+  /**
+   * The piece captured by each move applied through {@link #makeMove(int)}, or null, indexed by
+   * the {@link #mutationDepth} before the move.
+   */
+  private Piece[] capturedPieces = new Piece[UNDO_CAPACITY];
+
+  /**
+   * The castling rook, as it stood before the move, of each castling move applied through
+   * {@link #makeMove(int)}, indexed by the {@link #mutationDepth} before the move.
+   */
+  private Piece[] priorCastleRooks = new Piece[UNDO_CAPACITY];
+
+  /**
+   * The en passant pawn each move applied through {@link #makeMove(int)} replaced, indexed by the
+   * {@link #mutationDepth} before the move.
+   */
+  private Pawn[] priorEnPassantPawns = new Pawn[UNDO_CAPACITY];
+
+  /**
+   * The Zobrist hash each move applied through {@link #makeMove(int)} replaced, indexed by the
+   * {@link #mutationDepth} before the move.
+   */
+  private long[] priorHashes = new long[UNDO_CAPACITY];
+
+  /**
+   * The halfmove clock each move applied through {@link #makeMove(int)} replaced, indexed by the
+   * {@link #mutationDepth} before the move.
+   */
+  private int[] priorHalfMoveClocks = new int[UNDO_CAPACITY];
+
+  /**
+   * The transition move each move applied through {@link #makeMove(int)} replaced, indexed by the
+   * {@link #mutationDepth} before the move.
+   */
+  private Move[] priorTransitionMoves = new Move[UNDO_CAPACITY];
+
+  /**
    * How many null moves applied through {@link #makeNullMove()} have not yet been unmade. While
    * this is greater than zero, {@link #makeMove(Move)} and {@link #unmakeMove()} leave
    * {@link #positionHistory} alone and {@link #repetitionCount()} reports one, so no position
@@ -232,6 +291,7 @@ public final class Board {
     this.blackKing = source.blackKing;
     this.enPassantPawn = source.enPassantPawn;
     this.transitionMove = source.transitionMove;
+    this.transitionCode = source.transitionCode;
     this.zobristHash = source.zobristHash;
     this.halfMoveClock = source.halfMoveClock;
     this.plyCount = source.plyCount;
@@ -515,10 +575,22 @@ public final class Board {
   /**
    * Retrieves the move that led to the current board state.
    *
-   * @return The transition move, or a null move if no transition occurred.
+   * @return The transition move, or a null move if no transition occurred, or null if the move
+   *         was applied through {@link #makeMove(int)}.
    */
   public Move getTransitionMove() {
     return this.transitionMove;
+  }
+
+  /**
+   * Retrieves the move that led to the current board state as a {@link MoveCode}, however it was
+   * applied.
+   *
+   * @return The packed transition move, or {@link MoveCode#NONE} if it was the null move or no
+   *         move has been applied.
+   */
+  public int getTransitionCode() {
+    return this.transitionMove != null ? MoveCode.of(this.transitionMove) : this.transitionCode;
   }
 
   /**
@@ -704,6 +776,310 @@ public final class Board {
     } finally {
       move.unmakeMove(this, undo);
     }
+  }
+
+  /**
+   * Applies the given packed move to this board in place, with exactly the effect
+   * {@link #makeMove(Move)} has for the equal move: pieces, bitboards, Zobrist hash, en passant
+   * pawn, halfmove clock, players, repetition history and ply count. The move is reversed by
+   * {@link #unmakeMove(int)}, and moves and null moves applied by any of the board's methods must
+   * be reversed in the opposite order to the one they were applied in. After this move
+   * {@link #getTransitionMove()} returns null and {@link #getTransitionCode()} returns the move.
+   *
+   * @param move A move {@link MoveGenerator} generates for the side to move in this position.
+   */
+  public void makeMove(final int move) {
+    final int depth = this.mutationDepth;
+    ensureUndoCapacity();
+    final int origin = MoveCode.origin(move);
+    final int destination = MoveCode.destination(move);
+    final Piece moved = this.boardConfig[origin];
+    final Alliance mover = moved.getPieceAllegiance();
+    final long hash = hashAfter(move, moved);
+
+    this.priorTransitionCodes[depth] = this.transitionCode;
+    this.priorTransitionMoves[depth] = this.transitionMove;
+    this.priorEnPassantPawns[depth] = this.enPassantPawn;
+    this.priorHashes[depth] = this.zobristHash;
+    this.priorHalfMoveClocks[depth] = this.halfMoveClock;
+    this.priorMovedPieces[depth] = moved;
+    if (MoveCode.isCastle(move)) {
+      this.priorCastleRooks[depth] = this.boardConfig[castleRookOrigin(origin, destination)];
+      this.capturedPieces[depth] = null;
+      this.halfMoveClock++;
+    } else {
+      this.priorCastleRooks[depth] = null;
+      this.capturedPieces[depth] = this.boardConfig[captureSquare(move)];
+      this.halfMoveClock = moved.getPieceType() == Piece.PieceType.PAWN ||
+              this.capturedPieces[depth] != null ? 0 : this.halfMoveClock + 1;
+    }
+    movePieces(move, moved, this.capturedPieces[depth]);
+
+    this.enPassantPawn = MoveCode.isPawnJump(move) ? (Pawn) this.boardConfig[destination] : null;
+    this.zobristHash = hash;
+    this.transitionMove = null;
+    this.transitionCode = move;
+    this.mutationDepth++;
+    refreshPlayers(mover.isWhite() ? Alliance.BLACK : Alliance.WHITE);
+    if (this.nullMoveDepth == 0) {
+      if (this.positionHistorySize == this.positionHistory.length) {
+        this.positionHistory = Arrays.copyOf(this.positionHistory, this.positionHistory.length * 2);
+      }
+      this.positionHistory[this.positionHistorySize++] = this.zobristHash;
+    }
+    this.plyCount++;
+  }
+
+  /**
+   * Reverses the given packed move, which must be the move most recently applied through
+   * {@link #makeMove(int)} and not yet reversed, with no later mutation still applied, restoring
+   * this board's pieces, state, and players to exactly what they were beforehand.
+   *
+   * @param move The move to reverse.
+   */
+  public void unmakeMove(final int move) {
+    if (this.nullMoveDepth == 0) {
+      this.positionHistorySize--;
+    }
+    this.mutationDepth--;
+    final int depth = this.mutationDepth;
+    final Piece moved = this.priorMovedPieces[depth];
+    restorePieces(move, moved, this.capturedPieces[depth], this.priorCastleRooks[depth]);
+    this.zobristHash = this.priorHashes[depth];
+    this.enPassantPawn = this.priorEnPassantPawns[depth];
+    this.halfMoveClock = this.priorHalfMoveClocks[depth];
+    this.transitionMove = this.priorTransitionMoves[depth];
+    this.transitionCode = this.priorTransitionCodes[depth];
+    restorePlayers(moved.getPieceAllegiance());
+    this.plyCount--;
+  }
+
+  /**
+   * Returns whether the given packed move is legal for the side to move, meaning it does not
+   * leave that side's own king attacked, giving the answer {@link #isLegal(Move)} gives for the
+   * equal move. Only the pieces are moved to answer, and they are restored before this method
+   * returns.
+   *
+   * @param move A move {@link MoveGenerator} generates for the side to move in this position.
+   * @return True if the move leaves the moving side's king unattacked, false otherwise.
+   */
+  public boolean isLegal(final int move) {
+    final int origin = MoveCode.origin(move);
+    final int destination = MoveCode.destination(move);
+    final Piece moved = this.boardConfig[origin];
+    final Alliance opponentAlliance = this.currentPlayer.getOpponent().getAlliance();
+    final int kingSquare = moved.getPieceType() == Piece.PieceType.KING ?
+            destination : this.currentPlayer.getPlayerKing().getPiecePosition();
+    final Piece captured = MoveCode.isCastle(move) ? null : this.boardConfig[captureSquare(move)];
+    final Piece castleRook = MoveCode.isCastle(move) ?
+            this.boardConfig[castleRookOrigin(origin, destination)] : null;
+    movePieces(move, moved, captured);
+    try {
+      return !AttackDetector.isSquareAttacked(kingSquare, opponentAlliance, this);
+    } finally {
+      restorePieces(move, moved, captured, castleRook);
+    }
+  }
+
+  /**
+   * Moves the pieces for the given packed move: removes the moved piece and any captured piece,
+   * places the moved piece, or the promotion piece, on its destination, and moves the rook of a
+   * castling move.
+   *
+   * @param move The move.
+   * @param moved The piece on the move's origin square.
+   * @param captured The piece the move captures, or null.
+   */
+  private void movePieces(final int move, final Piece moved, final Piece captured) {
+    final int origin = MoveCode.origin(move);
+    final int destination = MoveCode.destination(move);
+    final Alliance mover = moved.getPieceAllegiance();
+    removePiece(origin);
+    if (MoveCode.isCastle(move)) {
+      removePiece(castleRookOrigin(origin, destination));
+      placePiece(Piece.moved(Piece.PieceType.KING, mover, destination, true));
+      placePiece(Piece.moved(Piece.PieceType.ROOK, mover,
+              castleRookDestination(origin, destination), false));
+      return;
+    }
+    if (captured != null) {
+      removePiece(captured.getPiecePosition());
+    }
+    final Piece.PieceType promotionType = MoveCode.promotionType(move);
+    placePiece(Piece.moved(promotionType != null ? promotionType : moved.getPieceType(), mover,
+            destination, false));
+  }
+
+  /**
+   * Reverses {@link #movePieces}, putting back the given pieces as they stood before the move.
+   *
+   * @param move The move.
+   * @param moved The moved piece as it stood before the move.
+   * @param captured The piece the move captured, or null.
+   * @param castleRook The castling rook as it stood before the move, or null.
+   */
+  private void restorePieces(final int move, final Piece moved, final Piece captured,
+                             final Piece castleRook) {
+    final int origin = MoveCode.origin(move);
+    final int destination = MoveCode.destination(move);
+    removePiece(destination);
+    if (MoveCode.isCastle(move)) {
+      removePiece(castleRookDestination(origin, destination));
+      placePiece(moved);
+      placePiece(castleRook);
+      return;
+    }
+    placePiece(moved);
+    if (captured != null) {
+      placePiece(captured);
+    }
+  }
+
+  /**
+   * Returns the square holding the piece the given packed move captures, being the en passant
+   * pawn's square for an en passant capture and the destination otherwise.
+   *
+   * @param move The move.
+   * @return The square of the captured piece, which is empty if the move does not capture.
+   */
+  private int captureSquare(final int move) {
+    return MoveCode.isEnPassant(move) ?
+            this.enPassantPawn.getPiecePosition() : MoveCode.destination(move);
+  }
+
+  /**
+   * Returns the square the rook of a castling move leaves.
+   *
+   * @param kingOrigin The king's origin.
+   * @param kingDestination The king's destination.
+   * @return The rook's origin.
+   */
+  private static int castleRookOrigin(final int kingOrigin, final int kingDestination) {
+    return kingDestination > kingOrigin ? kingOrigin + 3 : kingOrigin - 4;
+  }
+
+  /**
+   * Returns the square the rook of a castling move arrives on.
+   *
+   * @param kingOrigin The king's origin.
+   * @param kingDestination The king's destination.
+   * @return The rook's destination.
+   */
+  private static int castleRookDestination(final int kingOrigin, final int kingDestination) {
+    return kingDestination > kingOrigin ? kingOrigin + 1 : kingOrigin - 1;
+  }
+
+  /**
+   * Returns the Zobrist hash the given packed move leaves, computed from this board before the
+   * move in the way the {@link Move} subclasses compute it for the equal move.
+   *
+   * @param move The move.
+   * @param moved The piece on the move's origin square.
+   * @return The hash after the move.
+   */
+  private long hashAfter(final int move, final Piece moved) {
+    final int origin = MoveCode.origin(move);
+    final int destination = MoveCode.destination(move);
+    final boolean white = moved.getPieceAllegiance().isWhite();
+    long hash = this.zobristHash;
+
+    if (MoveCode.isCastle(move)) {
+      final int rookOrigin = castleRookOrigin(origin, destination);
+      hash = ZobristHashing.updateHashCastle(hash, moved, this.boardConfig[rookOrigin], origin,
+              destination, rookOrigin, castleRookDestination(origin, destination));
+      hash = ZobristHashing.updateHashSideToMove(hash);
+      if (this.enPassantPawn != null) {
+        hash = ZobristHashing.updateHashEnPassant(hash, this.enPassantPawn.getPiecePosition() % 8);
+      }
+      if (ZobristHashing.canCastle(this, white, true)) {
+        hash = ZobristHashing.updateHashCastlingRight(hash, white ? 0 : 2);
+      }
+      if (ZobristHashing.canCastle(this, white, false)) {
+        hash = ZobristHashing.updateHashCastlingRight(hash, white ? 1 : 3);
+      }
+      return hash;
+    }
+
+    final Piece captured = MoveCode.isCapture(move) ? this.boardConfig[captureSquare(move)] : null;
+    if (captured != null) {
+      hash = ZobristHashing.updateHashPieceCapture(hash, captured);
+    }
+    hash = ZobristHashing.updateHashPieceMove(hash, moved, origin, destination);
+    hash = ZobristHashing.updateHashSideToMove(hash);
+    if (moved.getPieceType() == Piece.PieceType.KING) {
+      if (ZobristHashing.canCastle(this, white, true)) {
+        hash = ZobristHashing.updateHashCastlingRight(hash, white ? 0 : 2);
+      }
+      if (ZobristHashing.canCastle(this, white, false)) {
+        hash = ZobristHashing.updateHashCastlingRight(hash, white ? 1 : 3);
+      }
+    } else if (moved.getPieceType() == Piece.PieceType.ROOK) {
+      hash = clearRookCastlingRight(hash, white, origin);
+    }
+    if (captured != null && captured.getPieceType() == Piece.PieceType.ROOK) {
+      hash = clearRookCastlingRight(hash, captured.getPieceAllegiance().isWhite(),
+              captured.getPiecePosition());
+    }
+    if (this.enPassantPawn != null) {
+      hash = ZobristHashing.updateHashEnPassant(hash, this.enPassantPawn.getPiecePosition() % 8);
+    }
+    if (MoveCode.isPawnJump(move)) {
+      hash = ZobristHashing.updateHashEnPassant(hash, destination % 8);
+    }
+    final Piece.PieceType promotionType = MoveCode.promotionType(move);
+    if (promotionType != null) {
+      hash = ZobristHashing.updateHashPromotion(hash, (Pawn) moved,
+              Piece.moved(promotionType, moved.getPieceAllegiance(), destination, false),
+              destination);
+    }
+    return hash;
+  }
+
+  /**
+   * Removes from the given hash the castling right a rook on the given home square stands for,
+   * if the board still holds that right.
+   *
+   * @param hash The hash.
+   * @param white Whether the rook is white.
+   * @param rookSquare The rook's square, which only clears a right when it is a home square.
+   * @return The hash without that right.
+   */
+  private long clearRookCastlingRight(final long hash, final boolean white, final int rookSquare) {
+    if (white) {
+      if (rookSquare == 56 && ZobristHashing.canCastle(this, true, false)) {
+        return ZobristHashing.updateHashCastlingRight(hash, 1);
+      }
+      if (rookSquare == 63 && ZobristHashing.canCastle(this, true, true)) {
+        return ZobristHashing.updateHashCastlingRight(hash, 0);
+      }
+    } else {
+      if (rookSquare == 0 && ZobristHashing.canCastle(this, false, false)) {
+        return ZobristHashing.updateHashCastlingRight(hash, 3);
+      }
+      if (rookSquare == 7 && ZobristHashing.canCastle(this, false, true)) {
+        return ZobristHashing.updateHashCastlingRight(hash, 2);
+      }
+    }
+    return hash;
+  }
+
+  /**
+   * Grows the arrays holding what each move applied as an int replaced when the current
+   * {@link #mutationDepth} has no slot in them.
+   */
+  private void ensureUndoCapacity() {
+    if (this.mutationDepth < this.priorTransitionCodes.length) {
+      return;
+    }
+    final int length = this.priorTransitionCodes.length * 2;
+    this.priorTransitionCodes = Arrays.copyOf(this.priorTransitionCodes, length);
+    this.priorMovedPieces = Arrays.copyOf(this.priorMovedPieces, length);
+    this.capturedPieces = Arrays.copyOf(this.capturedPieces, length);
+    this.priorCastleRooks = Arrays.copyOf(this.priorCastleRooks, length);
+    this.priorEnPassantPawns = Arrays.copyOf(this.priorEnPassantPawns, length);
+    this.priorHashes = Arrays.copyOf(this.priorHashes, length);
+    this.priorHalfMoveClocks = Arrays.copyOf(this.priorHalfMoveClocks, length);
+    this.priorTransitionMoves = Arrays.copyOf(this.priorTransitionMoves, length);
   }
 
   /**

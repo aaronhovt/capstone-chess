@@ -127,6 +127,30 @@ public abstract class Piece {
   public abstract Piece movePiece(final Move move);
 
   /**
+   * Returns the piece of the given type and alliance as it stands after a move to the given
+   * square: one marked as having moved, which for a king has castled exactly when the move
+   * castles and keeps no castling right. This is the piece {@link #movePiece(Move)} returns for
+   * such a move, or one equal to it, and it is shared rather than created.
+   *
+   * @param type The type of the piece after the move, being the promotion type for a promotion.
+   * @param alliance The alliance of the piece.
+   * @param destination The square the piece moves to.
+   * @param castling Whether the move castles, which matters only for a king.
+   * @return The piece after the move.
+   */
+  public static Piece moved(final PieceType type, final Alliance alliance, final int destination,
+                            final boolean castling) {
+    return switch (type) {
+      case PAWN -> PieceUtils.Instance.getMovedPawn(alliance, destination);
+      case KNIGHT -> PieceUtils.Instance.getMovedKnight(alliance, destination);
+      case BISHOP -> PieceUtils.Instance.getMovedBishop(alliance, destination);
+      case ROOK -> PieceUtils.Instance.getMovedRook(alliance, destination);
+      case QUEEN -> PieceUtils.Instance.getMovedQueen(alliance, destination);
+      case KING -> PieceUtils.Instance.getMovedKing(alliance, destination, castling);
+    };
+  }
+
+  /**
    * Calculates the legal moves for the piece on the given board.
    *
    * @param board The current board.

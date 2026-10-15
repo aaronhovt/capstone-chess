@@ -44,6 +44,9 @@ public class PerftSuite {
   /** The command line flag requesting a copy and null move round trip walk alongside the node counts. */
   private static final String VERIFY_MUTATION_FLAG = "--verify-mutation";
 
+  /** The command line flag requesting that the node counts be taken with packed int moves. */
+  private static final String INT_MOVES_FLAG = "--int-moves";
+
   /** The command line flag requesting usage information. */
   private static final String HELP_FLAG = "--help";
 
@@ -103,11 +106,14 @@ public class PerftSuite {
     int maxDepth = DEFAULT_MAX_DEPTH;
     boolean verifyHashes = false;
     boolean verifyMutation = false;
+    boolean intMoves = false;
     for (final String argument : args) {
       if (VERIFY_HASH_FLAG.equals(argument)) {
         verifyHashes = true;
       } else if (VERIFY_MUTATION_FLAG.equals(argument)) {
         verifyMutation = true;
+      } else if (INT_MOVES_FLAG.equals(argument)) {
+        intMoves = true;
       } else if (HELP_FLAG.equals(argument)) {
         printUsage();
         return;
@@ -126,7 +132,7 @@ public class PerftSuite {
       printUsage();
       return;
     }
-    System.exit(run(maxDepth, verifyHashes, verifyMutation) ? 0 : 1);
+    System.exit(run(maxDepth, verifyHashes, verifyMutation, intMoves) ? 0 : 1);
   }
 
   /**
@@ -152,13 +158,29 @@ public class PerftSuite {
    * @return True if every check passed, false otherwise.
    */
   public static boolean run(final int maxDepth, final boolean verifyHashes, final boolean verifyMutation) {
+    return run(maxDepth, verifyHashes, verifyMutation, false);
+  }
+
+  /**
+   * Tests every reference position up to the requested depth, taking the node counts either with
+   * {@link engine.forBoard.Move} objects or with packed int moves.
+   *
+   * @param maxDepth The deepest depth to test each position to.
+   * @param verifyHashes Whether to walk each position checking incremental hashes.
+   * @param verifyMutation Whether to walk each position checking the copy and null move round trips.
+   * @param intMoves Whether to count with {@link Perft#perftInt} rather than {@link Perft#perft}.
+   * @return True if every check passed, false otherwise.
+   */
+  public static boolean run(final int maxDepth, final boolean verifyHashes,
+                            final boolean verifyMutation, final boolean intMoves) {
     System.out.printf("Perft suite: %d positions, maximum depth %d%n%n",
             STANDARD_POSITIONS.size(), maxDepth);
     int checksRun = 0;
     int failures = 0;
     int positionsFailed = 0;
     for (final PerftPosition position : STANDARD_POSITIONS) {
-      final PositionOutcome outcome = runPosition(position, maxDepth, verifyHashes, verifyMutation);
+      final PositionOutcome outcome =
+              runPosition(position, maxDepth, verifyHashes, verifyMutation, intMoves);
       checksRun += outcome.checksRun();
       failures += outcome.failures();
       if (outcome.failures() > 0) {
@@ -183,12 +205,14 @@ public class PerftSuite {
    * @param maxDepth The greatest depth to test, limited by the depths with known counts.
    * @param verifyHashes Whether to walk the position checking Zobrist hash consistency.
    * @param verifyMutation Whether to walk the position checking the copy and null move round trips.
+   * @param intMoves Whether to count with {@link Perft#perftInt} rather than {@link Perft#perft}.
    * @return The number of checks run for this position and the number of them that failed.
    */
   private static PositionOutcome runPosition(final PerftPosition position,
                                              final int maxDepth,
                                              final boolean verifyHashes,
-                                             final boolean verifyMutation) {
+                                             final boolean verifyMutation,
+                                             final boolean intMoves) {
     System.out.println(position.name());
     System.out.println("  " + position.fen());
     final Board board;
@@ -214,7 +238,7 @@ public class PerftSuite {
     for (int depth = 1; depth <= deepestDepth; depth++) {
       final long expectedNodes = position.expectedNodesAt(depth);
       final long startTime = System.nanoTime();
-      final long actualNodes = Perft.perft(board, depth);
+      final long actualNodes = intMoves ? Perft.perftInt(board, depth) : Perft.perft(board, depth);
       final double elapsedSeconds = (System.nanoTime() - startTime) / NANOSECONDS_PER_SECOND;
       checksRun++;
       System.out.printf("  depth %d  expected %,14d  actual %,14d  %8.2fs  %,12d n/s  %s%n",
@@ -355,8 +379,9 @@ public class PerftSuite {
   private static void printUsage() {
     System.out.println("""
             Usage:
-              PerftSuite [maxDepth] [--verify-hash] [--verify-mutation]
-                                                      run every reference position, default depth 4
+              PerftSuite [maxDepth] [--verify-hash] [--verify-mutation] [--int-moves]
+                                                      run every reference position, default depth 4,
+                                                      counting with packed int moves if asked
               PerftSuite divide <depth> <fen>         break one position down by root move
               PerftSuite divide <depth> startpos      break the starting position down by root move
               PerftSuite --help                       print this message

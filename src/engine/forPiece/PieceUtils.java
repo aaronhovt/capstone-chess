@@ -58,6 +58,13 @@ enum PieceUtils {
   private final Pawn[][] ALL_POSSIBLE_PAWNS = PieceUtils.createAllPossibleMovedPawns();
 
   /**
+   * Table storing all possible moved King instances, indexed by {@link #allianceIndex}, then by
+   * one for a king that has castled and zero otherwise, and then by destination coordinate. Each
+   * keeps no castling right.
+   */
+  private final King[][][] ALL_POSSIBLE_KINGS = PieceUtils.createAllPossibleMovedKings();
+
+  /**
    * Retrieves a moved Pawn instance for the specified alliance and destination coordinate.
    *
    * @param alliance The alliance of the Pawn piece.
@@ -115,6 +122,20 @@ enum PieceUtils {
   Queen getMovedQueen(final Alliance alliance,
                       final int destinationCoordinate) {
     return ALL_POSSIBLE_QUEENS[allianceIndex(alliance)][destinationCoordinate];
+  }
+
+  /**
+   * Retrieves a moved King instance for the specified alliance and destination coordinate, which
+   * keeps no castling right and has castled exactly when the move castles.
+   *
+   * @param alliance The alliance of the King piece.
+   * @param destinationCoordinate The destination coordinate for the moved King piece.
+   * @param castling Whether the move castles.
+   * @return The moved King piece instance.
+   */
+  King getMovedKing(final Alliance alliance, final int destinationCoordinate,
+                    final boolean castling) {
+    return ALL_POSSIBLE_KINGS[allianceIndex(alliance)][castling ? 1 : 0][destinationCoordinate];
   }
 
   /**
@@ -202,6 +223,23 @@ enum PieceUtils {
     for(final Alliance alliance : Alliance.values()) {
       for(int i = 0; i < BoardUtils.NUM_TILES; i++) {
         pieces[allianceIndex(alliance)][i] = new Queen(alliance, i, false, 1);
+      }
+    }
+    return pieces;
+  }
+
+  /**
+   * Creates and populates a table containing all possible moved King instances for each
+   * alliance, castled status and board coordinate combination.
+   *
+   * @return A table containing all possible moved King instances.
+   */
+  private static King[][][] createAllPossibleMovedKings() {
+    final King[][][] pieces = new King[ALLIANCE_COUNT][2][BoardUtils.NUM_TILES];
+    for(final Alliance alliance : Alliance.values()) {
+      for(int i = 0; i < BoardUtils.NUM_TILES; i++) {
+        pieces[allianceIndex(alliance)][0][i] = new King(alliance, i, false, false, false, false);
+        pieces[allianceIndex(alliance)][1][i] = new King(alliance, i, false, true, false, false);
       }
     }
     return pieces;
