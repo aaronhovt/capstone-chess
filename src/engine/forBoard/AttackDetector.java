@@ -3,19 +3,17 @@ package engine.forBoard;
 import engine.Alliance;
 import engine.forPiece.Piece;
 
-import java.util.Arrays;
-
 /**
- * AttackDetector answers whether a given square is attacked by a given side. It scans outward from
- * the square in question and reads what stands on the squares it reaches, rather than asking every
- * one of the attacking side's pieces whether it bears on that square.
+ * AttackDetector answers whether a given square is attacked by a given side. It reads the board's
+ * bitboards: the squares a knight, a king or a pawn would attack the square from are each held as
+ * a precomputed mask, and the squares a slider would attack it from are found by walking each ray
+ * out of the square to its first occupied square.
  * <p>
- * The two formulations agree exactly. A sliding piece attacks a square when it stands on one of the
- * rays out of that square with nothing in between, which is what a scan outward from the square
- * finds at the first occupied square along each ray. A knight or a king attacks a square when it
- * stands on a square the same step pattern reaches from there, the pattern being its own mirror
- * image. A pawn is the one piece whose pattern is not its own mirror image, so the squares a pawn
- * of each alliance attacks from are tabulated separately per alliance.
+ * A sliding piece attacks a square when it stands on one of the rays out of that square with
+ * nothing in between. A knight or a king attacks a square when it stands on a square the same
+ * step pattern reaches from there, the pattern being its own mirror image. A pawn is the one piece
+ * whose pattern is not its own mirror image, so the squares a pawn of each alliance attacks from
+ * are tabulated separately per alliance.
  * <p>
  * Whatever occupies the square being tested is disregarded, except that a square held by a piece of
  * the attacking side is reported as unattacked.
@@ -27,11 +25,12 @@ public final class AttackDetector {
   /** The number of files on the board, which is also the number of ranks. */
   private static final int BOARD_SIZE = BoardUtils.NUM_TILES_PER_ROW;
 
-  /** The greatest number of squares a ray can hold, being a full rank or file less its origin. */
-  private static final int LONGEST_RAY = BOARD_SIZE - 1;
-
-  /** The number of squares a pawn of one alliance can attack a given square from. */
-  private static final int PAWN_ATTACKER_COUNT = 2;
+  /**
+   * The number of leading directions in each step table that step to lower tiles. The rays of
+   * those directions find their nearest square as their highest set bit, and the rest as their
+   * lowest.
+   */
+  private static final int DECREASING_DIRECTIONS = 2;
 
   /** The per step file displacements of the rays a rook or a queen travels along. */
   private static final int[] ORTHOGONAL_FILE_STEPS = { 0, -1, 1, 0 };
@@ -59,39 +58,37 @@ public final class AttackDetector {
 
   /**
    * The rays out of each square along which a rook or a queen would stand to attack it, indexed by
-   * square and then by direction, each ray listing its squares in increasing distance from the
-   * origin.
+   * square and then by direction, each as one bit per tile.
    */
-  private static final int[][][] ORTHOGONAL_RAYS =
+  private static final long[][] ORTHOGONAL_RAYS =
           computeRays(ORTHOGONAL_FILE_STEPS, ORTHOGONAL_RANK_STEPS);
 
   /**
    * The rays out of each square along which a bishop or a queen would stand to attack it, indexed
-   * by square and then by direction, each ray listing its squares in increasing distance from the
-   * origin.
+   * by square and then by direction, each as one bit per tile.
    */
-  private static final int[][][] DIAGONAL_RAYS =
+  private static final long[][] DIAGONAL_RAYS =
           computeRays(DIAGONAL_FILE_STEPS, DIAGONAL_RANK_STEPS);
 
+  /** Every square on the orthogonal rays out of each square, indexed by square. */
+  private static final long[] ORTHOGONAL_LINES = computeLines(ORTHOGONAL_RAYS);
+
+  /** Every square on the diagonal rays out of each square, indexed by square. */
+  private static final long[] DIAGONAL_LINES = computeLines(DIAGONAL_RAYS);
+
   /** The squares from which a knight attacks each square, indexed by square. */
-  private static final int[][] KNIGHT_ATTACKERS =
+  private static final long[] KNIGHT_ATTACKERS =
           computeStepAttackers(KNIGHT_FILE_STEPS, KNIGHT_RANK_STEPS);
 
   /** The squares from which a king attacks each square, indexed by square. */
-  private static final int[][] KING_ATTACKERS =
+  private static final long[] KING_ATTACKERS =
           computeStepAttackers(KING_FILE_STEPS, KING_RANK_STEPS);
 
   /** The squares from which a white pawn attacks each square, indexed by square. */
-  private static final int[][] WHITE_PAWN_ATTACKERS = computePawnAttackers(Alliance.WHITE);
+  private static final long[] WHITE_PAWN_ATTACKERS = computePawnAttackers(Alliance.WHITE);
 
   /** The squares from which a black pawn attacks each square, indexed by square. */
-  private static final int[][] BLACK_PAWN_ATTACKERS = computePawnAttackers(Alliance.BLACK);
-
-  /** Marks a square that a move does not use. */
-  private static final int NO_SQUARE = -1;
-
-  /** The squares a piece with no step attack attacks from. */
-  private static final int[] NO_SQUARES = {};
+  private static final long[] BLACK_PAWN_ATTACKERS = computePawnAttackers(Alliance.BLACK);
 
   /** Prevents instantiation, since this class holds only tables and static queries against them. */
   private AttackDetector() {
@@ -109,19 +106,22 @@ public final class AttackDetector {
    */
   public static boolean isSquareAttacked(final int square, final Alliance attackerAlliance,
                                          final Board board) {
-    final Piece occupant = board.getPiece(square);
-    if (occupant != null && occupant.getPieceAllegiance() == attackerAlliance) {
+    if ((board.getOccupancy(attackerAlliance) & (1L << square)) != 0L) {
       return false;
     }
-    final int[] pawnAttackers = attackerAlliance.isWhite() ? WHITE_PAWN_ATTACKERS[square]
+    final long pawnAttackers = attackerAlliance.isWhite() ? WHITE_PAWN_ATTACKERS[square]
             : BLACK_PAWN_ATTACKERS[square];
-    if (stepAttackerStandsOn(pawnAttackers, Piece.PieceType.PAWN, attackerAlliance, board) ||
-            stepAttackerStandsOn(KNIGHT_ATTACKERS[square], Piece.PieceType.KNIGHT, attackerAlliance, board) ||
-            stepAttackerStandsOn(KING_ATTACKERS[square], Piece.PieceType.KING, attackerAlliance, board)) {
+    if ((pawnAttackers & board.getPieces(attackerAlliance, Piece.PieceType.PAWN)) != 0L ||
+            (KNIGHT_ATTACKERS[square] & board.getPieces(attackerAlliance, Piece.PieceType.KNIGHT)) != 0L ||
+            (KING_ATTACKERS[square] & board.getPieces(attackerAlliance, Piece.PieceType.KING)) != 0L) {
       return true;
     }
-    return sliderBearsAlong(DIAGONAL_RAYS[square], Piece.PieceType.BISHOP, attackerAlliance, board) ||
-            sliderBearsAlong(ORTHOGONAL_RAYS[square], Piece.PieceType.ROOK, attackerAlliance, board);
+    final long queens = board.getPieces(attackerAlliance, Piece.PieceType.QUEEN);
+    final long diagonalSliders = board.getPieces(attackerAlliance, Piece.PieceType.BISHOP) | queens;
+    final long orthogonalSliders = board.getPieces(attackerAlliance, Piece.PieceType.ROOK) | queens;
+    final long occupancy = board.getOccupancy();
+    return sliderBears(DIAGONAL_RAYS, DIAGONAL_LINES, square, occupancy, diagonalSliders) ||
+            sliderBears(ORTHOGONAL_RAYS, ORTHOGONAL_LINES, square, occupancy, orthogonalSliders);
   }
 
   /**
@@ -138,113 +138,70 @@ public final class AttackDetector {
     final Alliance mover = move.getMovedPiece().getPieceAllegiance();
     final int kingSquare =
             board.getKing(mover.isWhite() ? Alliance.BLACK : Alliance.WHITE).getPiecePosition();
-    final int origin = move.getCurrentCoordinate();
-    final int destination = move.getDestinationCoordinate();
+    final long originBit = 1L << move.getCurrentCoordinate();
+    final long destinationBit = 1L << move.getDestinationCoordinate();
     final Piece.PieceType arrivingType = move instanceof Move.PawnPromotion promotion ?
             promotion.promotionPiece.getPieceType() : move.getMovedPiece().getPieceType();
 
-    int rookOrigin = NO_SQUARE;
-    int rookDestination = NO_SQUARE;
-    int capturedPawnSquare = NO_SQUARE;
-    if (move instanceof Move.CastleMove castle) {
-      rookOrigin = castle.castleRookStart;
-      rookDestination = castle.castleRookDestination;
-    } else if (move instanceof Move.PawnEnPassantAttack) {
-      capturedPawnSquare = move.getAttackedPiece().getPiecePosition();
-    }
-
-    final int[] stepOrigins = switch (arrivingType) {
+    final long stepOrigins = switch (arrivingType) {
       case PAWN -> mover.isWhite() ? WHITE_PAWN_ATTACKERS[kingSquare]
               : BLACK_PAWN_ATTACKERS[kingSquare];
       case KNIGHT -> KNIGHT_ATTACKERS[kingSquare];
       case KING -> KING_ATTACKERS[kingSquare];
-      default -> NO_SQUARES;
+      default -> 0L;
     };
-    for (final int stepOrigin : stepOrigins) {
-      if (stepOrigin == destination) {
-        return true;
-      }
+    if ((stepOrigins & destinationBit) != 0L) {
+      return true;
     }
 
-    return sliderBearsAfterMove(DIAGONAL_RAYS[kingSquare], Piece.PieceType.BISHOP, mover,
-            board, origin, destination, arrivingType, rookOrigin, rookDestination,
-            capturedPawnSquare) ||
-            sliderBearsAfterMove(ORTHOGONAL_RAYS[kingSquare], Piece.PieceType.ROOK, mover,
-                    board, origin, destination, arrivingType, rookOrigin, rookDestination,
-                    capturedPawnSquare);
+    long occupancy = (board.getOccupancy() & ~originBit) | destinationBit;
+    final long queens = board.getPieces(mover, Piece.PieceType.QUEEN) & ~originBit;
+    long diagonalSliders = (board.getPieces(mover, Piece.PieceType.BISHOP) & ~originBit) | queens;
+    long orthogonalSliders = (board.getPieces(mover, Piece.PieceType.ROOK) & ~originBit) | queens;
+    if (arrivingType == Piece.PieceType.BISHOP || arrivingType == Piece.PieceType.QUEEN) {
+      diagonalSliders |= destinationBit;
+    }
+    if (arrivingType == Piece.PieceType.ROOK || arrivingType == Piece.PieceType.QUEEN) {
+      orthogonalSliders |= destinationBit;
+    }
+    if (move instanceof Move.CastleMove castle) {
+      final long rookOriginBit = 1L << castle.castleRookStart;
+      final long rookDestinationBit = 1L << castle.castleRookDestination;
+      occupancy = (occupancy & ~rookOriginBit) | rookDestinationBit;
+      orthogonalSliders = (orthogonalSliders & ~rookOriginBit) | rookDestinationBit;
+    } else if (move instanceof Move.PawnEnPassantAttack) {
+      occupancy &= ~(1L << move.getAttackedPiece().getPiecePosition());
+    }
+
+    return sliderBears(DIAGONAL_RAYS, DIAGONAL_LINES, kingSquare, occupancy, diagonalSliders) ||
+            sliderBears(ORTHOGONAL_RAYS, ORTHOGONAL_LINES, kingSquare, occupancy, orthogonalSliders);
   }
 
   /**
-   * Determines whether a queen, or a slider of the given type, of the given alliance would stand at
-   * the near end of any of the given rays with nothing in between once a move is made. The move is
-   * described by the squares it empties and fills; a square it does not use is given as
-   * {@link #NO_SQUARE}.
+   * Determines whether any of the given sliders stands at the near end of one of the given rays
+   * out of the given square, with nothing in between.
    *
-   * @param rays The rays out of the square being tested.
-   * @param sliderType The slider other than the queen that travels along these rays.
-   * @param mover The alliance making the move, being the alliance of the piece looked for.
-   * @param board The board in the position before the move.
-   * @param origin The square the moving piece leaves.
-   * @param destination The square the moving piece arrives on.
-   * @param arrivingType The type of the piece arriving on the destination square.
-   * @param rookOrigin The square a castling rook leaves.
-   * @param rookDestination The square a castling rook arrives on.
-   * @param capturedPawnSquare The square of a pawn captured en passant.
-   * @return True if such a piece would bear along one of the rays, false otherwise.
+   * @param rays The rays out of each square, indexed by square and then by direction.
+   * @param lines Every square on those rays out of each square, indexed by square.
+   * @param square The square the rays lead out of.
+   * @param occupancy The occupied squares, as one bit per tile.
+   * @param sliders The squares of the sliders looked for, as one bit per tile.
+   * @return True if such a slider bears along one of the rays, false otherwise.
    */
-  private static boolean sliderBearsAfterMove(final int[][] rays,
-                                              final Piece.PieceType sliderType,
-                                              final Alliance mover, final Board board,
-                                              final int origin, final int destination,
-                                              final Piece.PieceType arrivingType,
-                                              final int rookOrigin, final int rookDestination,
-                                              final int capturedPawnSquare) {
-    for (final int[] ray : rays) {
-      for (final int candidate : ray) {
-        final Piece.PieceType type;
-        final Alliance alliance;
-        if (candidate == destination) {
-          type = arrivingType;
-          alliance = mover;
-        } else if (candidate == rookDestination) {
-          type = Piece.PieceType.ROOK;
-          alliance = mover;
-        } else if (candidate == origin || candidate == rookOrigin ||
-                candidate == capturedPawnSquare) {
-          continue;
-        } else {
-          final Piece piece = board.getPiece(candidate);
-          if (piece == null) {
-            continue;
-          }
-          type = piece.getPieceType();
-          alliance = piece.getPieceAllegiance();
-        }
-        if (alliance == mover && (type == sliderType || type == Piece.PieceType.QUEEN)) {
-          return true;
-        }
-        break;
-      }
+  private static boolean sliderBears(final long[][] rays, final long[] lines, final int square,
+                                     final long occupancy, final long sliders) {
+    if ((lines[square] & sliders) == 0L) {
+      return false;
     }
-    return false;
-  }
-
-  /**
-   * Determines whether a piece of the given type and alliance stands on any of the given squares.
-   *
-   * @param origins The squares an attacker of this kind would stand on.
-   * @param attackerType The type of piece being looked for.
-   * @param attackerAlliance The alliance of the piece being looked for.
-   * @param board The current board.
-   * @return True if such a piece stands on one of the squares, false otherwise.
-   */
-  private static boolean stepAttackerStandsOn(final int[] origins,
-                                              final Piece.PieceType attackerType,
-                                              final Alliance attackerAlliance, final Board board) {
-    for (final int origin : origins) {
-      final Piece piece = board.getPiece(origin);
-      if (piece != null && piece.getPieceType() == attackerType &&
-              piece.getPieceAllegiance() == attackerAlliance) {
+    final long[] squareRays = rays[square];
+    for (int direction = 0; direction < squareRays.length; direction++) {
+      final long blockers = squareRays[direction] & occupancy;
+      if (blockers == 0L) {
+        continue;
+      }
+      final int nearest = direction < DECREASING_DIRECTIONS ?
+              63 - Long.numberOfLeadingZeros(blockers) : Long.numberOfTrailingZeros(blockers);
+      if ((sliders & (1L << nearest)) != 0L) {
         return true;
       }
     }
@@ -252,45 +209,23 @@ public final class AttackDetector {
   }
 
   /**
-   * Determines whether a queen, or a slider of the given type, of the given alliance stands at the
-   * near end of any of the given rays with nothing in between. Each ray is walked outward only as
-   * far as its first occupied square, since anything past that square is blocked by it.
-   *
-   * @param rays The rays out of the square being tested.
-   * @param sliderType The slider other than the queen that travels along these rays.
-   * @param attackerAlliance The alliance of the piece being looked for.
-   * @param board The current board.
-   * @return True if such a piece bears along one of the rays, false otherwise.
-   */
-  private static boolean sliderBearsAlong(final int[][] rays, final Piece.PieceType sliderType,
-                                          final Alliance attackerAlliance, final Board board) {
-    for (final int[] ray : rays) {
-      for (final int candidate : ray) {
-        final Piece piece = board.getPiece(candidate);
-        if (piece == null) {
-          continue;
-        }
-        if (piece.getPieceAllegiance() == attackerAlliance) {
-          final Piece.PieceType type = piece.getPieceType();
-          if (type == sliderType || type == Piece.PieceType.QUEEN) {
-            return true;
-          }
-        }
-        break;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Computes, for every square, the rays leading out of it in each of the given directions.
+   * Computes, for every square, the rays leading out of it in each of the given directions. The
+   * first {@link #DECREASING_DIRECTIONS} directions must step to lower tiles and the rest to higher
+   * tiles.
    *
    * @param fileSteps The per step file displacement of each direction.
    * @param rankSteps The per step rank displacement of each direction, paired with fileSteps.
-   * @return The rays, indexed by square and then by direction.
+   * @return The rays, indexed by square and then by direction, each as one bit per tile.
+   * @throws IllegalArgumentException If a direction steps the other way from its position.
    */
-  private static int[][][] computeRays(final int[] fileSteps, final int[] rankSteps) {
-    final int[][][] rays = new int[BoardUtils.NUM_TILES][fileSteps.length][];
+  private static long[][] computeRays(final int[] fileSteps, final int[] rankSteps) {
+    final long[][] rays = new long[BoardUtils.NUM_TILES][fileSteps.length];
+    for (int direction = 0; direction < fileSteps.length; direction++) {
+      final boolean decreasing = rankSteps[direction] * BOARD_SIZE + fileSteps[direction] < 0;
+      if (decreasing != (direction < DECREASING_DIRECTIONS)) {
+        throw new IllegalArgumentException("Direction " + direction + " is out of order.");
+      }
+    }
     for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
       for (int direction = 0; direction < fileSteps.length; direction++) {
         rays[square][direction] = computeRay(square, fileSteps[direction], rankSteps[direction]);
@@ -306,11 +241,10 @@ public final class AttackDetector {
    * @param square The square the ray leads out of, which is not itself part of the ray.
    * @param fileStep The per step file displacement of the direction.
    * @param rankStep The per step rank displacement of the direction.
-   * @return The squares of the ray, in increasing distance from the origin.
+   * @return The squares of the ray, as one bit per tile.
    */
-  private static int[] computeRay(final int square, final int fileStep, final int rankStep) {
-    final int[] ray = new int[LONGEST_RAY];
-    int length = 0;
+  private static long computeRay(final int square, final int fileStep, final int rankStep) {
+    long ray = 0L;
     int file = square % BOARD_SIZE;
     int rank = square / BOARD_SIZE;
     while (true) {
@@ -319,9 +253,25 @@ public final class AttackDetector {
       if (file < 0 || file >= BOARD_SIZE || rank < 0 || rank >= BOARD_SIZE) {
         break;
       }
-      ray[length++] = rank * BOARD_SIZE + file;
+      ray |= 1L << (rank * BOARD_SIZE + file);
     }
-    return Arrays.copyOf(ray, length);
+    return ray;
+  }
+
+  /**
+   * Computes, for every square, the union of the given rays out of it.
+   *
+   * @param rays The rays out of each square, indexed by square and then by direction.
+   * @return Every square on those rays, indexed by square, as one bit per tile.
+   */
+  private static long[] computeLines(final long[][] rays) {
+    final long[] lines = new long[BoardUtils.NUM_TILES];
+    for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
+      for (final long ray : rays[square]) {
+        lines[square] |= ray;
+      }
+    }
+    return lines;
   }
 
   /**
@@ -331,24 +281,21 @@ public final class AttackDetector {
    *
    * @param fileSteps The file displacement of each step in the pattern.
    * @param rankSteps The rank displacement of each step in the pattern, paired with fileSteps.
-   * @return The attacking squares, indexed by square.
+   * @return The attacking squares, indexed by square, as one bit per tile.
    */
-  private static int[][] computeStepAttackers(final int[] fileSteps, final int[] rankSteps) {
-    final int[][] attackers = new int[BoardUtils.NUM_TILES][];
+  private static long[] computeStepAttackers(final int[] fileSteps, final int[] rankSteps) {
+    final long[] attackers = new long[BoardUtils.NUM_TILES];
     for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
       final int file = square % BOARD_SIZE;
       final int rank = square / BOARD_SIZE;
-      final int[] origins = new int[fileSteps.length];
-      int count = 0;
       for (int step = 0; step < fileSteps.length; step++) {
         final int originFile = file + fileSteps[step];
         final int originRank = rank + rankSteps[step];
         if (originFile >= 0 && originFile < BOARD_SIZE &&
                 originRank >= 0 && originRank < BOARD_SIZE) {
-          origins[count++] = originRank * BOARD_SIZE + originFile;
+          attackers[square] |= 1L << (originRank * BOARD_SIZE + originFile);
         }
       }
-      attackers[square] = Arrays.copyOf(origins, count);
     }
     return attackers;
   }
@@ -359,24 +306,21 @@ public final class AttackDetector {
    * side.
    *
    * @param alliance The alliance of the attacking pawns.
-   * @return The attacking squares, indexed by square.
+   * @return The attacking squares, indexed by square, as one bit per tile.
    */
-  private static int[][] computePawnAttackers(final Alliance alliance) {
-    final int[][] attackers = new int[BoardUtils.NUM_TILES][];
+  private static long[] computePawnAttackers(final Alliance alliance) {
+    final long[] attackers = new long[BoardUtils.NUM_TILES];
     for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
       final int file = square % BOARD_SIZE;
       final int originRank = (square / BOARD_SIZE) - alliance.getDirection();
-      final int[] origins = new int[PAWN_ATTACKER_COUNT];
-      int count = 0;
       if (originRank >= 0 && originRank < BOARD_SIZE) {
         if (file > 0) {
-          origins[count++] = originRank * BOARD_SIZE + file - 1;
+          attackers[square] |= 1L << (originRank * BOARD_SIZE + file - 1);
         }
         if (file < BOARD_SIZE - 1) {
-          origins[count++] = originRank * BOARD_SIZE + file + 1;
+          attackers[square] |= 1L << (originRank * BOARD_SIZE + file + 1);
         }
       }
-      attackers[square] = Arrays.copyOf(origins, count);
     }
     return attackers;
   }
