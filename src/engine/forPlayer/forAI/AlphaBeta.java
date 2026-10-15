@@ -117,6 +117,30 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           ThreadLocal.withInitial(QuiescenceBuffers::new);
 
   /**
+   * The arrays a node of the main search at each ply generates and sorts its moves in. A ply's
+   * entries are meaningful only while the node at that ply is searching its moves.
+   */
+  private final ThreadLocal<NegamaxBuffers> negamaxBuffers =
+          ThreadLocal.withInitial(NegamaxBuffers::new);
+
+  /**
+   * The per ply arrays of the main search, indexed by ply and then by move.
+   *
+   * @param generated The packed moves at each ply in generation order.
+   * @param sorted The same moves in search order.
+   * @param orderKeys The packed ordering keys of the generated moves.
+   */
+  private record NegamaxBuffers(int[][] generated, int[][] sorted, long[][] orderKeys) {
+
+    /** Creates the arrays for every ply a search can reach. */
+    NegamaxBuffers() {
+      this(new int[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES],
+              new int[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES],
+              new long[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES]);
+    }
+  }
+
+  /**
    * The per ply arrays of quiescence search, indexed by ply and then by move.
    *
    * @param moves The packed moves generated at each ply.
@@ -289,73 +313,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   private final StaticExchangeEvaluator seeEvaluator = StaticExchangeEvaluator.get();
 
   /**
-   * The MoveSorter enumeration defines different strategies for ordering moves
-   * to improve alpha-beta search efficiency. Different sorting strategies are
-   * used based on the search context and depth.
+   * The MoveSorter enumeration holds the strategy for ordering the root moves. Moves below the
+   * root are ordered by {@link #orderMoves}.
    */
   private enum MoveSorter {
-
-    /**
-     * Standard move sorting strategy using history heuristic, killer moves,
-     * countermoves, and static exchange evaluation for move ordering. Sorting also writes the
-     * static exchange score of each capture in the returned list to the same index of the ply's
-     * row of sortedExchangeScores, and zero for each other move.
-     */
-    STANDARD {
-      @Override
-      List<Move> sort(final Collection<Move> moves, final Board board,
-                      final AlphaBeta engine, final int ply) {
-        final Move[] ordered = moves.toArray(new Move[0]);
-        final int count = ordered.length;
-        final short[][] killers = engine.killerMoves.get();
-        final int counter = counterMoveOf(board, engine);
-        final int historySide = historySideOf(board);
-
-        // Bits 42 through 45 hold the tier. Its upper bits hold the capture rank, so that a good
-        // capture outranks a quiet move and a quiet move outranks a bad capture. Its two lowest
-        // bits are set on a quiet move that is not a killer move and on one that is not the
-        // countermove, so that among quiet moves a killer move sorts first and a countermove
-        // next. Bits 10 through 41 hold the static exchange score of a capture or the history score of a
-        // quiet move, negated against Integer.MAX_VALUE so that higher scores sort first. A
-        // history score never leaves the range negative HISTORY_MAX through HISTORY_MAX, so that
-        // difference stays within those bits instead of carrying into the tier above them. Bits 0
-        // through 9 hold the source index, so equal keys keep move generation order and a list of
-        // more than ORDER_INDEX_MASK moves cannot be packed. Every key is non-negative, so sorting
-        // the packed values ascending yields the intended move order.
-        final long[] orderKeys = new long[count];
-        for (int i = 0; i < count; i++) {
-          final Move move = ordered[i];
-          final boolean capture = move.isAttack();
-
-          final int exchangeScore = capture ? engine.seeEvaluator.evaluate(board, move) : 0;
-
-          final long rank = capture ? (exchangeScore >= 0 ? GOOD_CAPTURE_RANK : BAD_CAPTURE_RANK) :
-                  QUIET_RANK;
-          long tier = rank << ORDER_RANK_SHIFT;
-          if (!capture) {
-            final short code = TranspositionTable.moveCode(move);
-            tier += (code == killers[0][ply] || code == killers[1][ply] ? 0 : KILLER_TIER_BIT) +
-                    (code == counter ? 0 : COUNTER_TIER_BIT);
-          }
-          final long secondary = (long) Integer.MAX_VALUE -
-                  (capture ? (long) exchangeScore : (long) historyOf(move, engine, historySide));
-
-          orderKeys[i] = (tier << ORDER_TIER_SHIFT) | (secondary << ORDER_INDEX_BITS) | i;
-        }
-        Arrays.sort(orderKeys);
-
-        final int[] exchangeScores = engine.sortedExchangeScores.get()[ply];
-        final List<Move> sortedMoves = new ArrayList<>(count);
-        for (int i = 0; i < count; i++) {
-          final long orderKey = orderKeys[i];
-          final Move move = ordered[(int) (orderKey & ORDER_INDEX_MASK)];
-          sortedMoves.add(move);
-          exchangeScores[i] = move.isAttack() ? (int) ((long) Integer.MAX_VALUE -
-                  ((orderKey >>> ORDER_INDEX_BITS) & ORDER_SCORE_MASK)) : 0;
-        }
-        return sortedMoves;
-      }
-    },
 
     /**
      * Expensive move sorting strategy used for root moves that performs
@@ -442,45 +403,98 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      */
     abstract List<Move> sort(Collection<Move> moves, final Board board,
                              final AlphaBeta engine, final int ply);
+  }
 
-    /**
-     * Returns the code of the countermove recorded against the move that produced the given
-     * position.
-     *
-     * @param board The position being sorted.
-     * @param engine The engine holding the countermove table.
-     * @return The {@link TranspositionTable#moveCode code} of the recorded countermove, or
-     *         {@link TranspositionTable#NO_MOVE}, which is the code of no move, if none is
-     *         recorded.
-     */
-    private static int counterMoveOf(final Board board, final AlphaBeta engine) {
-      final int lastMove = board.getTransitionCode();
-      if (lastMove == MoveCode.NONE) {
-        return TranspositionTable.NO_MOVE;
-      }
-      return engine.counterMoves.get(
-              MoveCode.origin(lastMove) * 64 + MoveCode.destination(lastMove));
-    }
+  /**
+   * Writes the moves of the side to move at the given ply into that ply's row of the sorted move
+   * buffer, in search order, and the static exchange score of each capture among them to the same
+   * index of the ply's row of sortedExchangeScores, with zero for each other move. Good captures
+   * come first, then killer moves, the countermove and the other quiet moves by history score,
+   * then bad captures; captures are ordered by static exchange score.
+   *
+   * @param board The current board position.
+   * @param ply The current search ply.
+   * @return The number of moves written.
+   */
+  private int orderMoves(final Board board, final int ply) {
+    final NegamaxBuffers buffers = negamaxBuffers.get();
+    final int[] generated = buffers.generated()[ply];
+    final long[] orderKeys = buffers.orderKeys()[ply];
+    final int count = MoveGenerator.generate(board, board.currentPlayer().getAlliance(), generated);
+    final short[][] killers = killerMoves.get();
+    final int counter = counterMoveOf(board);
+    final int historySide = historySideOf(board);
 
-    /**
-     * Returns the history heuristic score recorded for the given move.
-     *
-     * @param move The move to score.
-     * @param engine The engine holding the history table.
-     * @param historySide The index of the side that plays the move within the history table.
-     * @return The recorded history score, or zero if the move has no pair of squares in range.
-     */
-    private static int historyOf(final Move move, final AlphaBeta engine, final int historySide) {
-      if (move == null) {
-        return 0;
+    // Bits 42 through 45 hold the tier. Its upper bits hold the capture rank, so that a good
+    // capture outranks a quiet move and a quiet move outranks a bad capture. Its two lowest
+    // bits are set on a quiet move that is not a killer move and on one that is not the
+    // countermove, so that among quiet moves a killer move sorts first and a countermove
+    // next. Bits 10 through 41 hold the static exchange score of a capture or the history score of a
+    // quiet move, negated against Integer.MAX_VALUE so that higher scores sort first. A
+    // history score never leaves the range negative HISTORY_MAX through HISTORY_MAX, so that
+    // difference stays within those bits instead of carrying into the tier above them. Bits 0
+    // through 9 hold the source index, so equal keys keep move generation order and a list of
+    // more than ORDER_INDEX_MASK moves cannot be packed. Every key is non-negative, so sorting
+    // the packed values ascending yields the intended move order.
+    for (int i = 0; i < count; i++) {
+      final int move = generated[i];
+      final boolean capture = MoveCode.isCapture(move);
+
+      final int exchangeScore = capture ? seeEvaluator.evaluate(board, move) : 0;
+
+      final long rank = capture ? (exchangeScore >= 0 ? GOOD_CAPTURE_RANK : BAD_CAPTURE_RANK) :
+              QUIET_RANK;
+      long tier = rank << ORDER_RANK_SHIFT;
+      if (!capture) {
+        final short code = MoveCode.tableCode(move);
+        tier += (code == killers[0][ply] || code == killers[1][ply] ? 0 : KILLER_TIER_BIT) +
+                (code == counter ? 0 : COUNTER_TIER_BIT);
       }
-      final int current = move.getCurrentCoordinate();
-      final int destination = move.getDestinationCoordinate();
-      if (current < 0 || current >= 64 || destination < 0 || destination >= 64) {
-        return 0;
-      }
-      return engine.historyHeuristic[historySide][current][destination];
+      final long secondary = (long) Integer.MAX_VALUE -
+              (capture ? (long) exchangeScore : (long) historyOf(move, historySide));
+
+      orderKeys[i] = (tier << ORDER_TIER_SHIFT) | (secondary << ORDER_INDEX_BITS) | i;
     }
+    Arrays.sort(orderKeys, 0, count);
+
+    final int[] sorted = buffers.sorted()[ply];
+    final int[] exchangeScores = sortedExchangeScores.get()[ply];
+    for (int i = 0; i < count; i++) {
+      final long orderKey = orderKeys[i];
+      final int move = generated[(int) (orderKey & ORDER_INDEX_MASK)];
+      sorted[i] = move;
+      exchangeScores[i] = MoveCode.isCapture(move) ? (int) ((long) Integer.MAX_VALUE -
+              ((orderKey >>> ORDER_INDEX_BITS) & ORDER_SCORE_MASK)) : 0;
+    }
+    return count;
+  }
+
+  /**
+   * Returns the code of the countermove recorded against the move that produced the given
+   * position.
+   *
+   * @param board The position being searched.
+   * @return The {@link TranspositionTable#moveCode code} of the recorded countermove, or
+   *         {@link TranspositionTable#NO_MOVE}, which is the code of no move, if none is
+   *         recorded.
+   */
+  private int counterMoveOf(final Board board) {
+    final int lastMove = board.getTransitionCode();
+    if (lastMove == MoveCode.NONE) {
+      return TranspositionTable.NO_MOVE;
+    }
+    return counterMoves.get(MoveCode.origin(lastMove) * 64 + MoveCode.destination(lastMove));
+  }
+
+  /**
+   * Returns the history heuristic score recorded for the given packed move.
+   *
+   * @param move The move to score.
+   * @param historySide The index of the side that plays the move within the history table.
+   * @return The recorded history score.
+   */
+  private int historyOf(final int move, final int historySide) {
+    return historyHeuristic[historySide][MoveCode.origin(move)][MoveCode.destination(move)];
   }
 
   /**
@@ -966,13 +980,24 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * @param move The move to record as a countermove.
    */
   private void recordCounterMove(Board board, Move move) {
-    if (move.isAttack()) {
+    recordCounterMove(board, MoveCode.of(move));
+  }
+
+  /**
+   * Records a packed quiet move as a countermove response to the last opponent move for move
+   * ordering. A capture is not recorded.
+   *
+   * @param board The current board position.
+   * @param move The packed move to record as a countermove.
+   */
+  private void recordCounterMove(final Board board, final int move) {
+    if (MoveCode.isCapture(move)) {
       return;
     }
     final int lastMove = board.getTransitionCode();
     if (lastMove != MoveCode.NONE) {
       counterMoves.set(MoveCode.origin(lastMove) * 64 + MoveCode.destination(lastMove),
-              TranspositionTable.moveCode(move));
+              MoveCode.tableCode(move));
     }
   }
 
@@ -1001,31 +1026,34 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * ahead of it back one place, and moves the entries of the matching exchange scores the same
    * way. Nothing changes when the index is not positive.
    *
-   * @param moves The sorted moves.
+   * @param moves The sorted packed moves.
    * @param exchangeScores The exchange scores at the same indices as the moves.
    * @param index The index of the move to bring to the front.
    */
-  private static void moveToFront(final List<Move> moves, final int[] exchangeScores, final int index) {
+  private static void moveToFront(final int[] moves, final int[] exchangeScores, final int index) {
     if (index <= 0) {
       return;
     }
-    Collections.rotate(moves.subList(0, index + 1), 1);
+    final int move = moves[index];
+    System.arraycopy(moves, 0, moves, 1, index);
+    moves[0] = move;
     final int exchangeScore = exchangeScores[index];
     System.arraycopy(exchangeScores, 0, exchangeScores, 1, index);
     exchangeScores[0] = exchangeScore;
   }
 
   /**
-   * Returns the index within the given list of the move whose code, as given by
-   * {@link TranspositionTable#moveCode}, is the given code.
+   * Returns the index among the first entries of the given array of the packed move whose
+   * transposition table code is the given code.
    *
-   * @param moves The moves to search, none of them the null move.
+   * @param moves The packed moves to search.
+   * @param count The number of leading entries of moves that hold a move.
    * @param moveCode The code of the move to find.
-   * @return The index of that move, or -1 if the list holds no move with that code.
+   * @return The index of that move, or -1 if none of those moves has that code.
    */
-  private static int indexOfMoveCode(final List<Move> moves, final short moveCode) {
-    for (int i = 0; i < moves.size(); i++) {
-      if (TranspositionTable.moveCode(moves.get(i)) == moveCode) {
+  private static int indexOfMoveCode(final int[] moves, final int count, final short moveCode) {
+    for (int i = 0; i < count; i++) {
+      if (MoveCode.tableCode(moves[i]) == moveCode) {
         return i;
       }
     }
@@ -1113,13 +1141,13 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * @param inCheckAtNode Whether the side to move at the node is in check.
    * @return true if the move may be skipped unless it gives check.
    */
-  private static boolean isLateMovePrunable(final Move move, final int depth,
+  private static boolean isLateMovePrunable(final int move, final int depth,
                                             final int movesSearched, final boolean inCheckAtNode) {
     return depth <= LATE_MOVE_PRUNING_DEPTH
             && movesSearched >= 3 + depth * depth
             && !inCheckAtNode
-            && !move.isAttack()
-            && !(move instanceof Move.PawnPromotion);
+            && !MoveCode.isCapture(move)
+            && MoveCode.promotionType(move) == null;
   }
 
   /**
@@ -1138,14 +1166,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    *                  move must pass, positive when it falls short.
    * @return true if the move may be skipped unless it gives check.
    */
-  private static boolean isFutileQuietMove(final Move move, final int depth,
+  private static boolean isFutileQuietMove(final int move, final int depth,
                                            final int movesSearched, final boolean inCheckAtNode,
                                            final double shortfall) {
     return depth <= QUIET_FUTILITY_DEPTH
             && movesSearched > 0
             && !inCheckAtNode
-            && !move.isAttack()
-            && !(move instanceof Move.PawnPromotion)
+            && !MoveCode.isCapture(move)
+            && MoveCode.promotionType(move) == null
             && shortfall >= depth * QUIET_FUTILITY_MARGIN;
   }
 
@@ -1157,12 +1185,13 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * @param score The score to store, already converted by {@link #scoreToTable}.
    * @param depth The search depth the score was produced at.
    * @param nodeType The type of node (exact, lower bound, upper bound).
-   * @param bestMove The best move found at this node, or null.
+   * @param moveCode The {@link TranspositionTable#moveCode code} of the best move found at this
+   *                 node, or {@link TranspositionTable#NO_MOVE}.
    */
   private void storeIfSearching(final long zobristHash, final double score, final int depth,
-                                final byte nodeType, final Move bestMove) {
+                                final byte nodeType, final short moveCode) {
     if (!searchStopped) {
-      transpositionTable.store(zobristHash, score, depth, nodeType, bestMove);
+      transpositionTable.store(zobristHash, score, depth, nodeType, moveCode);
     }
   }
 
@@ -1276,25 +1305,28 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     double currentAlpha = alpha;
     boolean firstMove = true;
-    Move bestFoundMove = null;
+    int bestFoundMove = MoveCode.NONE;
     final short[][] killers = killerMoves.get();
     int movesSearched = 0;
     final short[] quietsSearched = searchedQuiets.get()[ply];
     int quietCount = 0;
 
-    final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
+    final int moveCount = orderMoves(board, ply);
+    final int[] sortedMoves = negamaxBuffers.get().sorted()[ply];
     final int[] exchangeScores = sortedExchangeScores.get()[ply];
     final int historySide = historySideOf(board);
     final double nodeEval = depth <= QUIET_FUTILITY_DEPTH && !inCheckAtNode ?
             evaluateForSideToMove(board) : Double.NaN;
 
     if (ttMoveCode != TranspositionTable.NO_MOVE) {
-      moveToFront(sortedMoves, exchangeScores, indexOfMoveCode(sortedMoves, ttMoveCode));
+      moveToFront(sortedMoves, exchangeScores,
+              indexOfMoveCode(sortedMoves, moveCount, ttMoveCode));
     }
 
-    for (int moveIndex = 0; moveIndex < sortedMoves.size(); moveIndex++) {
-      final Move move = sortedMoves.get(moveIndex);
-      if (move.isAttack() && depth < 3 && movesSearched > 2 &&
+    for (int moveIndex = 0; moveIndex < moveCount; moveIndex++) {
+      final int move = sortedMoves[moveIndex];
+      final boolean capture = MoveCode.isCapture(move);
+      if (capture && depth < 3 && movesSearched > 2 &&
               exchangeScores[moveIndex] < SEE_PRUNING_THRESHOLD) {
         continue;
       }
@@ -1312,7 +1344,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
       board.makeMove(move);
       if (board.currentPlayer().getOpponent().isInCheck()) {
-        board.unmakeMove();
+        board.unmakeMove(move);
         continue;
       }
 
@@ -1331,11 +1363,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           currentValue = -negamax(board, newDepth, -beta, -currentAlpha, ply + 1, true);
         } else {
           int reduction = 0;
-          if (depth >= 3 && movesSearched >= 4 && !move.isAttack() && !inCheckAtNode) {
+          if (depth >= 3 && movesSearched >= 4 && !capture && !inCheckAtNode) {
             reduction = lateMoveReduction(depth, movesSearched + 1);
             // A quiet move with a positive history score is reduced one ply less. The score is read
             // for the side that played the move, captured before the move was made.
-            if (reduction > 0 && MoveSorter.historyOf(move, this, historySide) > 0) {
+            if (reduction > 0 && historyOf(move, historySide) > 0) {
               reduction--;
             }
             // A move at an open-window node is reduced one ply less.
@@ -1361,7 +1393,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           }
         }
       } finally {
-        board.unmakeMove();
+        board.unmakeMove(move);
       }
 
       if (currentValue > currentAlpha) {
@@ -1369,8 +1401,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         bestFoundMove = move;
 
         if (currentAlpha >= beta) {
-          if (!move.isAttack()) {
-            final short code = TranspositionTable.moveCode(move);
+          if (!capture) {
+            final short code = MoveCode.tableCode(move);
             if (code != killers[0][ply]) {
               killers[1][ply] = killers[0][ply];
               killers[0][ply] = code;
@@ -1382,13 +1414,13 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           recordCounterMove(board, move);
 
           storeIfSearching(zobristHash, scoreToTable(beta, ply), depth,
-                  TranspositionTable.LOWERBOUND, bestFoundMove);
+                  TranspositionTable.LOWERBOUND, MoveCode.tableCode(bestFoundMove));
           return beta;
         }
       }
 
-      if (!move.isAttack() && quietCount < MAX_TRACKED_QUIETS) {
-        quietsSearched[quietCount++] = TranspositionTable.moveCode(move);
+      if (!capture && quietCount < MAX_TRACKED_QUIETS) {
+        quietsSearched[quietCount++] = MoveCode.tableCode(move);
       }
 
       firstMove = false;
@@ -1408,7 +1440,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     } else if (currentAlpha >= beta) {
       nodeType = TranspositionTable.LOWERBOUND;
     }
-    storeIfSearching(zobristHash, scoreToTable(currentAlpha, ply), depth, nodeType, bestFoundMove);
+    storeIfSearching(zobristHash, scoreToTable(currentAlpha, ply), depth, nodeType,
+            bestFoundMove == MoveCode.NONE ? TranspositionTable.NO_MOVE :
+                    MoveCode.tableCode(bestFoundMove));
 
     return currentAlpha;
   }
@@ -1475,7 +1509,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
     if (standPat >= beta) {
       transpositionTable.store(zobristHash, scoreToTable(beta, ply), 0,
-              TranspositionTable.LOWERBOUND, null);
+              TranspositionTable.LOWERBOUND, TranspositionTable.NO_MOVE);
       return beta;
     }
     if (standPat > alpha) alpha = standPat;
@@ -1537,7 +1571,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
       if (alpha >= beta) {
         storeIfSearching(zobristHash, scoreToTable(beta, ply), 0,
-                TranspositionTable.LOWERBOUND, null);
+                TranspositionTable.LOWERBOUND, TranspositionTable.NO_MOVE);
         return beta;
       }
     }
@@ -1549,7 +1583,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     } else if (finalScore >= originalBeta) {
       nodeType = TranspositionTable.LOWERBOUND;
     }
-    storeIfSearching(zobristHash, scoreToTable(finalScore, ply), 0, nodeType, null);
+    storeIfSearching(zobristHash, scoreToTable(finalScore, ply), 0, nodeType,
+            TranspositionTable.NO_MOVE);
     return finalScore;
   }
 
@@ -1608,6 +1643,19 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    */
   private void recordHistory(final Board board, final Move move, final int depth) {
     addHistory(board, move, depth * depth);
+  }
+
+  /**
+   * Credits a packed move that was found to be good in the history heuristic table, as
+   * {@link #recordHistory(Board, Move, int)} does.
+   *
+   * @param board The position the move is played from, whose side to move plays it.
+   * @param move The packed move to record in the history heuristic.
+   * @param depth The depth at which this move was found to be good.
+   */
+  private void recordHistory(final Board board, final int move, final int depth) {
+    addHistory(historySideOf(board), MoveCode.origin(move), MoveCode.destination(move),
+            depth * depth);
   }
 
   /**
@@ -1890,12 +1938,11 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      * @param score The evaluation score for the position.
      * @param depth The search depth for the evaluation.
      * @param nodeType The type of node (exact, lower bound, upper bound).
-     * @param bestMove The best move found at the position, or null if none was found.
+     * @param moveCode The {@link TranspositionTable#moveCode code} of the best move found at the
+     *                 position, or {@link TranspositionTable#NO_MOVE} if none was found.
      */
-    public void store(long zobristHash, double score, int depth, byte nodeType, Move bestMove) {
+    public void store(long zobristHash, double score, int depth, byte nodeType, short moveCode) {
       int index = (int) (zobristHash & mask) & ~1;
-      final short moveCode = bestMove == null
-              ? TranspositionTable.NO_MOVE : TranspositionTable.moveCode(bestMove);
 
       final byte age = currentAge;
       final int target = replacementSlot(index, zobristHash);

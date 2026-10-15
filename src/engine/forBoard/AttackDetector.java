@@ -137,18 +137,22 @@ public final class AttackDetector {
    * move for check would give, provided that side is not in check before the move, which holds in
    * any position reached by legal play. Whether the move is legal is not considered.
    *
-   * @param board The board the move was generated from, in the position before the move.
-   * @param move The move to test.
+   * @param board The board in the position before the move.
+   * @param move The packed move to test, one {@link MoveGenerator} generates in that position.
    * @return True if the move would give check, false otherwise.
    */
-  public static boolean givesCheck(final Board board, final Move move) {
-    final Alliance mover = move.getMovedPiece().getPieceAllegiance();
+  public static boolean givesCheck(final Board board, final int move) {
+    final int origin = MoveCode.origin(move);
+    final int destination = MoveCode.destination(move);
+    final Piece moved = board.getPiece(origin);
+    final Alliance mover = moved.getPieceAllegiance();
     final int kingSquare =
             board.getKing(mover.isWhite() ? Alliance.BLACK : Alliance.WHITE).getPiecePosition();
-    final long originBit = 1L << move.getCurrentCoordinate();
-    final long destinationBit = 1L << move.getDestinationCoordinate();
-    final Piece.PieceType arrivingType = move instanceof Move.PawnPromotion promotion ?
-            promotion.promotionPiece.getPieceType() : move.getMovedPiece().getPieceType();
+    final long originBit = 1L << origin;
+    final long destinationBit = 1L << destination;
+    final Piece.PieceType promotionType = MoveCode.promotionType(move);
+    final Piece.PieceType arrivingType =
+            promotionType != null ? promotionType : moved.getPieceType();
 
     final long stepOrigins = switch (arrivingType) {
       case PAWN -> mover.isWhite() ? WHITE_PAWN_ATTACKERS[kingSquare]
@@ -171,13 +175,14 @@ public final class AttackDetector {
     if (arrivingType == Piece.PieceType.ROOK || arrivingType == Piece.PieceType.QUEEN) {
       orthogonalSliders |= destinationBit;
     }
-    if (move instanceof Move.CastleMove castle) {
-      final long rookOriginBit = 1L << castle.castleRookStart;
-      final long rookDestinationBit = 1L << castle.castleRookDestination;
+    if (MoveCode.isCastle(move)) {
+      final boolean kingSide = destination > origin;
+      final long rookOriginBit = 1L << (kingSide ? origin + 3 : origin - 4);
+      final long rookDestinationBit = 1L << (kingSide ? origin + 1 : origin - 1);
       occupancy = (occupancy & ~rookOriginBit) | rookDestinationBit;
       orthogonalSliders = (orthogonalSliders & ~rookOriginBit) | rookDestinationBit;
-    } else if (move instanceof Move.PawnEnPassantAttack) {
-      occupancy &= ~(1L << move.getAttackedPiece().getPiecePosition());
+    } else if (MoveCode.isEnPassant(move)) {
+      occupancy &= ~(1L << board.getEnPassantPawn().getPiecePosition());
     }
 
     return sliderBears(DIAGONAL_RAYS, DIAGONAL_LINES, kingSquare, occupancy, diagonalSliders) ||

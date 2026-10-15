@@ -1,6 +1,7 @@
 package engine.forTesting;
 
 import engine.Alliance;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
 import engine.forBoard.Move;
@@ -352,8 +353,9 @@ public class Perft {
    * Checks that applying the given packed move through {@link Board#makeMove(int)} leaves the
    * position {@link Board#makeMove(Move)} leaves for the equal move, with pieces compared by
    * value, that {@link Board#unmakeMove(int)} restores the board exactly, with pieces and players
-   * compared by identity, and that {@link Board#isLegal(int)} and the static exchange score of
-   * the packed move agree with those of the move.
+   * compared by identity, that {@link Board#isLegal(int)} and the static exchange score of the
+   * packed move agree with those of the move, and that when the side to move is not in check
+   * {@link AttackDetector#givesCheck} answers whether making the move gives check.
    *
    * @param board The board, standing in the position the move belongs to. Restored before this
    *              method returns.
@@ -376,9 +378,15 @@ public class Perft {
       return "isLegal(int) did not restore the board: " + unmovedFault;
     }
 
+    final boolean inCheck = board.currentPlayer().isInCheck();
+    final boolean predictedCheck = AttackDetector.givesCheck(board, code);
     board.makeMove(move);
     final Snapshot objectAfter = Snapshot.of(board);
+    final boolean givesCheck = board.currentPlayer().isInCheck();
     board.unmakeMove();
+    if (!inCheck && predictedCheck != givesCheck) {
+      return "givesCheck(int) answers " + predictedCheck + ".";
+    }
 
     board.makeMove(code);
     try {
