@@ -70,6 +70,36 @@ public final class MoveGenerator {
    * @return The number of moves written.
    */
   public static int generate(final Board board, final Alliance side, final int[] moves) {
+    return generate(board, side, moves, false);
+  }
+
+  /**
+   * Writes the moves the given side's quiescence search considers into the given array, from
+   * index zero: every capture, en passant captures and capturing promotions to each piece
+   * included, and every promotion to a queen that captures nothing. They are written in the order
+   * {@link #generate} writes them.
+   *
+   * @param board The board to generate on.
+   * @param side The side whose moves are generated.
+   * @param moves The array to write into, of length at least {@link #MAX_MOVES}.
+   * @return The number of moves written.
+   */
+  public static int generateQuiescence(final Board board, final Alliance side, final int[] moves) {
+    return generate(board, side, moves, true);
+  }
+
+  /**
+   * Writes the given side's pseudo-legal moves, or only those {@link #generateQuiescence}
+   * describes, into the given array, from index zero.
+   *
+   * @param board The board to generate on.
+   * @param side The side whose moves are generated.
+   * @param moves The array to write into, of length at least {@link #MAX_MOVES}.
+   * @param quiescence Whether to write only the quiescence moves.
+   * @return The number of moves written.
+   */
+  private static int generate(final Board board, final Alliance side, final int[] moves,
+                              final boolean quiescence) {
     final long own = board.getOccupancy(side);
     final long occupied = board.getOccupancy();
     int count = 0;
@@ -77,15 +107,19 @@ public final class MoveGenerator {
       final int square = Long.numberOfTrailingZeros(remaining);
       final Piece piece = board.getPiece(square);
       count = switch (piece.getPieceType()) {
-        case PAWN -> addPawnMoves(board, (Pawn) piece, own, occupied, moves, count);
-        case KNIGHT -> addSteps(KNIGHT_TARGETS[square], square, own, occupied, moves, count);
-        case BISHOP -> addSlides(BISHOP_RAYS[square], square, own, occupied, moves, count);
-        case ROOK -> addSlides(ROOK_RAYS[square], square, own, occupied, moves, count);
-        case QUEEN -> addSlides(QUEEN_RAYS[square], square, own, occupied, moves, count);
-        case KING -> addSteps(KING_TARGETS[square], square, own, occupied, moves, count);
+        case PAWN -> addPawnMoves(board, (Pawn) piece, own, occupied, quiescence, moves, count);
+        case KNIGHT -> addSteps(KNIGHT_TARGETS[square], square, own, occupied, quiescence, moves,
+                count);
+        case BISHOP -> addSlides(BISHOP_RAYS[square], square, own, occupied, quiescence, moves,
+                count);
+        case ROOK -> addSlides(ROOK_RAYS[square], square, own, occupied, quiescence, moves, count);
+        case QUEEN -> addSlides(QUEEN_RAYS[square], square, own, occupied, quiescence, moves,
+                count);
+        case KING -> addSteps(KING_TARGETS[square], square, own, occupied, quiescence, moves,
+                count);
       };
     }
-    return addCastles(board, side, moves, count);
+    return quiescence ? count : addCastles(board, side, moves, count);
   }
 
   /**
@@ -95,16 +129,20 @@ public final class MoveGenerator {
    * @param origin The square the piece stands on.
    * @param own The squares of the moving side's pieces.
    * @param occupied The occupied squares.
+   * @param capturesOnly Whether to leave out the moves that capture nothing.
    * @param moves The array to append to.
    * @param count The number of moves already in the array.
    * @return The number of moves in the array afterwards.
    */
   private static int addSteps(final int[] targets, final int origin, final long own,
-                              final long occupied, final int[] moves, int count) {
+                              final long occupied, final boolean capturesOnly, final int[] moves,
+                              int count) {
     for (final int target : targets) {
       final long bit = 1L << target;
       if ((occupied & bit) == 0L) {
-        moves[count++] = MoveCode.of(origin, target, null, 0);
+        if (!capturesOnly) {
+          moves[count++] = MoveCode.of(origin, target, null, 0);
+        }
       } else if ((own & bit) == 0L) {
         moves[count++] = MoveCode.of(origin, target, null, MoveCode.CAPTURE);
       }
@@ -119,17 +157,21 @@ public final class MoveGenerator {
    * @param origin The square the piece stands on.
    * @param own The squares of the moving side's pieces.
    * @param occupied The occupied squares.
+   * @param capturesOnly Whether to leave out the moves that capture nothing.
    * @param moves The array to append to.
    * @param count The number of moves already in the array.
    * @return The number of moves in the array afterwards.
    */
   private static int addSlides(final int[][] rays, final int origin, final long own,
-                               final long occupied, final int[] moves, int count) {
+                               final long occupied, final boolean capturesOnly, final int[] moves,
+                               int count) {
     for (final int[] ray : rays) {
       for (final int target : ray) {
         final long bit = 1L << target;
         if ((occupied & bit) == 0L) {
-          moves[count++] = MoveCode.of(origin, target, null, 0);
+          if (!capturesOnly) {
+            moves[count++] = MoveCode.of(origin, target, null, 0);
+          }
           continue;
         }
         if ((own & bit) == 0L) {
@@ -149,12 +191,14 @@ public final class MoveGenerator {
    * @param pawn The pawn.
    * @param own The squares of the moving side's pieces.
    * @param occupied The occupied squares.
+   * @param quiescence Whether to write only the captures and the quiet promotions to a queen.
    * @param moves The array to append to.
    * @param count The number of moves already in the array.
    * @return The number of moves in the array afterwards.
    */
   private static int addPawnMoves(final Board board, final Pawn pawn, final long own,
-                                  final long occupied, final int[] moves, int count) {
+                                  final long occupied, final boolean quiescence, final int[] moves,
+                                  int count) {
     final Alliance alliance = pawn.getPieceAllegiance();
     final boolean white = alliance.isWhite();
     final int origin = pawn.getPiecePosition();
@@ -164,11 +208,15 @@ public final class MoveGenerator {
 
     final int advance = origin + direction * 8;
     if (BoardUtils.isValidTileCoordinate(advance) && (occupied & (1L << advance)) == 0L) {
-      count = addPawnMove(alliance, origin, advance, 0, moves, count);
+      if (!quiescence) {
+        count = addPawnMove(alliance, origin, advance, 0, moves, count);
+      } else if (alliance.isPawnPromotionSquare(advance)) {
+        moves[count++] = MoveCode.of(origin, advance, Piece.PieceType.QUEEN, 0);
+      }
     }
 
     final int jump = origin + direction * 16;
-    if (BoardUtils.isValidTileCoordinate(jump) && pawn.isFirstMove() &&
+    if (!quiescence && BoardUtils.isValidTileCoordinate(jump) && pawn.isFirstMove() &&
             ((rank == 1 && !white) || (rank == 6 && white)) &&
             (occupied & (1L << jump)) == 0L && (occupied & (1L << advance)) == 0L) {
       moves[count++] = MoveCode.of(origin, jump, null, MoveCode.PAWN_JUMP);

@@ -5,6 +5,8 @@ import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
 import engine.forBoard.Move;
+import engine.forBoard.MoveCode;
+import engine.forBoard.MoveGenerator;
 import engine.forPiece.Piece;
 import engine.forPlayer.Player;
 
@@ -105,6 +107,31 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    */
   private final ThreadLocal<int[][]> sortedExchangeScores = ThreadLocal.withInitial(() ->
           new int[MAX_SEARCH_DEPTH][(int) ORDER_INDEX_MASK + 1]);
+
+  /**
+   * The arrays a quiescence node at each ply writes its moves, their static exchange scores and
+   * their ordering keys into. A ply's entries are meaningful only while the node at that ply is
+   * searching its moves.
+   */
+  private final ThreadLocal<QuiescenceBuffers> quiescenceBuffers =
+          ThreadLocal.withInitial(QuiescenceBuffers::new);
+
+  /**
+   * The per ply arrays of quiescence search, indexed by ply and then by move.
+   *
+   * @param moves The packed moves generated at each ply.
+   * @param exchangeScores The static exchange score of each of those moves.
+   * @param orderKeys The packed ordering keys of those moves.
+   */
+  private record QuiescenceBuffers(int[][] moves, int[][] exchangeScores, long[][] orderKeys) {
+
+    /** Creates the arrays for every ply a search can reach. */
+    QuiescenceBuffers() {
+      this(new int[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES],
+              new int[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES],
+              new long[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES]);
+    }
+  }
 
   /**
    * Killer moves table storing the {@link TranspositionTable#moveCode codes} of good non-capture
@@ -427,14 +454,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
      *         recorded.
      */
     private static int counterMoveOf(final Board board, final AlphaBeta engine) {
-      final Move lastMove = board.getTransitionMove();
-      if (lastMove == null || lastMove == MoveFactory.getNullMove() ||
-              lastMove.getCurrentCoordinate() < 0 || lastMove.getDestinationCoordinate() < 0 ||
-              lastMove.getCurrentCoordinate() >= 64 || lastMove.getDestinationCoordinate() >= 64) {
+      final int lastMove = board.getTransitionCode();
+      if (lastMove == MoveCode.NONE) {
         return TranspositionTable.NO_MOVE;
       }
       return engine.counterMoves.get(
-              lastMove.getCurrentCoordinate() * 64 + lastMove.getDestinationCoordinate());
+              MoveCode.origin(lastMove) * 64 + MoveCode.destination(lastMove));
     }
 
     /**
@@ -944,9 +969,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     if (move.isAttack()) {
       return;
     }
-    Move lastMove = board.getTransitionMove();
-    if (lastMove != null && lastMove != MoveFactory.getNullMove()) {
-      counterMoves.set(lastMove.getCurrentCoordinate() * 64 + lastMove.getDestinationCoordinate(),
+    final int lastMove = board.getTransitionCode();
+    if (lastMove != MoveCode.NONE) {
+      counterMoves.set(MoveCode.origin(lastMove) * 64 + MoveCode.destination(lastMove),
               TranspositionTable.moveCode(move));
     }
   }
@@ -1455,59 +1480,49 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     }
     if (standPat > alpha) alpha = standPat;
 
-    final Collection<Move> legalMoves = board.currentPlayer().getLegalMoves();
-
-    int captureCount = 0;
-    for (Move move : legalMoves) {
-      if (isQuiescenceMove(move)) {
-        captureCount++;
-      }
-    }
+    final QuiescenceBuffers buffers = quiescenceBuffers.get();
+    final int[] captures = buffers.moves()[ply];
+    final int[] captureSeeScores = buffers.exchangeScores()[ply];
+    final long[] orderKeys = buffers.orderKeys()[ply];
+    final int captureCount = MoveGenerator.generateQuiescence(board,
+            board.currentPlayer().getAlliance(), captures);
 
     // The static exchange score is resolved once per capture here. Each evaluator call walks every
     // piece on the board, so reading it from inside a comparator costs O(n log n) board scans per
     // node, and the loop below would then scan again for every capture it searches.
-    final Move[] captures = new Move[captureCount];
-    final int[] captureSeeScores = new int[captureCount];
-
-    int captureIndex = 0;
-    for (Move move : legalMoves) {
-      if (!isQuiescenceMove(move)) {
-        continue;
-      }
-      captures[captureIndex] = move;
-      captureSeeScores[captureIndex] = seeEvaluator.evaluate(board, move);
-      captureIndex++;
-    }
-
-    // Bits 30 through 61 hold the static exchange score negated against Integer.MAX_VALUE so higher
-    // scores sort first, and bits 0 through 29 hold the source index so equal keys keep move
-    // generation order. Every key is non-negative, so sorting the packed values ascending yields
-    // the intended move order.
-    final long[] orderKeys = new long[captureCount];
+    //
+    // Bits 30 through 61 of an ordering key hold the static exchange score negated against
+    // Integer.MAX_VALUE so higher scores sort first, and bits 0 through 29 hold the source index so
+    // equal keys keep move generation order. Every key is non-negative, so sorting the packed
+    // values ascending yields the intended move order.
     for (int i = 0; i < captureCount; i++) {
+      captureSeeScores[i] = seeEvaluator.evaluate(board, captures[i]);
       final long descendingSee = (long) Integer.MAX_VALUE - (long) captureSeeScores[i];
       orderKeys[i] = (descendingSee << 30) | i;
     }
-    Arrays.sort(orderKeys);
+    Arrays.sort(orderKeys, 0, captureCount);
 
-    for (final long orderKey : orderKeys) {
-      final int index = (int) (orderKey & INDEX_MASK);
-      final Move move = captures[index];
+    for (int order = 0; order < captureCount; order++) {
+      final int index = (int) (orderKeys[order] & INDEX_MASK);
+      final int move = captures[index];
       final int seeScore = captureSeeScores[index];
+      // The exchange score does not count a promotion, so a capture that promotes is never
+      // judged by it here, and every other move searched here is a capture.
+      final boolean promotion = MoveCode.promotionType(move) != null;
+      final double deltaMargin = promotion ? 0 : deltaMarginOf(MoveCode.isEnPassant(move) ?
+              Piece.PieceType.PAWN :
+              board.getPiece(MoveCode.destination(move)).getPieceType());
 
       board.makeMove(move);
 
       final boolean legal = !board.currentPlayer().getOpponent().isInCheck();
       final boolean givesCheck = legal && board.currentPlayer().isInCheck();
       final boolean prunedByExchange = seeScore < SEE_PRUNING_THRESHOLD && !givesCheck;
-      // The exchange score does not count a promotion, so a capture that promotes is never
-      // judged by it here.
-      final boolean prunedByDelta = !givesCheck && !(move instanceof Move.PawnPromotion) &&
-              standPat + seeScore + deltaMarginOf(move) <= alpha;
+      final boolean prunedByDelta = !givesCheck && !promotion &&
+              standPat + seeScore + deltaMargin <= alpha;
 
       if (!legal || prunedByExchange || prunedByDelta) {
-        board.unmakeMove();
+        board.unmakeMove(move);
         continue;
       }
 
@@ -1515,7 +1530,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       try {
         score = -quiescenceSearch(board, -beta, -alpha, ply + 1);
       } finally {
-        board.unmakeMove();
+        board.unmakeMove(move);
       }
 
       if (score > alpha) alpha = score;
@@ -1539,27 +1554,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Returns whether quiescence search searches the given move: any capture, or a promotion to a
-   * queen that captures nothing.
-   *
-   * @param move The move to test.
-   * @return True if the move is searched in quiescence search.
-   */
-  private static boolean isQuiescenceMove(final Move move) {
-    return move.isAttack() ||
-            (move instanceof Move.PawnPromotion &&
-                    move.getPromotionPiece().getPieceType() == Piece.PieceType.QUEEN);
-  }
-
-  /**
    * Returns the delta pruning margin for a capture, chosen by the type of the piece it captures.
    * A queen capture has an infinite margin, so it is never delta pruned.
    *
-   * @param move The capture to test, not a promotion.
+   * @param capturedType The type of the piece the capture takes.
    * @return The margin added to the capture's static exchange score.
    */
-  private static double deltaMarginOf(final Move move) {
-    return switch (move.getAttackedPiece().getPieceType()) {
+  private static double deltaMarginOf(final Piece.PieceType capturedType) {
+    return switch (capturedType) {
       case PAWN -> PAWN_CAPTURE_DELTA_MARGIN;
       case KNIGHT, BISHOP -> MINOR_CAPTURE_DELTA_MARGIN;
       case ROOK -> ROOK_CAPTURE_DELTA_MARGIN;

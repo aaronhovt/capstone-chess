@@ -4,6 +4,7 @@ import engine.Alliance;
 import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
+import engine.forBoard.MoveCode;
 import engine.forPiece.Piece;
 
 /**
@@ -96,6 +97,30 @@ public class StaticExchangeEvaluator {
 
     return swapOffValue(board, targetSquare, capturedValue, attackerValue,
             attackingPiece.getPiecePosition(), board.currentPlayer().getOpponent().getAlliance());
+  }
+
+  /**
+   * Evaluates the material gain or loss from a packed capture move, giving the value
+   * {@link #evaluate(Board, Move)} gives for the equal move. Non-capture moves return zero.
+   *
+   * @param board The current chess board state.
+   * @param move The packed capture move to evaluate, for the side to move.
+   * @return The estimated material gain or loss, positive values favor the side making the initial capture.
+   */
+  public int evaluate(final Board board, final int move) {
+    if (!MoveCode.isCapture(move)) {
+      return 0;
+    }
+    if (MoveCode.isEnPassant(move)) {
+      return SEE_PIECE_VALUES[0];
+    }
+
+    final int origin = MoveCode.origin(move);
+    final int targetSquare = MoveCode.destination(move);
+    final int attackerValue = getPieceValue(board.getPiece(origin).getPieceType());
+    final int capturedValue = getPieceValue(board.getPiece(targetSquare).getPieceType());
+    return swapOffValue(board, targetSquare, capturedValue, attackerValue, origin,
+            board.currentPlayer().getOpponent().getAlliance());
   }
 
   /**

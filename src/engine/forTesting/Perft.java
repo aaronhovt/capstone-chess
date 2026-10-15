@@ -11,6 +11,7 @@ import engine.forPiece.King;
 import engine.forPiece.Pawn;
 import engine.forPiece.Piece;
 import engine.forPlayer.Player;
+import engine.forPlayer.forAI.StaticExchangeEvaluator;
 
 import java.util.Iterator;
 import java.util.Map;
@@ -297,7 +298,8 @@ public class Perft {
 
   /**
    * Checks that {@link MoveGenerator} writes, for each side, exactly the moves that side's player
-   * lists, in the same order, each with the squares, promotion and flags of the listed move.
+   * lists, in the same order, each with the squares, promotion and flags of the listed move, and
+   * that its quiescence moves are exactly the captures and queen promotions among them, in order.
    *
    * @param board The board to check.
    * @return A description of the first difference found, or null if the lists agree.
@@ -322,6 +324,26 @@ public class Perft {
         return "The generator writes " + count + " " + player.getAlliance() + " moves, " +
                 "expected " + index + ".";
       }
+      final int[] quiescence = new int[MoveGenerator.MAX_MOVES];
+      final int quiescenceCount =
+              MoveGenerator.generateQuiescence(board, player.getAlliance(), quiescence);
+      int expected = 0;
+      for (int i = 0; i < count; i++) {
+        final int move = generated[i];
+        if (!MoveCode.isCapture(move) &&
+                MoveCode.promotionType(move) != Piece.PieceType.QUEEN) {
+          continue;
+        }
+        if (expected == quiescenceCount || quiescence[expected] != move) {
+          return "The " + player.getAlliance() + " quiescence moves differ at index " + expected +
+                  " from the captures and queen promotions among all its moves.";
+        }
+        expected++;
+      }
+      if (expected != quiescenceCount) {
+        return "The generator writes " + quiescenceCount + " " + player.getAlliance() +
+                " quiescence moves, expected " + expected + ".";
+      }
     }
     return null;
   }
@@ -330,8 +352,8 @@ public class Perft {
    * Checks that applying the given packed move through {@link Board#makeMove(int)} leaves the
    * position {@link Board#makeMove(Move)} leaves for the equal move, with pieces compared by
    * value, that {@link Board#unmakeMove(int)} restores the board exactly, with pieces and players
-   * compared by identity, and that {@link Board#isLegal(int)} agrees with
-   * {@link Board#isLegal(Move)}.
+   * compared by identity, and that {@link Board#isLegal(int)} and the static exchange score of
+   * the packed move agree with those of the move.
    *
    * @param board The board, standing in the position the move belongs to. Restored before this
    *              method returns.
@@ -343,6 +365,11 @@ public class Perft {
     final Snapshot before = Snapshot.of(board);
     if (board.isLegal(move) != board.isLegal(code)) {
       return "isLegal(int) answers " + board.isLegal(code) + ".";
+    }
+    final StaticExchangeEvaluator exchange = StaticExchangeEvaluator.get();
+    if (exchange.evaluate(board, move) != exchange.evaluate(board, code)) {
+      return "the static exchange score of the packed move is " +
+              exchange.evaluate(board, code) + ", expected " + exchange.evaluate(board, move) + ".";
     }
     final String unmovedFault = before.describeIdentityDifference(Snapshot.of(board));
     if (unmovedFault != null) {
