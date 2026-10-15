@@ -32,11 +32,25 @@ public final class Board {
   /** The pieces on the board, indexed by square, with a null entry for an empty square. */
   private final Piece[] boardConfig;
 
-  /** The white pieces currently on the board. Kept in sync with boardConfig by placePiece/removePiece. */
-  private List<Piece> whitePieces;
+  /**
+   * The white pieces on the board in ascending square order, as of the last time
+   * {@link #getWhitePieces()} rebuilt it. Rebuilt from whiteOccupancy when
+   * {@link #whitePiecesStale} is set.
+   */
+  private final List<Piece> whitePieces = new ArrayList<>();
 
-  /** The black pieces currently on the board. Kept in sync with boardConfig by placePiece/removePiece. */
-  private List<Piece> blackPieces;
+  /**
+   * The black pieces on the board in ascending square order, as of the last time
+   * {@link #getBlackPieces()} rebuilt it. Rebuilt from blackOccupancy when
+   * {@link #blackPiecesStale} is set.
+   */
+  private final List<Piece> blackPieces = new ArrayList<>();
+
+  /** Whether a white piece has been placed or removed since {@link #whitePieces} was rebuilt. */
+  private boolean whitePiecesStale = true;
+
+  /** Whether a black piece has been placed or removed since {@link #blackPieces} was rebuilt. */
+  private boolean blackPiecesStale = true;
 
   /** The number of piece types, and so the number of bitboards each alliance holds. */
   private static final int PIECE_TYPE_COUNT = Piece.PieceType.values().length;
@@ -178,8 +192,6 @@ public final class Board {
    */
   private Board(final Builder builder) {
     this.boardConfig = builder.BoardConfigurations.clone();
-    this.whitePieces = new ArrayList<>(calculateActivePieces(builder, Alliance.WHITE));
-    this.blackPieces = new ArrayList<>(calculateActivePieces(builder, Alliance.BLACK));
     this.pieceBitboards = new long[2 * PIECE_TYPE_COUNT];
     for (final Piece piece : this.boardConfig) {
       if (piece != null) {
@@ -224,8 +236,6 @@ public final class Board {
    */
   private Board(final Board source) {
     this.boardConfig = source.boardConfig.clone();
-    this.whitePieces = new ArrayList<>(source.whitePieces);
-    this.blackPieces = new ArrayList<>(source.blackPieces);
     this.pieceBitboards = source.pieceBitboards.clone();
     this.whiteOccupancy = source.whiteOccupancy;
     this.blackOccupancy = source.blackOccupancy;
@@ -284,20 +294,32 @@ public final class Board {
   }
 
   /**
-   * Returns a collection of black pieces currently on the board.
+   * Returns the black pieces currently on the board, in ascending square order. The returned
+   * collection belongs to this board and changes when the board does, so it must not be modified
+   * and must not be iterated across a change to the board.
    *
    * @return A collection of black pieces.
    */
   public Collection<Piece> getBlackPieces() {
+    if (this.blackPiecesStale) {
+      rebuildPieces(this.blackPieces, this.blackOccupancy);
+      this.blackPiecesStale = false;
+    }
     return this.blackPieces;
   }
 
   /**
-   * Returns a collection of white pieces currently on the board.
+   * Returns the white pieces currently on the board, in ascending square order. The returned
+   * collection belongs to this board and changes when the board does, so it must not be modified
+   * and must not be iterated across a change to the board.
    *
    * @return A collection of white pieces.
    */
   public Collection<Piece> getWhitePieces() {
+    if (this.whitePiecesStale) {
+      rebuildPieces(this.whitePieces, this.whiteOccupancy);
+      this.whitePiecesStale = false;
+    }
     return this.whitePieces;
   }
 
@@ -308,9 +330,22 @@ public final class Board {
    */
   public Collection<Piece> getAllPieces() {
     final List<Piece> allPieces = new ArrayList<>();
-    allPieces.addAll(this.whitePieces);
-    allPieces.addAll(this.blackPieces);
+    allPieces.addAll(getWhitePieces());
+    allPieces.addAll(getBlackPieces());
     return allPieces;
+  }
+
+  /**
+   * Refills the given list with the pieces on the given squares, in ascending square order.
+   *
+   * @param pieces The list to refill.
+   * @param occupancy The squares whose pieces to list, as one bit per tile.
+   */
+  private void rebuildPieces(final List<Piece> pieces, final long occupancy) {
+    pieces.clear();
+    for (long remaining = occupancy; remaining != 0L; remaining &= remaining - 1) {
+      pieces.add(this.boardConfig[Long.numberOfTrailingZeros(remaining)]);
+    }
   }
 
   /**
@@ -715,31 +750,24 @@ public final class Board {
 
   /**
    * Places a piece on the board at its own reported position, adding it to the board's piece
-   * configuration, bitboards and the appropriate alliance's piece list, and recording it as that
-   * alliance's king if it is one. The square must be empty. Used only by the mutating
-   * makeMove/unmakeMove path in the {@link Move} hierarchy.
+   * configuration and bitboards, marking the appropriate alliance's piece list for rebuilding,
+   * and recording it as that alliance's king if it is one. The square must be empty. Used only by
+   * the mutating makeMove/unmakeMove path in the {@link Move} hierarchy.
    *
    * @param piece The piece to place, at the square given by its own position.
    */
   void placePiece(final Piece piece) {
     this.boardConfig[piece.getPiecePosition()] = piece;
     setBit(piece);
-    final List<Piece> pieces = piece.getPieceAllegiance().isWhite() ? this.whitePieces : this.blackPieces;
     if (piece.getPieceType() == Piece.PieceType.KING) {
       recordKing((King) piece);
     }
-    final int coordinate = piece.getPiecePosition();
-    int index = 0;
-    while (index < pieces.size() && pieces.get(index).getPiecePosition() < coordinate) {
-      index++;
-    }
-    pieces.add(index, piece);
   }
 
   /**
    * Removes whatever piece occupies the given square, if any, from the board's piece
-   * configuration, bitboards and the appropriate alliance's piece list. Used only by the mutating
-   * makeMove/unmakeMove path in the {@link Move} hierarchy.
+   * configuration and bitboards, and marks the appropriate alliance's piece list for rebuilding.
+   * Used only by the mutating makeMove/unmakeMove path in the {@link Move} hierarchy.
    *
    * @param coordinate The square to clear.
    */
@@ -753,20 +781,16 @@ public final class Board {
     this.pieceBitboards[bitboardIndex(piece.getPieceAllegiance(), piece.getPieceType())] &= ~bit;
     if (piece.getPieceAllegiance().isWhite()) {
       this.whiteOccupancy &= ~bit;
+      this.whitePiecesStale = true;
     } else {
       this.blackOccupancy &= ~bit;
-    }
-    final List<Piece> pieces = piece.getPieceAllegiance().isWhite() ? this.whitePieces : this.blackPieces;
-    for (int index = 0; index < pieces.size(); index++) {
-      if (pieces.get(index).getPiecePosition() == coordinate) {
-        pieces.remove(index);
-        return;
-      }
+      this.blackPiecesStale = true;
     }
   }
 
   /**
-   * Sets the bit of the given piece's square in its bitboard and its alliance's occupancy.
+   * Sets the bit of the given piece's square in its bitboard and its alliance's occupancy, and
+   * marks that alliance's piece list for rebuilding.
    *
    * @param piece The piece to record, at the square given by its own position.
    */
@@ -775,8 +799,10 @@ public final class Board {
     this.pieceBitboards[bitboardIndex(piece.getPieceAllegiance(), piece.getPieceType())] |= bit;
     if (piece.getPieceAllegiance().isWhite()) {
       this.whiteOccupancy |= bit;
+      this.whitePiecesStale = true;
     } else {
       this.blackOccupancy |= bit;
+      this.blackPiecesStale = true;
     }
   }
 
@@ -912,24 +938,6 @@ public final class Board {
     } else {
       this.blackKing = king;
     }
-  }
-
-  /**
-   * Calculates and returns the active pieces of a specified alliance on the board.
-   *
-   * @param builder  The builder containing the board configurations.
-   * @param alliance The alliance (color) of the pieces to be considered.
-   * @return A collection of active pieces belonging to the specified alliance, in ascending
-   *         square order.
-   */
-  private Collection<Piece> calculateActivePieces(Builder builder, Alliance alliance) {
-    List<Piece> activePieces = new ArrayList<>();
-    for (final Piece piece : builder.BoardConfigurations) {
-      if (piece != null && piece.getPieceAllegiance() == alliance) {
-        activePieces.add(piece);
-      }
-    }
-    return activePieces;
   }
 
   /**

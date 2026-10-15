@@ -8,6 +8,7 @@ import engine.forBoard.ZobristHashing;
 import engine.forPiece.Pawn;
 import engine.forPiece.Piece;
 
+import java.util.Iterator;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -178,8 +179,8 @@ public class Perft {
   /**
    * Walks the legal move tree and returns a description of the first position at which either
    * {@link Board#copy()} or a {@link Board#makeNullMove()} and {@link Board#unmakeNullMove()}
-   * round trip fails to reproduce the position it was given, or at which the board's bitboards
-   * disagree with its pieces, checked on arriving at each position and again after its moves
+   * round trip fails to reproduce the position it was given, or at which the board's bitboards or
+   * piece lists disagree with its pieces, checked on arriving at each position and again after its moves
    * have been unmade. Nothing in the engine calls either
    * of those yet, so this rather than a node count is what validates them.
    *
@@ -226,12 +227,28 @@ public class Perft {
   }
 
   /**
-   * Checks that the given board's bitboards and occupancies agree with the piece on every square.
+   * Checks that the given board's bitboards, occupancies and piece lists agree with the piece on
+   * every square. Each piece list must hold that alliance's pieces in ascending square order.
    *
    * @param board The board to check.
    * @return A description of the first disagreement found, or null if they all agree.
    */
   private static String describeBitboardFault(final Board board) {
+    for (final Alliance alliance : Alliance.values()) {
+      final Iterator<Piece> listed =
+              (alliance.isWhite() ? board.getWhitePieces() : board.getBlackPieces()).iterator();
+      for (int coordinate = 0; coordinate < BoardUtils.NUM_TILES; coordinate++) {
+        final Piece piece = board.getPiece(coordinate);
+        if (piece != null && piece.getPieceAllegiance() == alliance &&
+                (!listed.hasNext() || listed.next() != piece)) {
+          return "Piece list of " + alliance + " differs at square " +
+                  BoardUtils.getPositionAtCoordinate(coordinate) + ".";
+        }
+      }
+      if (listed.hasNext()) {
+        return "Piece list of " + alliance + " holds a piece not on the board.";
+      }
+    }
     for (final Alliance alliance : Alliance.values()) {
       long occupancy = 0L;
       for (final Piece.PieceType pieceType : Piece.PieceType.values()) {
