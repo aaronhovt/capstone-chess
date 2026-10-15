@@ -1,9 +1,7 @@
 package engine.forPlayer.forAI;
 
-import com.google.common.collect.ComparisonChain;
 import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
-import engine.forBoard.BoardUtils;
 import engine.forBoard.Move;
 import engine.forBoard.MoveCode;
 import engine.forBoard.MoveGenerator;
@@ -313,96 +311,72 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   private final StaticExchangeEvaluator seeEvaluator = StaticExchangeEvaluator.get();
 
   /**
-   * The MoveSorter enumeration holds the strategy for ordering the root moves. Moves below the
-   * root are ordered by {@link #orderMoves}.
+   * Returns the root moves of the given position in search order: moves that give check first,
+   * then castling moves, then good captures, quiet moves and bad captures in that order, then by
+   * static exchange score and by history score, each highest first. Moves that compare equal keep
+   * generation order.
+   *
+   * @param board The root position.
+   * @return The packed root moves in search order.
    */
-  private enum MoveSorter {
+  private int[] orderRootMoves(final Board board) {
+    final int[] generated = new int[MoveGenerator.MAX_MOVES];
+    final int count = MoveGenerator.generate(board, board.currentPlayer().getAlliance(), generated);
+    final int historySide = historySideOf(board);
+    final boolean[] givesCheck = new boolean[count];
+    final int[] exchangeScores = new int[count];
+    final int[] historyScores = new int[count];
+    final Integer[] order = new Integer[count];
+    for (int i = 0; i < count; i++) {
+      final int move = generated[i];
+      givesCheck[i] = AttackDetector.givesCheck(board, move);
+      exchangeScores[i] = MoveCode.isCapture(move) ? seeEvaluator.evaluate(board, move) : 0;
+      historyScores[i] = historyOf(move, historySide);
+      order[i] = i;
+    }
 
-    /**
-     * Expensive move sorting strategy used for root moves that performs
-     * comprehensive evaluation including threat analysis and detailed move scoring.
-     */
-    EXPENSIVE {
-      @Override
-      List<Move> sort(final Collection<Move> moves, final Board board,
-                      final AlphaBeta engine, final int ply) {
-        List<Move> sortedMoves = new ArrayList<>(moves);
-
-        final int historySide = historySideOf(board);
-        Map<Move, Integer> seeScores = new HashMap<>();
-        Map<Move, Integer> historyScores = new HashMap<>();
-        for (Move move : sortedMoves) {
-          if (move.isAttack()) {
-            seeScores.put(move, engine.seeEvaluator.evaluate(board, move));
-          }
-          historyScores.put(move, isValidPosition(move) ?
-                  engine.historyHeuristic[historySide][move.getCurrentCoordinate()]
-                          [move.getDestinationCoordinate()] : 0);
-        }
-
-        // Whether a move gives check is resolved once per move here rather than inside the
-        // comparator, which would ask the same question O(n log n) times. It is resolved against a
-        // private copy of the position because kingThreat mutates the board it is handed, and the
-        // board this sorter is given at the root is the game board the rest of the application is
-        // reading.
-        final Board probeBoard = board.copy();
-        Map<Move, Boolean> givesCheck = new HashMap<>();
-        for (Move move : sortedMoves) {
-          givesCheck.put(move, BoardUtils.kingThreat(move, probeBoard));
-        }
-
-        // The two score comparisons take their operands reversed, so that a higher static exchange
-        // score and a higher history score each sort first.
-        sortedMoves.sort((move1, move2) -> ComparisonChain.start()
-                .compareTrueFirst(givesCheck.getOrDefault(move1, false),
-                        givesCheck.getOrDefault(move2, false))
-                .compareTrueFirst(move1.isCastlingMove(), move2.isCastlingMove())
-                .compare(captureRankOf(move1, seeScores), captureRankOf(move2, seeScores))
-                .compare(seeScores.getOrDefault(move2, 0), seeScores.getOrDefault(move1, 0))
-                .compare(historyScores.getOrDefault(move2, 0), historyScores.getOrDefault(move1, 0))
-                .result());
-        return sortedMoves;
+    // The sort is stable, so moves that compare equal keep generation order. The two score
+    // comparisons take their operands reversed, so that a higher static exchange score and a
+    // higher history score each sort first.
+    Arrays.sort(order, (first, second) -> {
+      int comparison = Boolean.compare(givesCheck[second], givesCheck[first]);
+      if (comparison == 0) {
+        comparison = Boolean.compare(MoveCode.isCastle(generated[second]),
+                MoveCode.isCastle(generated[first]));
       }
-
-      /**
-       * Returns the ordering rank of the given move, which places a good capture before a quiet
-       * move and a quiet move before a bad capture.
-       *
-       * @param move The move to rank.
-       * @param seeScores The static exchange scores of the capturing moves being sorted.
-       * @return GOOD_CAPTURE_RANK, QUIET_RANK, or BAD_CAPTURE_RANK.
-       */
-      private long captureRankOf(final Move move, final Map<Move, Integer> seeScores) {
-        if (!move.isAttack()) {
-          return QUIET_RANK;
-        }
-        return seeScores.getOrDefault(move, 0) >= 0 ? GOOD_CAPTURE_RANK : BAD_CAPTURE_RANK;
+      if (comparison == 0) {
+        comparison = Long.compare(captureRankOf(generated[first], exchangeScores[first]),
+                captureRankOf(generated[second], exchangeScores[second]));
       }
-
-      /**
-       * Validates that a move has coordinates within the valid range for history heuristic access.
-       *
-       * @param move The move to validate.
-       * @return True if the move has valid coordinates, false otherwise.
-       */
-      private boolean isValidPosition(Move move) {
-        int current = move.getCurrentCoordinate();
-        int dest = move.getDestinationCoordinate();
-        return current >= 0 && current < 64 && dest >= 0 && dest < 64;
+      if (comparison == 0) {
+        comparison = Integer.compare(exchangeScores[second], exchangeScores[first]);
       }
-    };
+      if (comparison == 0) {
+        comparison = Integer.compare(historyScores[second], historyScores[first]);
+      }
+      return comparison;
+    });
 
-    /**
-     * Sorts the given collection of moves according to the strategy's ordering criteria.
-     *
-     * @param moves The collection of moves to sort.
-     * @param board The current board position.
-     * @param engine The engine instance for accessing move ordering data.
-     * @param ply The current search ply for accessing ply-specific data.
-     * @return A sorted list of moves.
-     */
-    abstract List<Move> sort(Collection<Move> moves, final Board board,
-                             final AlphaBeta engine, final int ply);
+    final int[] sorted = new int[count];
+    for (int i = 0; i < count; i++) {
+      sorted[i] = generated[order[i]];
+    }
+    return sorted;
+  }
+
+  /**
+   * Returns the ordering rank of the given packed move, which places a good capture before a
+   * quiet move and a quiet move before a bad capture.
+   *
+   * @param move The packed move to rank.
+   * @param exchangeScore The static exchange score of the move, if it captures.
+   * @return GOOD_CAPTURE_RANK, QUIET_RANK, or BAD_CAPTURE_RANK.
+   */
+  private static long captureRankOf(final int move, final int exchangeScore) {
+    if (!MoveCode.isCapture(move)) {
+      return QUIET_RANK;
+    }
+    return exchangeScore >= 0 ? GOOD_CAPTURE_RANK : BAD_CAPTURE_RANK;
   }
 
   /**
@@ -617,7 +591,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                       final long timeLimitMillis) {
     final long startTime = System.currentTimeMillis();
     final long deadline = deadlineOf(timeLimitMillis);
-    Move bestMove = MoveFactory.getNullMove();
+    int bestMove = MoveCode.NONE;
     double bestScore = 0;
     int bestDepth = 0;
 
@@ -644,7 +618,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                 searchRootAspirationWindow(mainBoard, currentDepth, bestMove, bestScore) :
                 searchRoot(mainBoard, currentDepth, -Double.MAX_VALUE, Double.MAX_VALUE, bestMove);
 
-        if (result.move() == MoveFactory.getNullMove()) {
+        if (result.move() == MoveCode.NONE) {
           break;
         }
 
@@ -663,7 +637,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
         final long executionTime = System.currentTimeMillis() - startTime;
         final String report = String.format(
                 "%s | depth = %d | boards evaluated = %d | time = %.2f sec | nps = %.2f | %s",
-                bestMove, currentDepth, evaluatedPositions,
+                toMove(mainBoard, bestMove), currentDepth, evaluatedPositions,
                 executionTime / 1000.0,
                 evaluatedPositions / (executionTime / 1000.0),
                 this.evaluationCache.getStats());
@@ -684,7 +658,28 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     this.lastScore = (mainBoard.currentPlayer().getAlliance().isWhite() ? bestScore : -bestScore) + 0.0;
     this.lastDepth = bestDepth;
 
-    return bestMove;
+    return toMove(board, bestMove);
+  }
+
+  /**
+   * Returns the move of the given position equal to the given packed move.
+   *
+   * @param board The position the move belongs to.
+   * @param move A packed move of the side to move, or {@link MoveCode#NONE}.
+   * @return The equal move from the side to move's legal moves, or the null move for
+   *         {@link MoveCode#NONE}.
+   * @throws IllegalStateException If the side to move has no such move.
+   */
+  private static Move toMove(final Board board, final int move) {
+    if (move == MoveCode.NONE) {
+      return MoveFactory.getNullMove();
+    }
+    for (final Move candidate : board.currentPlayer().getLegalMoves()) {
+      if (MoveCode.of(candidate) == move) {
+        return candidate;
+      }
+    }
+    throw new IllegalStateException("The position has no move " + move + ".");
   }
 
   /**
@@ -766,7 +761,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    */
   private void runHelperSearch(final Board board, final int searchDepth, final int helperId) {
     final long rootHash = board.getZobristHash();
-    Move bestMove = MoveFactory.getNullMove();
+    int bestMove = MoveCode.NONE;
 
     for (int depth = 1 + (helperId % 2); depth <= searchDepth && !searchStopped; depth++) {
       final SearchStats stats = new SearchStats();
@@ -848,14 +843,14 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    *
    * @param board The board this search thread owns, in the root position.
    * @param depth The current search depth.
-   * @param previousBestMove The best move from the previous iteration.
+   * @param previousBestMove The packed best move from the previous iteration.
    * @param previousScore The root score from the previous iteration.
    * @return The best move found and its score. If the search was stopped, this is the best move of
-   *         the attempt that was stopped, which is the null move if no root move searched in that
-   *         attempt scored inside its window.
+   *         the attempt that was stopped, which is {@link MoveCode#NONE} if no root move searched
+   *         in that attempt scored inside its window.
    */
   private RootResult searchRootAspirationWindow(final Board board, final int depth,
-                                                final Move previousBestMove, final double previousScore) {
+                                                final int previousBestMove, final double previousScore) {
     if (Math.abs(previousScore) >= MATE_THRESHOLD) {
       return searchRoot(board, depth, -Double.MAX_VALUE, Double.MAX_VALUE, previousBestMove);
     }
@@ -887,8 +882,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * The move that was best in the previous iteration is searched first. The first legal move is
    * searched against the full window, and each later move against a zero window at the best score
    * found so far, then again against the window from that score to the far bound if it scores
-   * strictly inside it. A root move that leaves the mover in check is skipped. A search that is stopped part way returns the best of the moves whose search
-   * finished, and the null move if none of them scored inside the window. The move being searched
+   * strictly inside it. A root move that leaves the mover in check is skipped. A search that is
+   * stopped part way returns the best of the moves whose search finished, and
+   * {@link MoveCode#NONE} if none of them scored inside the window. The move being searched
    * when the stop came is not considered. Bounds and scores are from the point of view of the side
    * to move at the root.
    *
@@ -897,36 +893,40 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * @param depth The current search depth.
    * @param alpha The alpha bound for alpha-beta search.
    * @param beta The beta bound for alpha-beta search.
-   * @param previousBestMove The best move from the previous iteration, which may be null.
+   * @param previousBestMove The packed best move from the previous iteration, or
+   *                         {@link MoveCode#NONE}.
    * @return The best move found and its score.
    */
   private RootResult searchRoot(final Board board, final int depth, final double alpha,
-                                final double beta, final Move previousBestMove) {
-    final List<Move> rootMoves = new ArrayList<>(
-            MoveSorter.EXPENSIVE.sort(board.currentPlayer().getLegalMoves(), board, this, 0));
+                                final double beta, final int previousBestMove) {
+    final int[] rootMoves = orderRootMoves(board);
 
-    if (rootMoves.isEmpty()) {
-      return new RootResult(MoveFactory.getNullMove(), 0);
+    if (rootMoves.length == 0) {
+      return new RootResult(MoveCode.NONE, 0);
     }
 
-    if (previousBestMove != null && previousBestMove != MoveFactory.getNullMove() &&
-            rootMoves.contains(previousBestMove)) {
-      rootMoves.remove(previousBestMove);
-      rootMoves.add(0, previousBestMove);
+    if (previousBestMove != MoveCode.NONE) {
+      for (int i = 0; i < rootMoves.length; i++) {
+        if (rootMoves[i] == previousBestMove) {
+          System.arraycopy(rootMoves, 0, rootMoves, 1, i);
+          rootMoves[0] = previousBestMove;
+          break;
+        }
+      }
     }
 
-    Move bestMove = MoveFactory.getNullMove();
+    int bestMove = MoveCode.NONE;
     double bestScore = alpha;
     boolean firstMove = true;
 
-    for (final Move move : rootMoves) {
+    for (final int move : rootMoves) {
       if (searchStopped) {
         break;
       }
 
       board.makeMove(move);
       if (board.currentPlayer().getOpponent().isInCheck()) {
-        board.unmakeMove();
+        board.unmakeMove(move);
         continue;
       }
 
@@ -941,7 +941,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
           }
         }
       } finally {
-        board.unmakeMove();
+        board.unmakeMove(move);
       }
       firstMove = false;
 
@@ -966,21 +966,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   /**
    * The move a root search chose and the score it was given.
    *
-   * @param move The best root move found.
+   * @param move The packed best root move found, or {@link MoveCode#NONE}.
    * @param score The score of that move, from the point of view of the side to move at the root.
    */
-  private record RootResult(Move move, double score) {
-  }
-
-  /**
-   * Records a quiet move as a countermove response to the last opponent move for move ordering.
-   * A capture is not recorded.
-   *
-   * @param board The current board position.
-   * @param move The move to record as a countermove.
-   */
-  private void recordCounterMove(Board board, Move move) {
-    recordCounterMove(board, MoveCode.of(move));
+  private record RootResult(int move, double score) {
   }
 
   /**
@@ -1634,20 +1623,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Credits a move that was found to be good in the history heuristic table, so that later
+   * Credits a packed move that was found to be good in the history heuristic table, so that later
    * searches order it earlier.
-   *
-   * @param board The position the move is played from, whose side to move plays it.
-   * @param move The move to record in the history heuristic.
-   * @param depth The depth at which this move was found to be good.
-   */
-  private void recordHistory(final Board board, final Move move, final int depth) {
-    addHistory(board, move, depth * depth);
-  }
-
-  /**
-   * Credits a packed move that was found to be good in the history heuristic table, as
-   * {@link #recordHistory(Board, Move, int)} does.
    *
    * @param board The position the move is played from, whose side to move plays it.
    * @param move The packed move to record in the history heuristic.
@@ -1680,29 +1657,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   }
 
   /**
-   * Adds the given amount to a move's score in the history heuristic table, less that amount's
-   * share of the distance the entry has already travelled toward the bound it is moving toward.
-   * An entry near the bound therefore barely moves further, while one at the opposite bound takes
-   * the amount close to whole, so a move that has been passed over many times can still be
-   * rehabilitated by the cutoffs it does produce. The amount is clamped to HISTORY_MAX first,
-   * which is what holds an entry within HISTORY_MAX of zero. Does nothing if the move is null or
-   * the null move.
-   *
-   * @param board The position the move is played from, whose side to move plays it.
-   * @param move The move whose history score is changing.
-   * @param bonus The amount to add, negative to penalize the move.
-   */
-  private void addHistory(final Board board, final Move move, final int bonus) {
-    if (move == null || move == MoveFactory.getNullMove()) {
-      return;
-    }
-    addHistory(historySideOf(board), move.getCurrentCoordinate(), move.getDestinationCoordinate(),
-            bonus);
-  }
-
-  /**
    * Adds the given amount to the history heuristic score of a move between the given squares,
-   * in the way {@link #addHistory(Board, Move, int)} describes.
+   * less that amount's share of the distance the entry has already travelled toward the bound it
+   * is moving toward. An entry near the bound therefore barely moves further, while one at the
+   * opposite bound takes the amount close to whole, so a move that has been passed over many
+   * times can still be rehabilitated by the cutoffs it does produce. The amount is clamped to
+   * HISTORY_MAX first, which is what holds an entry within HISTORY_MAX of zero.
    *
    * @param historySide The index of the side that plays the move within the history table.
    * @param origin The square the move leaves.

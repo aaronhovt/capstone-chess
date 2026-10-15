@@ -1,8 +1,5 @@
 package engine.forBoard;
 
-import engine.Alliance;
-import engine.forPlayer.Player;
-
 import java.util.Arrays;
 import java.util.List;
 
@@ -177,32 +174,6 @@ public enum BoardUtils {
    */
   public static String getPositionAtCoordinate(final int coordinate) {
     return ALGEBRAIC_NOTATION.get(coordinate);
-  }
-
-  /**
-   * Checks whether making the given move would put the opposing king in check. Used for move
-   * ordering, where checking moves are worth searching early.
-   * <p>
-   * The board is taken as a parameter rather than read from the move, because a move's own board
-   * reference is a live board under the mutable board model and, at the root, is shared by every
-   * search thread. The board given here must be the board the move was generated from, or one in
-   * the same position, and must be private to the calling thread, since it is mutated and restored
-   * over the course of this call.
-   *
-   * @param move The move to evaluate.
-   * @param board The position the move would be played from, mutated and restored by this call.
-   * @return True if the move puts the opposing king in check, false otherwise.
-   */
-  public static boolean kingThreat(final Move move, final Board board) {
-    final Player mover = board.currentPlayer();
-    final int opponentKingSquare = mover.getOpponent().getPlayerKing().getPiecePosition();
-    final Alliance moverAlliance = mover.getAlliance();
-    final UndoState undo = move.makeMove(board);
-    try {
-      return AttackDetector.isSquareAttacked(opponentKingSquare, moverAlliance, board);
-    } finally {
-      move.unmakeMove(board, undo);
-    }
   }
 
   /**
