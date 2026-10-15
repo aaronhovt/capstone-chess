@@ -4,6 +4,8 @@ import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
 import engine.forBoard.Move;
+import engine.forBoard.MoveCode;
+import engine.forBoard.MoveGenerator;
 import engine.forBoard.ZobristHashing;
 import engine.forPiece.Pawn;
 import engine.forPiece.Piece;
@@ -183,7 +185,7 @@ public class Perft {
    * round trip fails to reproduce the position it was given, or at which the board's bitboards or
    * piece lists disagree with its pieces, checked on arriving at each position and again after its
    * moves have been unmade, or at which unmaking a move does not restore the position's player
-   * objects. Nothing in the engine calls either
+   * objects, or at which {@link MoveGenerator} disagrees with either side's legal move list. Nothing in the engine calls either
    * of those yet, so this rather than a node count is what validates them.
    *
    * @param board The position from which to begin the walk. Mutated during the walk and restored
@@ -195,6 +197,10 @@ public class Perft {
     final String bitboardFault = describeBitboardFault(board);
     if (bitboardFault != null) {
       return bitboardFault + System.lineSeparator() + board;
+    }
+    final String generatorFault = describeGeneratorFault(board);
+    if (generatorFault != null) {
+      return generatorFault + System.lineSeparator() + board;
     }
     final String copyFault = describeCopyFault(board);
     if (copyFault != null) {
@@ -234,6 +240,69 @@ public class Perft {
     }
     if (unmadeFault != null) {
       return "After unmaking every move: " + unmadeFault + System.lineSeparator() + board;
+    }
+    return null;
+  }
+
+  /**
+   * Checks that {@link MoveGenerator} writes, for each side, exactly the moves that side's player
+   * lists, in the same order, each with the squares, promotion and flags of the listed move.
+   *
+   * @param board The board to check.
+   * @return A description of the first difference found, or null if the lists agree.
+   */
+  private static String describeGeneratorFault(final Board board) {
+    final int[] generated = new int[MoveGenerator.MAX_MOVES];
+    for (final Player player : new Player[] { board.whitePlayer(), board.blackPlayer() }) {
+      final int count = MoveGenerator.generate(board, player.getAlliance(), generated);
+      int index = 0;
+      for (final Move move : player.getLegalMoves()) {
+        if (index == count) {
+          return "The generator writes " + count + " " + player.getAlliance() + " moves, " +
+                  "expected " + player.getLegalMoves().size() + ".";
+        }
+        final String fault = describeCodeFault(move, generated[index]);
+        if (fault != null) {
+          return player.getAlliance() + " move " + index + " (" + move + "): " + fault;
+        }
+        index++;
+      }
+      if (index != count) {
+        return "The generator writes " + count + " " + player.getAlliance() + " moves, " +
+                "expected " + index + ".";
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Checks that a packed move describes the given move.
+   *
+   * @param move The move.
+   * @param code The packed move generated in its place.
+   * @return A description of the first difference found, or null if they agree.
+   */
+  private static String describeCodeFault(final Move move, final int code) {
+    final Piece promotion = move.getPromotionPiece();
+    if (MoveCode.origin(code) != move.getCurrentCoordinate() ||
+            MoveCode.destination(code) != move.getDestinationCoordinate()) {
+      return "generated " + BoardUtils.getPositionAtCoordinate(MoveCode.origin(code)) +
+              BoardUtils.getPositionAtCoordinate(MoveCode.destination(code)) + ".";
+    }
+    if (MoveCode.promotionType(code) != (promotion == null ? null : promotion.getPieceType())) {
+      return "generated promotion " + MoveCode.promotionType(code) + ".";
+    }
+    if (MoveCode.isCapture(code) != move.isAttack()) {
+      return "generated the capture flag as " + MoveCode.isCapture(code) + ".";
+    }
+    if (MoveCode.isEnPassant(code) != (move instanceof Move.PawnEnPassantAttack)) {
+      return "generated the en passant flag as " + MoveCode.isEnPassant(code) + ".";
+    }
+    if (MoveCode.isCastle(code) != move.isCastlingMove()) {
+      return "generated the castle flag as " + MoveCode.isCastle(code) + ".";
+    }
+    if (MoveCode.isPawnJump(code) != (move instanceof Move.PawnJump)) {
+      return "generated the pawn jump flag as " + MoveCode.isPawnJump(code) + ".";
     }
     return null;
   }
