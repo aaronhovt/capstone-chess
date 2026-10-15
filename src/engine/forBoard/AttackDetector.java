@@ -76,6 +76,13 @@ public final class AttackDetector {
   /** Every square on the diagonal rays out of each square, indexed by square. */
   private static final long[] DIAGONAL_LINES = computeLines(DIAGONAL_RAYS);
 
+  /**
+   * The squares beyond a second square on the queen line leading out of a first square through
+   * it, indexed by first square and then second square, as one bit per tile. Empty when the two
+   * squares share no queen line.
+   */
+  private static final long[][] BEYOND = computeBeyond();
+
   /** The squares from which a knight attacks each square, indexed by square. */
   private static final long[] KNIGHT_ATTACKERS =
           computeStepAttackers(KNIGHT_FILE_STEPS, KNIGHT_RANK_STEPS);
@@ -178,6 +185,84 @@ public final class AttackDetector {
   }
 
   /**
+   * Returns every piece of either alliance that bears on the given square on the given board.
+   * Whatever occupies the square is disregarded. A slider is included only when nothing stands
+   * between it and the square.
+   *
+   * @param square The square to test.
+   * @param board The current board.
+   * @return The squares of the pieces bearing on the square, as one bit per tile.
+   */
+  public static long attackersOf(final int square, final Board board) {
+    final long occupancy = board.getOccupancy();
+    final long queens = board.getPieces(Alliance.WHITE, Piece.PieceType.QUEEN) |
+            board.getPieces(Alliance.BLACK, Piece.PieceType.QUEEN);
+    final long diagonalSliders = board.getPieces(Alliance.WHITE, Piece.PieceType.BISHOP) |
+            board.getPieces(Alliance.BLACK, Piece.PieceType.BISHOP) | queens;
+    final long orthogonalSliders = board.getPieces(Alliance.WHITE, Piece.PieceType.ROOK) |
+            board.getPieces(Alliance.BLACK, Piece.PieceType.ROOK) | queens;
+    return (WHITE_PAWN_ATTACKERS[square] & board.getPieces(Alliance.WHITE, Piece.PieceType.PAWN)) |
+            (BLACK_PAWN_ATTACKERS[square] & board.getPieces(Alliance.BLACK, Piece.PieceType.PAWN)) |
+            (KNIGHT_ATTACKERS[square] & (board.getPieces(Alliance.WHITE, Piece.PieceType.KNIGHT) |
+                    board.getPieces(Alliance.BLACK, Piece.PieceType.KNIGHT))) |
+            (KING_ATTACKERS[square] & (board.getPieces(Alliance.WHITE, Piece.PieceType.KING) |
+                    board.getPieces(Alliance.BLACK, Piece.PieceType.KING))) |
+            (nearestOnRays(DIAGONAL_RAYS, square, occupancy) & diagonalSliders) |
+            (nearestOnRays(ORTHOGONAL_RAYS, square, occupancy) & orthogonalSliders);
+  }
+
+  /**
+   * Returns the nearest occupied square beyond the given square on the queen line leading out of
+   * the origin square through it.
+   *
+   * @param origin The square the line leads out of.
+   * @param through The square on the line beyond which to look.
+   * @param occupancy The occupied squares, as one bit per tile.
+   * @return The nearest occupied square beyond {@code through}, or -1 if there is none or the two
+   *         squares share no queen line.
+   */
+  public static int nearestBeyond(final int origin, final int through, final long occupancy) {
+    final long beyond = BEYOND[origin][through] & occupancy;
+    if (beyond == 0L) {
+      return -1;
+    }
+    return through < origin ?
+            63 - Long.numberOfLeadingZeros(beyond) : Long.numberOfTrailingZeros(beyond);
+  }
+
+  /**
+   * Determines whether the two squares share a rank or a file.
+   *
+   * @param origin One square.
+   * @param other The other square.
+   * @return True if the squares are distinct and share a rank or a file, false otherwise.
+   */
+  public static boolean onOrthogonalLine(final int origin, final int other) {
+    return (ORTHOGONAL_LINES[origin] & (1L << other)) != 0L;
+  }
+
+  /**
+   * Returns the nearest occupied square on each of the given rays out of the given square.
+   *
+   * @param rays The rays out of each square, indexed by square and then by direction.
+   * @param square The square the rays lead out of.
+   * @param occupancy The occupied squares, as one bit per tile.
+   * @return The nearest occupied square on each ray, as one bit per tile.
+   */
+  private static long nearestOnRays(final long[][] rays, final int square, final long occupancy) {
+    long nearest = 0L;
+    final long[] squareRays = rays[square];
+    for (int direction = 0; direction < squareRays.length; direction++) {
+      final long blockers = squareRays[direction] & occupancy;
+      if (blockers != 0L) {
+        nearest |= 1L << (direction < DECREASING_DIRECTIONS ?
+                63 - Long.numberOfLeadingZeros(blockers) : Long.numberOfTrailingZeros(blockers));
+      }
+    }
+    return nearest;
+  }
+
+  /**
    * Determines whether any of the given sliders stands at the near end of one of the given rays
    * out of the given square, with nothing in between.
    *
@@ -272,6 +357,28 @@ public final class AttackDetector {
       }
     }
     return lines;
+  }
+
+  /**
+   * Computes, for every pair of squares on a common queen line, the squares on that line beyond
+   * the second square as seen from the first.
+   *
+   * @return The squares beyond, indexed by first square and then second square, as one bit per
+   *         tile.
+   */
+  private static long[][] computeBeyond() {
+    final long[][] beyond = new long[BoardUtils.NUM_TILES][BoardUtils.NUM_TILES];
+    for (final long[][] rays : new long[][][] { ORTHOGONAL_RAYS, DIAGONAL_RAYS }) {
+      for (int origin = 0; origin < BoardUtils.NUM_TILES; origin++) {
+        for (int direction = 0; direction < rays[origin].length; direction++) {
+          for (long remaining = rays[origin][direction]; remaining != 0L; remaining &= remaining - 1) {
+            final int through = Long.numberOfTrailingZeros(remaining);
+            beyond[origin][through] = rays[through][direction];
+          }
+        }
+      }
+    }
+    return beyond;
   }
 
   /**

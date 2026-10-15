@@ -1,15 +1,10 @@
 package engine.forPlayer.forAI;
 
 import engine.Alliance;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
-import engine.forBoard.MoveUtils;
-import engine.forPiece.Knight;
 import engine.forPiece.Piece;
-import engine.forPiece.Queen;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * The StaticExchangeEvaluator class implements Static Exchange Evaluation (SEE) for accurate assessment
@@ -21,11 +16,9 @@ import java.util.List;
  * It uses simplified piece values optimized for exchange calculations and considers factors such as
  * piece defense and attack sequences to determine the material outcome of captures.
  * <p>
- * The attacker search is answered through {@link Piece#defendsSquare(int, Board)} rather than
- * through generated move lists. Move generation
- * is pseudo-legal and never emits a move onto a square held by the moving piece's own alliance, so
- * a move list cannot report that a piece is defended, and disregarding occupancy is what an
- * exchange sequence requires.
+ * The attackers are read from the board's bitboards through {@link AttackDetector}, which
+ * disregards whatever occupies the target square, so pieces defending it are found as well as
+ * pieces that could capture on it.
  *
  * @author Aaron Ho
  */
@@ -47,8 +40,20 @@ public class StaticExchangeEvaluator {
           20000
   };
 
+  /** The piece types in ascending order of SEE value. */
+  private static final Piece.PieceType[] TYPES_BY_VALUE = Piece.PieceType.values();
+
   /** The most pieces a board can hold, which bounds the length of an exchange sequence. */
   private static final int MAX_PIECES = 32;
+
+  /**
+   * The order in which the queen lines out of a square are searched for attackers, by the tile
+   * offset of their first step.
+   */
+  private static final int[] LINE_OFFSETS = { -9, -8, -7, -1, 1, 7, 8, 9 };
+
+  /** The list position given to a knight ahead of its square, placing knights after every line. */
+  private static final int KNIGHT_POSITIONS = LINE_OFFSETS.length;
 
   /**
    * Constructs a new StaticExchangeEvaluator instance.
@@ -89,12 +94,8 @@ public class StaticExchangeEvaluator {
       return SEE_PIECE_VALUES[0];
     }
 
-    final List<Piece> attackers = findAttackers(board, targetSquare);
-    removeAttackerAt(attackers, attackingPiece.getPiecePosition());
-    revealAttackerBehind(board, targetSquare, attackingPiece.getPiecePosition(), attackers);
-
-    return swapOffValue(board, targetSquare, capturedValue, attackerValue, attackers,
-            board.currentPlayer().getOpponent().getAlliance());
+    return swapOffValue(board, targetSquare, capturedValue, attackerValue,
+            attackingPiece.getPiecePosition(), board.currentPlayer().getOpponent().getAlliance());
   }
 
   /**
@@ -102,22 +103,34 @@ public class StaticExchangeEvaluator {
    * from that side's perspective. Each side captures with its least valuable remaining attacker,
    * and a side that would lose material by continuing the sequence stops instead. A slider
    * standing behind a capturing piece on its line joins the sequence once that piece has captured.
+   * Of two attackers of the same type, the one found first captures first: the attackers present
+   * at the start in the order {@link #listPosition} gives, then the revealed sliders in the order
+   * they were revealed.
    *
    * @param board The current chess board state.
    * @param targetSquare The square the exchange takes place on.
    * @param capturedValue The value of the piece taken by the first capture.
    * @param attackerValue The value of the piece making the first capture.
-   * @param attackers The pieces of both alliances bearing on the square, excluding the piece
-   *                  making the first capture. This list is modified as the sequence is walked.
+   * @param firstAttackerSquare The square of the piece making the first capture.
    * @param defendingSide The alliance that recaptures first.
    * @return The material outcome of the sequence for the side making the first capture.
    */
   private int swapOffValue(final Board board, final int targetSquare,
                            final int capturedValue, final int attackerValue,
-                           final List<Piece> attackers, final Alliance defendingSide) {
+                           final int firstAttackerSquare, final Alliance defendingSide) {
     final int[] gain = new int[MAX_PIECES];
-    gain[0] = capturedValue;
+    final int[] revealed = new int[MAX_PIECES];
+    final long initialAttackers = AttackDetector.attackersOf(targetSquare, board);
+    long available = initialAttackers & ~(1L << firstAttackerSquare);
+    int revealedCount = 0;
 
+    final int firstRevealed = revealedBehind(board, targetSquare, firstAttackerSquare);
+    if (firstRevealed >= 0) {
+      available |= 1L << firstRevealed;
+      revealed[revealedCount++] = firstRevealed;
+    }
+
+    gain[0] = capturedValue;
     int depth = 0;
     int movedValue = attackerValue;
     Alliance side = defendingSide;
@@ -126,15 +139,19 @@ public class StaticExchangeEvaluator {
       depth++;
       gain[depth] = movedValue - gain[depth - 1];
 
-      final Piece nextAttacker = findLeastValuableAttacker(attackers, side);
-      if (nextAttacker == null) {
+      final int attackerSquare = leastValuableAttacker(board, targetSquare, available,
+              initialAttackers, revealed, revealedCount, side);
+      if (attackerSquare < 0) {
         break;
       }
 
-      final int attackerSquare = nextAttacker.getPiecePosition();
-      removeAttackerAt(attackers, attackerSquare);
-      revealAttackerBehind(board, targetSquare, attackerSquare, attackers);
-      movedValue = getPieceValue(nextAttacker.getPieceType());
+      available &= ~(1L << attackerSquare);
+      final int revealedSquare = revealedBehind(board, targetSquare, attackerSquare);
+      if (revealedSquare >= 0) {
+        available |= 1L << revealedSquare;
+        revealed[revealedCount++] = revealedSquare;
+      }
+      movedValue = getPieceValue(board.getPiece(attackerSquare).getPieceType());
       side = side.isWhite() ? Alliance.BLACK : Alliance.WHITE;
     }
 
@@ -147,121 +164,98 @@ public class StaticExchangeEvaluator {
   }
 
   /**
-   * Removes the attacker standing on the given square, if one is present.
-   *
-   * @param attackers The list to remove from.
-   * @param square The square whose occupant is removed.
-   */
-  private void removeAttackerAt(final List<Piece> attackers, final int square) {
-    for (int index = 0; index < attackers.size(); index++) {
-      if (attackers.get(index).getPiecePosition() == square) {
-        attackers.remove(index);
-        return;
-      }
-    }
-  }
-
-  /**
-   * Adds the slider that bears on the target square once the piece on the vacated square has
+   * Returns the slider that bears on the target square once the piece on the vacated square has
    * captured, if there is one. The vacated square must hold the nearest piece to the target
-   * square on its queen line. The next piece beyond it on that line is added when it is a queen,
-   * a rook on a rank or file, or a bishop on a diagonal. Nothing is added when the vacated square
-   * is not on a queen line from the target square.
+   * square on its queen line. The next piece beyond it on that line qualifies when it is a queen,
+   * a rook on a rank or file, or a bishop on a diagonal.
    *
    * @param board The current chess board state.
    * @param targetSquare The square the exchange takes place on.
    * @param vacatedSquare The square of the piece that has just captured.
-   * @param attackers The list to add the revealed slider to.
+   * @return The square of the revealed slider, or -1 if none is revealed.
    */
-  private void revealAttackerBehind(final Board board, final int targetSquare,
-                                    final int vacatedSquare, final List<Piece> attackers) {
-    for (final MoveUtils.Line line : Queen.linesFrom(targetSquare)) {
-      final int[] squares = line.getLineCoordinates();
-      int index = 0;
-      while (index < squares.length && squares[index] != vacatedSquare) {
-        index++;
-      }
-      if (index == squares.length) {
-        continue;
-      }
-
-      final int step = Math.abs(squares[0] - targetSquare);
-      final boolean orthogonal = step == 1 || step == 8;
-      for (index++; index < squares.length; index++) {
-        final Piece piece = board.getPiece(squares[index]);
-        if (piece != null) {
-          final Piece.PieceType type = piece.getPieceType();
-          if (type == Piece.PieceType.QUEEN ||
-                  type == (orthogonal ? Piece.PieceType.ROOK : Piece.PieceType.BISHOP)) {
-            attackers.add(piece);
-          }
-          return;
-        }
-      }
-      return;
+  private int revealedBehind(final Board board, final int targetSquare, final int vacatedSquare) {
+    final int beyond = AttackDetector.nearestBeyond(targetSquare, vacatedSquare, board.getOccupancy());
+    if (beyond < 0) {
+      return -1;
     }
+    final Piece.PieceType type = board.getPiece(beyond).getPieceType();
+    final boolean orthogonal = AttackDetector.onOrthogonalLine(targetSquare, vacatedSquare);
+    return type == Piece.PieceType.QUEEN ||
+            type == (orthogonal ? Piece.PieceType.ROOK : Piece.PieceType.BISHOP) ? beyond : -1;
   }
 
   /**
-   * Finds every piece on the board that bears on a square, of either alliance. Occupancy of the
-   * square is disregarded, so the result holds both the pieces that could capture on the square
-   * and the pieces defending whatever stands there. The candidates are the first piece on each
-   * queen line leaving the square and the pieces on the knight squares around it, and a candidate
-   * is kept when it bears on the square by {@link Piece#defendsSquare(int, Board)}. Sliders
-   * behind the first piece on a line are not included.
+   * Finds the least valuable attacker of the given alliance still available. Of several of the
+   * same type, the one found first is returned.
    *
    * @param board The current chess board state.
-   * @param targetSquare The square coordinate to check for attackers.
-   * @return A list of pieces that bear on the target square.
+   * @param targetSquare The square the exchange takes place on.
+   * @param available The squares of the attackers still available, as one bit per tile.
+   * @param initialAttackers The squares of the attackers present at the start, as one bit per tile.
+   * @param revealed The squares of the revealed sliders, in the order they were revealed.
+   * @param revealedCount The number of entries of revealed in use.
+   * @param side The alliance of the attacking side.
+   * @return The square of the least valuable available attacker of that alliance, or -1 if there
+   *         is none.
    */
-  private List<Piece> findAttackers(final Board board, final int targetSquare) {
-    final List<Piece> attackers = new ArrayList<>();
-
-    for (final MoveUtils.Line line : Queen.linesFrom(targetSquare)) {
-      for (final int square : line.getLineCoordinates()) {
-        final Piece piece = board.getPiece(square);
-        if (piece != null) {
-          if (piece.defendsSquare(targetSquare, board)) {
-            attackers.add(piece);
+  private int leastValuableAttacker(final Board board, final int targetSquare,
+                                    final long available, final long initialAttackers,
+                                    final int[] revealed, final int revealedCount,
+                                    final Alliance side) {
+    for (final Piece.PieceType type : TYPES_BY_VALUE) {
+      final long candidates = available & board.getPieces(side, type);
+      if (candidates == 0L) {
+        continue;
+      }
+      if ((candidates & (candidates - 1)) == 0L) {
+        return Long.numberOfTrailingZeros(candidates);
+      }
+      final long initialCandidates = candidates & initialAttackers;
+      if (initialCandidates != 0L) {
+        int first = -1;
+        int firstPosition = Integer.MAX_VALUE;
+        for (long remaining = initialCandidates; remaining != 0L; remaining &= remaining - 1) {
+          final int square = Long.numberOfTrailingZeros(remaining);
+          final int position = listPosition(targetSquare, square, type);
+          if (position < firstPosition) {
+            firstPosition = position;
+            first = square;
           }
-          break;
+        }
+        return first;
+      }
+      for (int index = 0; index < revealedCount; index++) {
+        if ((candidates & (1L << revealed[index])) != 0L) {
+          return revealed[index];
         }
       }
     }
-
-    for (final int square : Knight.squaresFrom(targetSquare)) {
-      final Piece piece = board.getPiece(square);
-      if (piece != null && piece.defendsSquare(targetSquare, board)) {
-        attackers.add(piece);
-      }
-    }
-
-    return attackers;
+    return -1;
   }
 
   /**
-   * Finds the least valuable attacking piece of a given alliance from the list of attackers.
-   * This method implements the principle of using the lowest-value piece for exchanges.
+   * Returns the position an attacker present at the start of an exchange takes in the order the
+   * attackers are found: a piece on a queen line from the target square by the position of that
+   * line in {@link #LINE_OFFSETS}, and a knight after every line, by its square.
    *
-   * @param attackers The list of pieces that can attack the target square.
-   * @param side The alliance of the attacking side.
-   * @return The least valuable attacker of the specified side, or null if none found.
+   * @param targetSquare The square the exchange takes place on.
+   * @param square The square of the attacker.
+   * @param type The type of the attacker.
+   * @return The attacker's position in the order.
    */
-  private Piece findLeastValuableAttacker(List<Piece> attackers, Alliance side) {
-    Piece leastValuableAttacker = null;
-    int leastValue = Integer.MAX_VALUE;
-
-    for (Piece attacker : attackers) {
-      if (attacker.getPieceAllegiance() == side) {
-        int value = getPieceValue(attacker.getPieceType());
-        if (value < leastValue) {
-          leastValue = value;
-          leastValuableAttacker = attacker;
-        }
+  private static int listPosition(final int targetSquare, final int square, final Piece.PieceType type) {
+    if (type == Piece.PieceType.KNIGHT) {
+      return KNIGHT_POSITIONS + square;
+    }
+    final int offset = 8 * Integer.signum(square / 8 - targetSquare / 8) +
+            Integer.signum(square % 8 - targetSquare % 8);
+    for (int position = 0; position < LINE_OFFSETS.length; position++) {
+      if (LINE_OFFSETS[position] == offset) {
+        return position;
       }
     }
-
-    return leastValuableAttacker;
+    throw new IllegalStateException("Square " + square + " is not on a queen line from " + targetSquare + ".");
   }
 
   /**
