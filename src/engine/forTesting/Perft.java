@@ -7,6 +7,7 @@ import engine.forBoard.Move;
 import engine.forBoard.ZobristHashing;
 import engine.forPiece.Pawn;
 import engine.forPiece.Piece;
+import engine.forPlayer.Player;
 
 import java.util.Iterator;
 import java.util.Map;
@@ -180,8 +181,9 @@ public class Perft {
    * Walks the legal move tree and returns a description of the first position at which either
    * {@link Board#copy()} or a {@link Board#makeNullMove()} and {@link Board#unmakeNullMove()}
    * round trip fails to reproduce the position it was given, or at which the board's bitboards or
-   * piece lists disagree with its pieces, checked on arriving at each position and again after its moves
-   * have been unmade. Nothing in the engine calls either
+   * piece lists disagree with its pieces, checked on arriving at each position and again after its
+   * moves have been unmade, or at which unmaking a move does not restore the position's player
+   * objects. Nothing in the engine calls either
    * of those yet, so this rather than a node count is what validates them.
    *
    * @param board The position from which to begin the walk. Mutated during the walk and restored
@@ -205,7 +207,14 @@ public class Perft {
     if (depth <= 0) {
       return null;
     }
+    final Player whitePlayer = board.whitePlayer();
+    final Player blackPlayer = board.blackPlayer();
+    final Player currentPlayer = board.currentPlayer();
     for (final Move move : board.currentPlayer().getLegalMoves()) {
+      final String playerFault = describePlayerFault(board, whitePlayer, blackPlayer, currentPlayer);
+      if (playerFault != null) {
+        return "After unmaking a move: " + playerFault + System.lineSeparator() + board;
+      }
       board.makeMove(move);
       try {
         if (board.currentPlayer().getOpponent().isInCheck()) {
@@ -219,9 +228,35 @@ public class Perft {
         board.unmakeMove();
       }
     }
-    final String unmadeFault = describeBitboardFault(board);
+    String unmadeFault = describeBitboardFault(board);
+    if (unmadeFault == null) {
+      unmadeFault = describePlayerFault(board, whitePlayer, blackPlayer, currentPlayer);
+    }
     if (unmadeFault != null) {
       return "After unmaking every move: " + unmadeFault + System.lineSeparator() + board;
+    }
+    return null;
+  }
+
+  /**
+   * Checks that the given board's players are the given player objects.
+   *
+   * @param board The board to check.
+   * @param whitePlayer The white player the board must have.
+   * @param blackPlayer The black player the board must have.
+   * @param currentPlayer The player to move the board must have.
+   * @return A description of the first difference found, or null if the players are the same.
+   */
+  private static String describePlayerFault(final Board board, final Player whitePlayer,
+                                            final Player blackPlayer, final Player currentPlayer) {
+    if (board.whitePlayer() != whitePlayer) {
+      return "The white player is not the one the position had before.";
+    }
+    if (board.blackPlayer() != blackPlayer) {
+      return "The black player is not the one the position had before.";
+    }
+    if (board.currentPlayer() != currentPlayer) {
+      return "The player to move is not the one the position had before.";
     }
     return null;
   }
@@ -329,6 +364,9 @@ public class Perft {
     final int priorHalfMoveClock = board.getHalfMoveClock();
     final Move priorTransitionMove = board.getTransitionMove();
     final Alliance priorMoveMaker = board.currentPlayer().getAlliance();
+    final Player priorWhitePlayer = board.whitePlayer();
+    final Player priorBlackPlayer = board.blackPlayer();
+    final Player priorCurrentPlayer = board.currentPlayer();
 
     board.makeNullMove();
     try {
@@ -362,6 +400,11 @@ public class Perft {
     }
     if (board.currentPlayer().getAlliance() != priorMoveMaker) {
       return "Unmaking the null move did not restore the side to move.";
+    }
+    final String playerFault =
+            describePlayerFault(board, priorWhitePlayer, priorBlackPlayer, priorCurrentPlayer);
+    if (playerFault != null) {
+      return "Unmaking the null move: " + playerFault;
     }
     return null;
   }

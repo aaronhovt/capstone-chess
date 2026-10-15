@@ -84,16 +84,14 @@ public final class Board {
   private King blackKing;
 
   /**
-   * The player controlling the white pieces on the board. Rebuilt by {@link #refreshPlayers}
-   * when a move or a null move is applied, and put back from a saved {@link PlayerState} when
-   * one is reversed.
+   * The player controlling the white pieces on the board, being the white player in the slot of
+   * the current {@link #mutationDepth}.
    */
   private WhitePlayer whitePlayer;
 
   /**
-   * The player controlling the black pieces on the board. Rebuilt by {@link #refreshPlayers}
-   * when a move or a null move is applied, and put back from a saved {@link PlayerState} when
-   * one is reversed.
+   * The player controlling the black pieces on the board, being the black player in the slot of
+   * the current {@link #mutationDepth}.
    */
   private BlackPlayer blackPlayer;
 
@@ -129,20 +127,26 @@ public final class Board {
    */
   private final Deque<NullMoveUndo> nullMoveUndoStack = new ArrayDeque<>();
 
-  /**
-   * The players that stood on this board before each move applied through
-   * {@link #makeMove(Move)} but not yet unmade, pushed and popped in step with
-   * {@link #undoStack}.
-   */
-  private final Deque<PlayerState> playerUndoStack = new ArrayDeque<>();
+  /** The initial number of slots in {@link #whitePlayerSlots} and {@link #blackPlayerSlots}. */
+  private static final int PLAYER_SLOT_CAPACITY = 64;
 
   /**
-   * The players that stood on this board before each null move applied through
-   * {@link #makeNullMove()} but not yet unmade, pushed and popped in step with
-   * {@link #nullMoveUndoStack}. Kept separate from {@link #playerUndoStack} so that a null move
-   * and a real move can never restore each other's players.
+   * The white player for each depth of mutation, indexed by {@link #mutationDepth}. Applying a
+   * move or a null move moves to the slot above, reusing the player there through
+   * {@link Player#reset()} or creating one if the slot is empty. Reversing it steps back to the
+   * slot below, whose player still describes that position, including any legal move list it had
+   * computed, since a mutation only ever writes the slot above. Grown by replacement when full.
    */
-  private final Deque<PlayerState> nullMovePlayerUndoStack = new ArrayDeque<>();
+  private WhitePlayer[] whitePlayerSlots = new WhitePlayer[PLAYER_SLOT_CAPACITY];
+
+  /**
+   * The black player for each depth of mutation, indexed by {@link #mutationDepth}, kept in the
+   * same way as {@link #whitePlayerSlots}.
+   */
+  private BlackPlayer[] blackPlayerSlots = new BlackPlayer[PLAYER_SLOT_CAPACITY];
+
+  /** The number of moves and null moves applied to this board and not yet unmade. */
+  private int mutationDepth;
 
   /**
    * How many null moves applied through {@link #makeNullMove()} have not yet been unmade. While
@@ -151,19 +155,6 @@ public final class Board {
    * below a null move is counted toward or scored as a repetition.
    */
   private int nullMoveDepth;
-
-  /**
-   * PlayerState holds the {@link Player} objects that stood on this board before a single
-   * mutation, so that reversing that mutation can put them back rather than build replacements.
-   * A restored player describes the restored position exactly, including any legal move list it
-   * had already computed, because reversing a mutation returns every piece, the en passant pawn,
-   * and both piece lists to the objects and contents the player was built against.
-   *
-   * @param whitePlayer The white player on the board before the mutation.
-   * @param blackPlayer The black player on the board before the mutation.
-   */
-  private record PlayerState(WhitePlayer whitePlayer, BlackPlayer blackPlayer) {
-  }
 
   /** The initial capacity of {@link #positionHistory}. */
   private static final int POSITION_HISTORY_CAPACITY = 256;
@@ -200,9 +191,7 @@ public final class Board {
     }
     establishKings();
     this.enPassantPawn = builder.enPassantPawn;
-    this.whitePlayer = new WhitePlayer(this);
-    this.blackPlayer = new BlackPlayer(this);
-    this.currentPlayer = builder.nextMoveMaker.choosePlayerByAlliance(this.whitePlayer, this.blackPlayer);
+    refreshPlayers(builder.nextMoveMaker);
     this.transitionMove = getNullMove();
     this.zobristHash = builder.zobristHash != 0 ? builder.zobristHash :
             ZobristHashing.calculateBoardHash(this);
@@ -584,8 +573,10 @@ public final class Board {
   /**
    * Applies the given move to this board in place: relocates pieces, updates the Zobrist hash,
    * en passant state, halfmove clock, and transition move, refreshes both players against the
-   * resulting position, and pushes an undo record and the players it replaced onto this board's
-   * undo stacks.
+   * resulting position, and pushes an undo record onto this board's undo stack. The players of
+   * the position before the move are kept for {@link #unmakeMove()} to restore, but any player
+   * obtained after the move describes a later position once that move is unmade and another is
+   * made.
    * <p>
    * The move must have been generated from this exact board, since it carries a reference back
    * to the board it was generated from and reads that board's state while computing its hash
@@ -596,7 +587,7 @@ public final class Board {
   public void makeMove(final Move move) {
     final Alliance nextMover = this.currentPlayer.getOpponent().getAlliance();
     final UndoState undo = move.makeMove(this);
-    this.playerUndoStack.push(new PlayerState(this.whitePlayer, this.blackPlayer));
+    this.mutationDepth++;
     refreshPlayers(nextMover);
     this.undoStack.push(undo);
     if (this.nullMoveDepth == 0) {
@@ -622,9 +613,9 @@ public final class Board {
       this.positionHistorySize--;
     }
     final UndoState undo = this.undoStack.pop();
-    final PlayerState priorPlayers = this.playerUndoStack.pop();
     undo.appliedMove().unmakeMove(this, undo);
-    restorePlayers(priorPlayers, undo.priorMoveMaker());
+    this.mutationDepth--;
+    restorePlayers(undo.priorMoveMaker());
     this.plyCount--;
   }
 
@@ -634,8 +625,8 @@ public final class Board {
    * turn in which nothing was played, the halfmove clock advances, and the transition move
    * becomes the null move so that move ordering heuristics keyed on the previous move do not
    * read a real move that was not actually just played. Both players are refreshed against the
-   * resulting position and the players they replaced are pushed onto this board's null move
-   * player stack.
+   * resulting position, and the players they replaced are kept for {@link #unmakeNullMove()} to
+   * restore.
    * <p>
    * {@link #positionHistory} is deliberately not touched. A null move position is synthetic and
    * was never reached in a real game, so counting it toward threefold repetition would be wrong.
@@ -656,7 +647,7 @@ public final class Board {
     this.enPassantPawn = null;
     this.halfMoveClock = this.halfMoveClock + 1;
     this.transitionMove = getNullMove();
-    this.nullMovePlayerUndoStack.push(new PlayerState(this.whitePlayer, this.blackPlayer));
+    this.mutationDepth++;
     refreshPlayers(nextMover);
     this.nullMoveUndoStack.push(undo);
     this.nullMoveDepth++;
@@ -673,12 +664,12 @@ public final class Board {
       throw new IllegalStateException("No null move on the undo stack to unmake.");
     }
     final NullMoveUndo undo = this.nullMoveUndoStack.pop();
-    final PlayerState priorPlayers = this.nullMovePlayerUndoStack.pop();
     this.enPassantPawn = undo.priorEnPassantPawn();
     this.zobristHash = undo.priorZobristHash();
     this.halfMoveClock = undo.priorHalfMoveClock();
     this.transitionMove = undo.priorTransitionMove();
-    restorePlayers(priorPlayers, undo.priorMoveMaker());
+    this.mutationDepth--;
+    restorePlayers(undo.priorMoveMaker());
     this.nullMoveDepth--;
   }
 
@@ -716,35 +707,40 @@ public final class Board {
   }
 
   /**
-   * Reassigns both players and the current player against this board's current piece
-   * configuration. Called when a board is copied and when a move or a null move is applied,
-   * since a board mutated in place cannot rely on a {@link Player} built against an earlier
-   * position the way an immutably constructed board can. Reversing a move or a null move does
-   * not come through here; it goes through {@link #restorePlayers} instead.
+   * Makes the players in the slot of the current {@link #mutationDepth} describe this board's
+   * current position, creating them if the slot is empty and resetting them otherwise, and makes
+   * them the board's players. Called when a board is built or copied and when a move or a null
+   * move is applied. Reversing a move or a null move goes through {@link #restorePlayers}
+   * instead.
    * <p>
-   * Constructing a {@link Player} here no longer computes its full legal move list up front;
-   * that generation is deferred to {@link Player#getLegalMoves()} and computed at most once per
-   * side, only if something actually asks for it. Only the cheap parts, a player's king and
-   * check status, are established eagerly here.
+   * Neither creating nor resetting a {@link Player} computes its legal move list or its check
+   * status; both are computed at most once per side, only if something asks for them.
    *
    * @param moveMaker The alliance to move in the resulting position.
    */
   private void refreshPlayers(final Alliance moveMaker) {
-    this.whitePlayer = new WhitePlayer(this);
-    this.blackPlayer = new BlackPlayer(this);
-    this.currentPlayer = moveMaker.choosePlayerByAlliance(this.whitePlayer, this.blackPlayer);
+    if (this.mutationDepth == this.whitePlayerSlots.length) {
+      this.whitePlayerSlots = Arrays.copyOf(this.whitePlayerSlots, this.mutationDepth * 2);
+      this.blackPlayerSlots = Arrays.copyOf(this.blackPlayerSlots, this.mutationDepth * 2);
+    }
+    if (this.whitePlayerSlots[this.mutationDepth] == null) {
+      this.whitePlayerSlots[this.mutationDepth] = new WhitePlayer(this);
+      this.blackPlayerSlots[this.mutationDepth] = new BlackPlayer(this);
+    } else {
+      this.whitePlayerSlots[this.mutationDepth].reset();
+      this.blackPlayerSlots[this.mutationDepth].reset();
+    }
+    restorePlayers(moveMaker);
   }
 
   /**
-   * Reassigns both players and the current player from the players that stood on this board
-   * before the mutation being reversed.
+   * Makes the players in the slot of the current {@link #mutationDepth} the board's players.
    *
-   * @param priorPlayers The players saved when that mutation was applied.
-   * @param moveMaker The alliance to move in the restored position.
+   * @param moveMaker The alliance to move in the current position.
    */
-  private void restorePlayers(final PlayerState priorPlayers, final Alliance moveMaker) {
-    this.whitePlayer = priorPlayers.whitePlayer();
-    this.blackPlayer = priorPlayers.blackPlayer();
+  private void restorePlayers(final Alliance moveMaker) {
+    this.whitePlayer = this.whitePlayerSlots[this.mutationDepth];
+    this.blackPlayer = this.blackPlayerSlots[this.mutationDepth];
     this.currentPlayer = moveMaker.choosePlayerByAlliance(this.whitePlayer, this.blackPlayer);
   }
 

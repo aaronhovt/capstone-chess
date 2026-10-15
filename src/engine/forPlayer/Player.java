@@ -34,7 +34,7 @@ public abstract class Player {
   protected final Board board;
 
   /** The king piece belonging to this player. */
-  protected final King playerKing;
+  protected King playerKing;
 
   /**
    * The collection of legal moves available to this player on the current board state. Null
@@ -60,6 +60,17 @@ public abstract class Player {
   Player(final Board board) {
     this.board = board;
     this.playerKing = establishKing();
+  }
+
+  /**
+   * Makes this player describe its board's current position, as if newly constructed: the king
+   * is read again and the cached check status and legal moves are discarded. Called only by
+   * {@link Board}, when it reuses this player for a position reached by a move or a null move.
+   */
+  public void reset() {
+    this.playerKing = establishKing();
+    this.inCheck = null;
+    this.legalMoves = null;
   }
 
   /**
