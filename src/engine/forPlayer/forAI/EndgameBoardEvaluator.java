@@ -278,7 +278,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   public double evaluate(final Board board) {
     return evaluate(board, LegalMoveTally.of(board, board.whitePlayer()),
             LegalMoveTally.of(board, board.blackPlayer()),
-            PawnSpans.Pawns.of(board.whitePlayer()), PawnSpans.Pawns.of(board.blackPlayer()));
+            PawnSpans.Pawns.of(board, Alliance.WHITE), PawnSpans.Pawns.of(board, Alliance.BLACK));
   }
 
   /**

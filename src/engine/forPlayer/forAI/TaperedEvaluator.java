@@ -1,5 +1,6 @@
 package engine.forPlayer.forAI;
 
+import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forPiece.Piece;
 
@@ -63,8 +64,8 @@ public final class TaperedEvaluator implements BoardEvaluator {
 
     final LegalMoveTally whiteTally = LegalMoveTally.of(board, board.whitePlayer());
     final LegalMoveTally blackTally = LegalMoveTally.of(board, board.blackPlayer());
-    final PawnSpans.Pawns whitePawns = PawnSpans.Pawns.of(board.whitePlayer());
-    final PawnSpans.Pawns blackPawns = PawnSpans.Pawns.of(board.blackPlayer());
+    final PawnSpans.Pawns whitePawns = PawnSpans.Pawns.of(board, Alliance.WHITE);
+    final PawnSpans.Pawns blackPawns = PawnSpans.Pawns.of(board, Alliance.BLACK);
     return (phase * MiddlegameBoardEvaluator.get().evaluate(board, whiteTally, blackTally,
                     whitePawns, blackPawns) +
             (FULL_PHASE - phase) * EndgameBoardEvaluator.get().evaluate(board, whiteTally,
