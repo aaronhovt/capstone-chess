@@ -14,7 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 
 import static engine.forBoard.Move.MoveFactory;
 
@@ -91,12 +91,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   private static final int MAX_TRACKED_QUIETS = 64;
 
   /**
-   * The quiet moves searched so far at each ply, held so that a cutoff can penalize the quiet
-   * moves that were searched before it. A ply's entries are meaningful only up to the count kept
-   * by the node searching at that ply.
+   * The {@link TranspositionTable#moveCode codes} of the quiet moves searched so far at each ply,
+   * held so that a cutoff can penalize the quiet moves that were searched before it. A ply's
+   * entries are meaningful only up to the count kept by the node searching at that ply.
    */
-  private final ThreadLocal<Move[][]> searchedQuiets = ThreadLocal.withInitial(() ->
-          new Move[MAX_SEARCH_DEPTH][MAX_TRACKED_QUIETS]);
+  private final ThreadLocal<short[][]> searchedQuiets = ThreadLocal.withInitial(() ->
+          new short[MAX_SEARCH_DEPTH][MAX_TRACKED_QUIETS]);
 
   /**
    * The static exchange scores of the moves in the list the standard sorter last returned at each
@@ -106,13 +106,19 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   private final ThreadLocal<int[][]> sortedExchangeScores = ThreadLocal.withInitial(() ->
           new int[MAX_SEARCH_DEPTH][(int) ORDER_INDEX_MASK + 1]);
 
-  /** Killer moves table storing good non-capture moves for each search ply. */
-  private final ThreadLocal<Move[][]> killerMoves = ThreadLocal.withInitial(() ->
-          new Move[2][MAX_SEARCH_DEPTH]);
+  /**
+   * Killer moves table storing the {@link TranspositionTable#moveCode codes} of good non-capture
+   * moves for each search ply, with {@link TranspositionTable#NO_MOVE} where none is held.
+   */
+  private final ThreadLocal<short[][]> killerMoves = ThreadLocal.withInitial(() ->
+          new short[2][MAX_SEARCH_DEPTH]);
 
-  /** Countermove table for storing responses to opponent moves for improved move ordering. */
-  @SuppressWarnings("unchecked")
-  private final AtomicReference<Move>[][] counterMoves = new AtomicReference[64][64];
+  /**
+   * Countermove table holding, for each origin and destination square of an opponent move at
+   * index origin * 64 + destination, the {@link TranspositionTable#moveCode code} of the quiet
+   * move recorded in response, or {@link TranspositionTable#NO_MOVE} if none is recorded.
+   */
+  private final AtomicIntegerArray counterMoves = new AtomicIntegerArray(64 * 64);
 
   /** The node limit that lets a search run to the depth it was asked for. */
   public static final long UNLIMITED_NODES = Long.MAX_VALUE;
@@ -274,8 +280,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                       final AlphaBeta engine, final int ply) {
         final Move[] ordered = moves.toArray(new Move[0]);
         final int count = ordered.length;
-        final Move[][] killers = engine.killerMoves.get();
-        final Move counter = counterMoveOf(board, engine);
+        final short[][] killers = engine.killerMoves.get();
+        final int counter = counterMoveOf(board, engine);
         final int historySide = historySideOf(board);
 
         // Bits 42 through 45 hold the tier. Its upper bits hold the capture rank, so that a good
@@ -300,8 +306,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                   QUIET_RANK;
           long tier = rank << ORDER_RANK_SHIFT;
           if (!capture) {
-            tier += (move.equals(killers[0][ply]) || move.equals(killers[1][ply]) ? 0 : KILLER_TIER_BIT) +
-                    (counter != null && move.equals(counter) ? 0 : COUNTER_TIER_BIT);
+            final short code = TranspositionTable.moveCode(move);
+            tier += (code == killers[0][ply] || code == killers[1][ply] ? 0 : KILLER_TIER_BIT) +
+                    (code == counter ? 0 : COUNTER_TIER_BIT);
           }
           final long secondary = (long) Integer.MAX_VALUE -
                   (capture ? (long) exchangeScore : (long) historyOf(move, engine, historySide));
@@ -410,21 +417,24 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                              final AlphaBeta engine, final int ply);
 
     /**
-     * Returns the countermove recorded against the move that produced the given position.
+     * Returns the code of the countermove recorded against the move that produced the given
+     * position.
      *
      * @param board The position being sorted.
      * @param engine The engine holding the countermove table.
-     * @return The recorded countermove, or null if none is recorded.
+     * @return The {@link TranspositionTable#moveCode code} of the recorded countermove, or
+     *         {@link TranspositionTable#NO_MOVE}, which is the code of no move, if none is
+     *         recorded.
      */
-    private static Move counterMoveOf(final Board board, final AlphaBeta engine) {
+    private static int counterMoveOf(final Board board, final AlphaBeta engine) {
       final Move lastMove = board.getTransitionMove();
       if (lastMove == null || lastMove == MoveFactory.getNullMove() ||
               lastMove.getCurrentCoordinate() < 0 || lastMove.getDestinationCoordinate() < 0 ||
               lastMove.getCurrentCoordinate() >= 64 || lastMove.getDestinationCoordinate() >= 64) {
-        return null;
+        return TranspositionTable.NO_MOVE;
       }
-      return engine.counterMoves[lastMove.getCurrentCoordinate()]
-              [lastMove.getDestinationCoordinate()].get();
+      return engine.counterMoves.get(
+              lastMove.getCurrentCoordinate() * 64 + lastMove.getDestinationCoordinate());
     }
 
     /**
@@ -496,12 +506,6 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     this.threadCount = threadCount;
     this.searchThreadPool = Executors.newFixedThreadPool(Math.max(1, threadCount - 1));
     this.transpositionTable = new LocklessTranspositionTable(tableSizeMB);
-
-    for (int i = 0; i < 64; i++) {
-      for (int j = 0; j < 64; j++) {
-        counterMoves[i][j] = new AtomicReference<>();
-      }
-    }
   }
 
   /**
@@ -942,7 +946,8 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     }
     Move lastMove = board.getTransitionMove();
     if (lastMove != null && lastMove != MoveFactory.getNullMove()) {
-      counterMoves[lastMove.getCurrentCoordinate()][lastMove.getDestinationCoordinate()].set(move);
+      counterMoves.set(lastMove.getCurrentCoordinate() * 64 + lastMove.getDestinationCoordinate(),
+              TranspositionTable.moveCode(move));
     }
   }
 
@@ -1247,9 +1252,9 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     double currentAlpha = alpha;
     boolean firstMove = true;
     Move bestFoundMove = null;
-    Move[][] killers = killerMoves.get();
+    final short[][] killers = killerMoves.get();
     int movesSearched = 0;
-    final Move[] quietsSearched = searchedQuiets.get()[ply];
+    final short[] quietsSearched = searchedQuiets.get()[ply];
     int quietCount = 0;
 
     final List<Move> sortedMoves = MoveSorter.STANDARD.sort(board.currentPlayer().getLegalMoves(), board, this, ply);
@@ -1340,9 +1345,10 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
         if (currentAlpha >= beta) {
           if (!move.isAttack()) {
-            if (!move.equals(killers[0][ply])) {
+            final short code = TranspositionTable.moveCode(move);
+            if (code != killers[0][ply]) {
               killers[1][ply] = killers[0][ply];
-              killers[0][ply] = move;
+              killers[0][ply] = code;
             }
             recordHistory(board, move, depth);
             penalizeSearchedQuiets(board, quietsSearched, quietCount, depth);
@@ -1357,7 +1363,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
       }
 
       if (!move.isAttack() && quietCount < MAX_TRACKED_QUIETS) {
-        quietsSearched[quietCount++] = move;
+        quietsSearched[quietCount++] = TranspositionTable.moveCode(move);
       }
 
       firstMove = false;
@@ -1608,15 +1614,18 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * moves that have yet to be refuted.
    *
    * @param board The position the moves are played from, whose side to move plays them.
-   * @param quiets The quiet moves searched at the node before the move that cut it off.
+   * @param quiets The {@link TranspositionTable#moveCode codes} of the quiet moves searched at the
+   *               node before the move that cut it off.
    * @param count The number of leading entries of quiets that hold such a move.
    * @param depth The depth at which those moves were searched.
    */
-  private void penalizeSearchedQuiets(final Board board, final Move[] quiets, final int count,
+  private void penalizeSearchedQuiets(final Board board, final short[] quiets, final int count,
                                       final int depth) {
     final int malus = -depth * depth;
+    final int historySide = historySideOf(board);
     for (int i = 0; i < count; i++) {
-      addHistory(board, quiets[i], malus);
+      addHistory(historySide, TranspositionTable.originOf(quiets[i]),
+              TranspositionTable.destinationOf(quiets[i]), malus);
     }
   }
 
@@ -1637,8 +1646,22 @@ public class AlphaBeta extends Observable implements MoveStrategy {
     if (move == null || move == MoveFactory.getNullMove()) {
       return;
     }
-    final int[] destinations = historyHeuristic[historySideOf(board)][move.getCurrentCoordinate()];
-    final int destination = move.getDestinationCoordinate();
+    addHistory(historySideOf(board), move.getCurrentCoordinate(), move.getDestinationCoordinate(),
+            bonus);
+  }
+
+  /**
+   * Adds the given amount to the history heuristic score of a move between the given squares,
+   * in the way {@link #addHistory(Board, Move, int)} describes.
+   *
+   * @param historySide The index of the side that plays the move within the history table.
+   * @param origin The square the move leaves.
+   * @param destination The square the move arrives on.
+   * @param bonus The amount to add, negative to penalize the move.
+   */
+  private void addHistory(final int historySide, final int origin, final int destination,
+                          final int bonus) {
+    final int[] destinations = historyHeuristic[historySide][origin];
     final int change = Math.max(-HISTORY_MAX, Math.min(bonus, HISTORY_MAX));
     final int score = destinations[destination];
     destinations[destination] = score + change - score * Math.abs(change) / HISTORY_MAX;

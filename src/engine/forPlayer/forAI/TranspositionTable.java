@@ -84,6 +84,26 @@ public class TranspositionTable {
             | (promotion == null ? 0 : promotion.getPieceType().ordinal() + 1));
   }
 
+  /**
+   * Returns the square a move with the given code leaves.
+   *
+   * @param moveCode A code returned by {@link #moveCode}.
+   * @return The move's origin square.
+   */
+  static int originOf(final short moveCode) {
+    return moveCode >>> 9;
+  }
+
+  /**
+   * Returns the square a move with the given code arrives on.
+   *
+   * @param moveCode A code returned by {@link #moveCode}.
+   * @return The move's destination square.
+   */
+  static int destinationOf(final short moveCode) {
+    return (moveCode >>> 3) & 63;
+  }
+
   /** Node type constant indicating an exact evaluation score within the alpha-beta window. */
   public static final byte EXACT = 0;
 
