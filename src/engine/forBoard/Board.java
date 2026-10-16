@@ -116,13 +116,9 @@ public final class Board {
   /** The number of plies since the last pawn move or capture, tracked for the fifty-move rule. */
   private int halfMoveClock;
 
-  /** The undo records for moves applied through {@link #makeMove(Move)} but not yet unmade. */
-  private final Deque<UndoState> undoStack = new ArrayDeque<>();
-
   /**
    * The undo records for null moves applied through {@link #makeNullMove()} but not yet unmade.
-   * Kept separate from {@link #undoStack} so a null move can never be popped in place of a real
-   * move. The two stacks must still be unwound in strict last-in-first-out order relative to each
+   * Moves and null moves must be unwound in strict last-in-first-out order relative to each
    * other: a move made after a null move must be unmade before that null move is unmade.
    */
   private final Deque<NullMoveUndo> nullMoveUndoStack = new ArrayDeque<>();
@@ -643,52 +639,32 @@ public final class Board {
   private int plyCount;
 
   /**
-   * Applies the given move to this board in place: relocates pieces, updates the Zobrist hash,
-   * en passant state, halfmove clock, and transition move, refreshes both players against the
-   * resulting position, and pushes an undo record onto this board's undo stack. The players of
-   * the position before the move are kept for {@link #unmakeMove()} to restore, but any player
-   * obtained after the move describes a later position once that move is unmade and another is
-   * made.
-   * <p>
-   * The move must have been generated from this exact board, since it carries a reference back
-   * to the board it was generated from and reads that board's state while computing its hash
-   * update. Passing a move generated from a different board produces an incorrect result.
+   * Applies the given move to this board in place, as {@link #makeMove(int)} applies its packed
+   * form, and records the move as the transition move. The players of the position before the
+   * move are kept for {@link #unmakeMove()} to restore, but any player obtained after the move
+   * describes a later position once that move is unmade and another is made.
    *
-   * @param move The move to apply, generated from this board's current position.
+   * @param move A move of the side to move in this board's current position.
    */
   public void makeMove(final Move move) {
-    final Alliance nextMover = this.currentPlayer.getOpponent().getAlliance();
-    final UndoState undo = move.makeMove(this);
-    this.mutationDepth++;
-    refreshPlayers(nextMover);
-    this.undoStack.push(undo);
-    if (this.nullMoveDepth == 0) {
-      if (this.positionHistorySize == this.positionHistory.length) {
-        this.positionHistory = Arrays.copyOf(this.positionHistory, this.positionHistory.length * 2);
-      }
-      this.positionHistory[this.positionHistorySize++] = this.zobristHash;
-    }
-    this.plyCount++;
+    makeMove(MoveCode.of(move));
+    this.transitionMove = move;
   }
 
   /**
-   * Reverses the most recent move applied through {@link #makeMove(Move)}, restoring this
-   * board's pieces, state, and players to exactly what they were beforehand.
+   * Reverses the most recent move, restoring this board's pieces, state, and players to exactly
+   * what they were beforehand. The move may have been applied through {@link #makeMove(Move)} or
+   * {@link #makeMove(int)}.
    *
-   * @throws IllegalStateException If no move is on the undo stack to unmake.
+   * @throws IllegalStateException If no move is applied, or a null move was applied after the
+   *                               most recent move and is still applied.
    */
   public void unmakeMove() {
-    if (this.undoStack.isEmpty()) {
-      throw new IllegalStateException("No move on the undo stack to unmake.");
+    final int move = getTransitionCode();
+    if (this.mutationDepth == 0 || move == MoveCode.NONE) {
+      throw new IllegalStateException("No move to unmake.");
     }
-    if (this.nullMoveDepth == 0) {
-      this.positionHistorySize--;
-    }
-    final UndoState undo = this.undoStack.pop();
-    undo.appliedMove().unmakeMove(this, undo);
-    this.mutationDepth--;
-    restorePlayers(undo.priorMoveMaker());
-    this.plyCount--;
+    unmakeMove(move);
   }
 
   /**
@@ -747,41 +723,21 @@ public final class Board {
 
   /**
    * Returns whether the given move is legal for the side to move, meaning it does not leave that
-   * side's own king attacked. Move generation is pseudo-legal, so this is the check that separates
-   * the moves that may actually be played from the moves that merely look playable.
-   * <p>
-   * The move is applied and reversed through {@link Move#makeMove(Board)} and
-   * {@link Move#unmakeMove(Board, UndoState)} rather than through {@link #makeMove(Move)} and
-   * {@link #unmakeMove()}, deliberately. That lower pair relocates pieces and updates position
-   * state without touching this board's players, undo stack, repetition counts, or ply count, so
-   * asking this question costs neither a board construction nor a player rebuild, and leaves the
-   * cached {@link Player} objects on this board intact for the caller to keep using afterwards.
-   * The board is restored before this method returns, whether it completes normally or throws.
-   * <p>
-   * The king's square is read before the move is applied, taking the destination square when the
-   * king itself is the piece being moved, which covers castling as well since a castle move
-   * records the king as its moved piece.
+   * side's own king attacked, as {@link #isLegal(int)} answers for its packed form. Move
+   * generation is pseudo-legal, so this is the check that separates the moves that may actually
+   * be played from the moves that merely look playable.
    *
-   * @param move The move to test, which must have been generated from this board's position.
+   * @param move A move of the side to move in this board's current position.
    * @return True if the move leaves the moving side's king unattacked, false otherwise.
    */
   public boolean isLegal(final Move move) {
-    final Player mover = this.currentPlayer;
-    final Alliance opponentAlliance = mover.getOpponent().getAlliance();
-    final int kingSquare = move.getMovedPiece().getPieceType() == Piece.PieceType.KING ?
-            move.getDestinationCoordinate() : mover.getPlayerKing().getPiecePosition();
-    final UndoState undo = move.makeMove(this);
-    try {
-      return !AttackDetector.isSquareAttacked(kingSquare, opponentAlliance, this);
-    } finally {
-      move.unmakeMove(this, undo);
-    }
+    return isLegal(MoveCode.of(move));
   }
 
   /**
-   * Applies the given packed move to this board in place, with exactly the effect
-   * {@link #makeMove(Move)} has for the equal move: pieces, bitboards, Zobrist hash, en passant
-   * pawn, halfmove clock, players, repetition history and ply count. The move is reversed by
+   * Applies the given packed move to this board in place: relocates the pieces and updates the
+   * bitboards, Zobrist hash, en passant pawn, halfmove clock, players, repetition history and ply
+   * count. The move is reversed by
    * {@link #unmakeMove(int)}, and moves and null moves applied by any of the board's methods must
    * be reversed in the opposite order to the one they were applied in. After this move
    * {@link #getTransitionMove()} returns null and {@link #getTransitionCode()} returns the move.
@@ -856,9 +812,9 @@ public final class Board {
 
   /**
    * Returns whether the given packed move is legal for the side to move, meaning it does not
-   * leave that side's own king attacked, giving the answer {@link #isLegal(Move)} gives for the
-   * equal move. Only the pieces are moved to answer, and they are restored before this method
-   * returns.
+   * leave that side's own king attacked. Only the pieces are moved to answer, and they are
+   * restored before this method returns, so the players and their cached move lists are left as
+   * they were.
    *
    * @param move A move {@link MoveGenerator} generates for the side to move in this position.
    * @return True if the move leaves the moving side's king unattacked, false otherwise.
@@ -971,7 +927,7 @@ public final class Board {
 
   /**
    * Returns the Zobrist hash the given packed move leaves, computed from this board before the
-   * move in the way the {@link Move} subclasses compute it for the equal move.
+   * move.
    *
    * @param move The move.
    * @param moved The piece on the move's origin square.
@@ -1123,12 +1079,11 @@ public final class Board {
   /**
    * Places a piece on the board at its own reported position, adding it to the board's piece
    * configuration and bitboards, marking the appropriate alliance's piece list for rebuilding,
-   * and recording it as that alliance's king if it is one. The square must be empty. Used only by
-   * the mutating makeMove/unmakeMove path in the {@link Move} hierarchy.
+   * and recording it as that alliance's king if it is one. The square must be empty.
    *
    * @param piece The piece to place, at the square given by its own position.
    */
-  void placePiece(final Piece piece) {
+  private void placePiece(final Piece piece) {
     this.boardConfig[piece.getPiecePosition()] = piece;
     setBit(piece);
     if (piece.getPieceType() == Piece.PieceType.KING) {
@@ -1139,11 +1094,10 @@ public final class Board {
   /**
    * Removes whatever piece occupies the given square, if any, from the board's piece
    * configuration and bitboards, and marks the appropriate alliance's piece list for rebuilding.
-   * Used only by the mutating makeMove/unmakeMove path in the {@link Move} hierarchy.
    *
    * @param coordinate The square to clear.
    */
-  void removePiece(final int coordinate) {
+  private void removePiece(final int coordinate) {
     final Piece piece = this.boardConfig[coordinate];
     if (piece == null) {
       return;
@@ -1188,46 +1142,6 @@ public final class Board {
    */
   private static int bitboardIndex(final Alliance alliance, final Piece.PieceType pieceType) {
     return (alliance.isWhite() ? 0 : PIECE_TYPE_COUNT) + pieceType.ordinal();
-  }
-
-  /**
-   * Sets the en passant pawn directly, without going through a Builder. Used only by the
-   * mutating makeMove/unmakeMove path in the {@link Move} hierarchy.
-   *
-   * @param pawn The pawn now susceptible to en passant capture, or null if there is none.
-   */
-  void setEnPassantPawn(final Pawn pawn) {
-    this.enPassantPawn = pawn;
-  }
-
-  /**
-   * Sets the Zobrist hash directly, without going through a Builder. Used only by the mutating
-   * makeMove/unmakeMove path in the {@link Move} hierarchy.
-   *
-   * @param zobristHash The new Zobrist hash value.
-   */
-  void setZobristHash(final long zobristHash) {
-    this.zobristHash = zobristHash;
-  }
-
-  /**
-   * Sets the transition move directly, without going through a Builder. Used only by the
-   * mutating makeMove/unmakeMove path in the {@link Move} hierarchy.
-   *
-   * @param move The move to record as having produced the current position.
-   */
-  void setTransitionMove(final Move move) {
-    this.transitionMove = move;
-  }
-
-  /**
-   * Sets the halfmove clock directly, without going through a Builder. Used only by the
-   * mutating makeMove/unmakeMove path in the {@link Move} hierarchy.
-   *
-   * @param halfMoveClock The new halfmove clock value.
-   */
-  void setHalfMoveClock(final int halfMoveClock) {
-    this.halfMoveClock = halfMoveClock;
   }
 
   /**

@@ -119,18 +119,9 @@ public abstract class Piece {
   public abstract int locationBonus(final Board board);
 
   /**
-   * Abstract method for moving the piece according to the given move.
-   *
-   * @param move The move to be made.
-   * @return A new Piece instance after the move is made.
-   */
-  public abstract Piece movePiece(final Move move);
-
-  /**
    * Returns the piece of the given type and alliance as it stands after a move to the given
    * square: one marked as having moved, which for a king has castled exactly when the move
-   * castles and keeps no castling right. This is the piece {@link #movePiece(Move)} returns for
-   * such a move, or one equal to it, and it is shared rather than created.
+   * castles and keeps no castling right. The piece is shared rather than created.
    *
    * @param type The type of the piece after the move, being the promotion type for a promotion.
    * @param alliance The alliance of the piece.

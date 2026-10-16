@@ -259,18 +259,6 @@ public final class King extends Piece {
   }
 
   /**
-   * Creates a new King instance representing this king after executing the given move.
-   * The new king will have updated position and status information based on the move type.
-   *
-   * @param move The move being executed.
-   * @return A new King instance reflecting the post-move state.
-   */
-  @Override
-  public King movePiece(final Move move) {
-    return new King(this.pieceAlliance, move.getDestinationCoordinate(), false, move.isCastlingMove(), false, false);
-  }
-
-  /**
    * Compares this King with another object for equality.
    * Kings are equal if they have the same basic piece properties and castling status.
    *

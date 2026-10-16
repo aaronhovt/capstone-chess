@@ -206,18 +206,6 @@ public final class Rook extends Piece {
   }
 
   /**
-   * Creates a new rook piece after a given move is made. This method is used to update the piece's position after a
-   * legal move is executed on the board.
-   *
-   * @param move The move that is being made.
-   * @return A new rook piece after the specified move is made on the chessboard.
-   */
-  @Override
-  public Rook movePiece(final Move move) {
-    return PieceUtils.Instance.getMovedRook(move.getMovedPiece().getPieceAllegiance(), move.getDestinationCoordinate());
-  }
-
-  /**
    * Returns a string representation of the rook piece.
    *
    * @return A string representation of the rook piece.

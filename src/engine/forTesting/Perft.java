@@ -350,24 +350,22 @@ public class Perft {
   }
 
   /**
-   * Checks that applying the given packed move through {@link Board#makeMove(int)} leaves the
-   * position {@link Board#makeMove(Move)} leaves for the equal move, with pieces compared by
-   * value, that {@link Board#unmakeMove(int)} restores the board exactly, with pieces and players
-   * compared by identity, that {@link Board#isLegal(int)} and the static exchange score of the
-   * packed move agree with those of the move, and that {@link AttackDetector#givesCheck} answers
-   * whether making the move gives check.
+   * Checks that applying the given packed move through {@link Board#makeMove(int)} records it as
+   * the transition code and leaves bitboards that agree with the pieces, that
+   * {@link Board#unmakeMove(int)} and {@link Board#isLegal(int)} each restore the board exactly,
+   * with pieces and players compared by identity, that the static exchange score of the packed
+   * move agrees with that of the move, and that {@link AttackDetector#givesCheck} answers whether
+   * making the move gives check.
    *
    * @param board The board, standing in the position the move belongs to. Restored before this
    *              method returns.
    * @param move The move.
    * @param code The packed move equal to it.
-   * @return A description of the first difference found, or null if the two paths agree.
+   * @return A description of the first difference found, or null if every check passes.
    */
   private static String describeIntMoveFault(final Board board, final Move move, final int code) {
     final Snapshot before = Snapshot.of(board);
-    if (board.isLegal(move) != board.isLegal(code)) {
-      return "isLegal(int) answers " + board.isLegal(code) + ".";
-    }
+    board.isLegal(code);
     final StaticExchangeEvaluator exchange = StaticExchangeEvaluator.get();
     if (exchange.evaluate(board, move) != exchange.evaluate(board, code)) {
       return "the static exchange score of the packed move is " +
@@ -379,22 +377,13 @@ public class Perft {
     }
 
     final boolean predictedCheck = AttackDetector.givesCheck(board, code);
-    board.makeMove(move);
-    final Snapshot objectAfter = Snapshot.of(board);
-    final boolean givesCheck = board.currentPlayer().isInCheck();
-    board.unmakeMove();
-    if (predictedCheck != givesCheck) {
-      return "givesCheck(int) answers " + predictedCheck + ".";
-    }
-
     board.makeMove(code);
     try {
       if (board.getTransitionCode() != code) {
         return "makeMove(int) left transition code " + board.getTransitionCode() + ".";
       }
-      final String valueFault = objectAfter.describeValueDifference(Snapshot.of(board));
-      if (valueFault != null) {
-        return "makeMove(int) differs from makeMove(Move): " + valueFault;
+      if (predictedCheck != board.currentPlayer().isInCheck()) {
+        return "givesCheck(int) answers " + predictedCheck + ".";
       }
       final String bitboardFault = describeBitboardFault(board);
       if (bitboardFault != null) {
@@ -451,29 +440,6 @@ public class Perft {
     }
 
     /**
-     * Describes the first way the given state differs from this one, comparing pieces, kings
-     * and the en passant pawn by value and leaving out the transition move and the players
-     * other than the side to move.
-     *
-     * @param other The other state.
-     * @return A description of the difference, or null if there is none.
-     */
-    String describeValueDifference(final Snapshot other) {
-      for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
-        if (!samePiece(this.pieces[square], other.pieces[square])) {
-          return "the piece on " + BoardUtils.getPositionAtCoordinate(square) + " differs.";
-        }
-      }
-      if (!samePiece(this.whiteKing, other.whiteKing) || !samePiece(this.blackKing, other.blackKing)) {
-        return "a king differs.";
-      }
-      if (!samePiece(this.enPassantPawn, other.enPassantPawn)) {
-        return "the en passant pawn differs.";
-      }
-      return describeCountDifference(other);
-    }
-
-    /**
      * Describes the first way the given state differs from this one, comparing pieces, kings,
      * the en passant pawn, the transition move and the players by identity.
      *
@@ -522,32 +488,6 @@ public class Perft {
         return "the side to move differs.";
       }
       return null;
-    }
-
-    /**
-     * Determines whether two pieces are equal in type, alliance, square, moved status and, for
-     * kings, castling status and rights.
-     *
-     * @param first One piece, or null.
-     * @param second The other piece, or null.
-     * @return True if both are null or the pieces are equal in those respects.
-     */
-    private static boolean samePiece(final Piece first, final Piece second) {
-      if (first == null || second == null) {
-        return first == second;
-      }
-      if (first.getPieceType() != second.getPieceType() ||
-              first.getPieceAllegiance() != second.getPieceAllegiance() ||
-              first.getPiecePosition() != second.getPiecePosition() ||
-              first.isFirstMove() != second.isFirstMove()) {
-        return false;
-      }
-      if (first instanceof King firstKing && second instanceof King secondKing) {
-        return firstKing.isCastled() == secondKing.isCastled() &&
-                firstKing.isKingSideCastleCapable() == secondKing.isKingSideCastleCapable() &&
-                firstKing.isQueenSideCastleCapable() == secondKing.isQueenSideCastleCapable();
-      }
-      return true;
     }
   }
 

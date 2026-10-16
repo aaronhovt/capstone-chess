@@ -176,17 +176,6 @@ public final class Knight extends Piece {
   }
 
   /**
-   * Creates a new Knight instance after making the given move.
-   *
-   * @param move The move to be made.
-   * @return A new Knight instance after the move is made.
-   */
-  @Override
-  public Knight movePiece(final Move move) {
-    return PieceUtils.Instance.getMovedKnight(move.getMovedPiece().getPieceAllegiance(), move.getDestinationCoordinate());
-  }
-
-  /**
    * Returns a string representation of the knight.
    *
    * @return The string representation of the knight.

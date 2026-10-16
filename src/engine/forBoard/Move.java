@@ -12,12 +12,8 @@ import engine.forPiece.Rook;
  * Different types of moves are represented by specialized subclasses, each implementing
  * the specific behavior and rules for that move type.
  * <p>
- * A move is applied through {@link #makeMove(Board)} and reversed through
- * {@link #unmakeMove(Board, UndoState)}, which mutate a given board in place and undo that change
- * from an {@link UndoState} rather than by holding onto a prior Board reference. Subclasses whose
- * application is a plain relocation of the moved piece do not need to override either method; only
- * {@link PawnJump}, {@link PawnEnPassantAttack}, {@link CastleMove}, and {@link PawnPromotion} do,
- * because each of them changes something beyond the moved piece itself.
+ * A move is applied to a board through {@link Board#makeMove(Move)}, which applies its packed
+ * form, {@link MoveCode#of(Move)}.
  *
  * @author Aaron Ho
  */
@@ -198,151 +194,6 @@ public abstract class Move {
   }
 
   /**
-   * Updates the Zobrist hash for this move.
-   * This default implementation handles standard piece movement.
-   * Subclasses should override this method for special moves.
-   *
-   * @param currentHash The current board hash.
-   * @return The updated hash.
-   */
-  protected long updateZobristHash(final long currentHash) {
-    long hash = ZobristHashing.updateHashPieceMove(
-            currentHash,
-            this.movedPiece,
-            this.getCurrentCoordinate(),
-            this.getDestinationCoordinate()
-    );
-
-    hash = ZobristHashing.updateHashSideToMove(hash);
-    hash = clearCastlingRightsForMove(hash, this.board, this.movedPiece, this.getCurrentCoordinate());
-    if (this.board.getEnPassantPawn() != null) {
-      final int enPassantFile = this.board.getEnPassantPawn().getPiecePosition() % 8;
-      hash = ZobristHashing.updateHashEnPassant(hash, enPassantFile);
-    }
-
-    return hash;
-  }
-
-  /**
-   * Clears the Zobrist castling-rights bits affected by a king or rook leaving its square,
-   * shared by every move type's {@link #updateZobristHash} since a lost castling right is
-   * removed the same way regardless of what kind of move caused it.
-   *
-   * @param hash The hash to update.
-   * @param board The board the move is being made from.
-   * @param movedPiece The piece being moved.
-   * @param fromPosition The square the piece is moving from.
-   * @return The updated hash.
-   */
-  private static long clearCastlingRightsForMove(long hash, final Board board, final Piece movedPiece, final int fromPosition) {
-    if (movedPiece.getPieceType() == Piece.PieceType.KING) {
-      final boolean isWhite = movedPiece.getPieceAllegiance().isWhite();
-      if (isWhite) {
-        if (ZobristHashing.canCastle(board, true, true)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 0);
-        }
-        if (ZobristHashing.canCastle(board, true, false)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 1);
-        }
-      } else {
-        if (ZobristHashing.canCastle(board, false, true)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 2);
-        }
-        if (ZobristHashing.canCastle(board, false, false)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 3);
-        }
-      }
-    } else if (movedPiece.getPieceType() == Piece.PieceType.ROOK) {
-      final boolean isWhite = movedPiece.getPieceAllegiance().isWhite();
-      if (isWhite) {
-        if (fromPosition == 56 && ZobristHashing.canCastle(board, true, false)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 1);
-        } else if (fromPosition == 63 && ZobristHashing.canCastle(board, true, true)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 0);
-        }
-      } else {
-        if (fromPosition == 0 && ZobristHashing.canCastle(board, false, false)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 3);
-        } else if (fromPosition == 7 && ZobristHashing.canCastle(board, false, true)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 2);
-        }
-      }
-    }
-    return hash;
-  }
-
-  /**
-   * Applies this move to the given board in place: relocates the moved piece, updates the
-   * board's Zobrist hash, en passant state, halfmove clock, and transition move, and returns
-   * an {@link UndoState} that {@link #unmakeMove} can use to reverse exactly this change.
-   * This base implementation covers a plain relocation and an ordinary capture alike, since a
-   * captured piece is simply whatever occupied the destination square beforehand; subclasses that
-   * need to do more than that (castling, which also relocates the rook, en passant, whose captured
-   * pawn does not sit on the destination square, promotion, which replaces the moved pawn, and the
-   * pawn jump, which sets the en passant flag) override this method.
-   * <p>
-   * This method does not touch the board's current player or cached legal moves; the caller
-   * ({@link Board#makeMove(Move)}) is responsible for refreshing those after this returns.
-   *
-   * @param board The board to mutate, which need not be the instance this move was generated
-   *              from but must stand in the same position as it, since
-   *              {@link #updateZobristHash} reads castling rights and en passant state from the
-   *              board this move was generated against rather than from this parameter.
-   * @return The undo state needed to reverse this move.
-   */
-  public UndoState makeMove(final Board board) {
-    final Piece capturedPiece = board.getPiece(this.destinationCoordinate);
-    final UndoState undo = new UndoState(this.movedPiece, capturedPiece, null,
-            this.destinationCoordinate, -1,
-            board.getEnPassantPawn(), board.getZobristHash(), board.getHalfMoveClock(),
-            board.getTransitionMove(), board.currentPlayer().getAlliance(), this);
-
-    final long newHash = updateZobristHash(board.getZobristHash());
-
-    board.removePiece(this.movedPiece.getPiecePosition());
-    if (capturedPiece != null) {
-      board.removePiece(this.destinationCoordinate);
-    }
-    board.placePiece(this.movedPiece.movePiece(this));
-
-    board.setZobristHash(newHash);
-    board.setEnPassantPawn(null);
-    board.setHalfMoveClock(resetsHalfMoveClock() ? 0 : board.getHalfMoveClock() + 1);
-    board.setTransitionMove(this);
-
-    return undo;
-  }
-
-  /**
-   * Reverses the effect of {@link #makeMove}, restoring the board's pieces, Zobrist hash,
-   * en passant state, halfmove clock, and transition move to exactly what they were beforehand.
-   *
-   * @param board The board to restore, which must be the same board {@link #makeMove} mutated.
-   * @param undo The undo state returned by the matching {@link #makeMove} call.
-   */
-  public void unmakeMove(final Board board, final UndoState undo) {
-    board.removePiece(undo.destinationCoordinate());
-    board.placePiece(undo.movedPieceBefore());
-    if (undo.capturedPiece() != null) {
-      board.placePiece(undo.capturedPiece());
-    }
-    board.setZobristHash(undo.priorZobristHash());
-    board.setEnPassantPawn(undo.priorEnPassantPawn());
-    board.setHalfMoveClock(undo.priorHalfMoveClock());
-    board.setTransitionMove(undo.priorTransitionMove());
-  }
-
-  /**
-   * Determines whether this move resets the halfmove clock under the fifty-move rule, which
-   * happens for any pawn move or any capture.
-   *
-   * @return True if this move should reset the halfmove clock to zero.
-   */
-  protected boolean resetsHalfMoveClock() {
-    return this.movedPiece.getPieceType() == Piece.PieceType.PAWN || isAttack();
-  }
-
-  /**
    * Generates disambiguation information for moves involving pieces of the same type, resolved
    * against the position the move is being played from.
    *
@@ -426,54 +277,6 @@ public abstract class Move {
     public boolean isAttack() {
       return true;
     }
-
-    /**
-     * Updates the Zobrist hash for this attack move.
-     *
-     * @param currentHash The current board hash.
-     * @return The updated hash.
-     */
-    @Override
-    protected long updateZobristHash(final long currentHash) {
-      long hash = ZobristHashing.updateHashPieceCapture(
-              currentHash,
-              this.attackedPiece
-      );
-
-      hash = ZobristHashing.updateHashPieceMove(
-              hash,
-              this.movedPiece,
-              this.getCurrentCoordinate(),
-              this.getDestinationCoordinate()
-      );
-
-      hash = ZobristHashing.updateHashSideToMove(hash);
-      hash = clearCastlingRightsForMove(hash, this.board, this.movedPiece, this.getCurrentCoordinate());
-      if (this.attackedPiece.getPieceType() == Piece.PieceType.ROOK) {
-        final boolean isWhiteRook = this.attackedPiece.getPieceAllegiance().isWhite();
-        final int rookPosition = this.attackedPiece.getPiecePosition();
-
-        if (isWhiteRook) {
-          if (rookPosition == 56 && ZobristHashing.canCastle(this.board, true, false)) {
-            hash = ZobristHashing.updateHashCastlingRight(hash, 1);
-          } else if (rookPosition == 63 && ZobristHashing.canCastle(this.board, true, true)) {
-            hash = ZobristHashing.updateHashCastlingRight(hash, 0);
-          }
-        } else {
-          if (rookPosition == 0 && ZobristHashing.canCastle(this.board, false, false)) {
-            hash = ZobristHashing.updateHashCastlingRight(hash, 3);
-          } else if (rookPosition == 7 && ZobristHashing.canCastle(this.board, false, true)) {
-            hash = ZobristHashing.updateHashCastlingRight(hash, 2);
-          }
-        }
-      }
-
-      if (this.board.getEnPassantPawn() != null) {
-        final int enPassantFile = this.board.getEnPassantPawn().getPiecePosition() % 8;
-        hash = ZobristHashing.updateHashEnPassant(hash, enPassantFile);
-      }
-      return hash;
-    }
   }
 
   /**
@@ -507,18 +310,6 @@ public abstract class Move {
     @Override
     public int getDestinationCoordinate() {
       return -1;
-    }
-
-    /**
-     * Updates the Zobrist hash for a null move.
-     * This is a no-op as null moves should not be executed.
-     *
-     * @param currentHash The current board hash.
-     * @return The unchanged hash.
-     */
-    @Override
-    protected long updateZobristHash(final long currentHash) {
-      return currentHash;
     }
 
     /**
@@ -697,36 +488,6 @@ public abstract class Move {
     }
 
     /**
-     * Updates the Zobrist hash for this pawn jump move.
-     *
-     * @param currentHash The current board hash.
-     * @return The updated hash.
-     */
-    @Override
-    protected long updateZobristHash(final long currentHash) {
-      long hash = super.updateZobristHash(currentHash);
-
-      final int enPassantFile = this.getDestinationCoordinate() % 8;
-      hash = ZobristHashing.updateHashEnPassant(hash, enPassantFile);
-
-      return hash;
-    }
-
-    /**
-     * Applies this pawn jump to the given board in place, then marks the moved pawn as the
-     * new en passant pawn, since the base {@link Move#makeMove} always clears it.
-     *
-     * @param board The board to mutate.
-     * @return The undo state needed to reverse this move.
-     */
-    @Override
-    public UndoState makeMove(final Board board) {
-      final UndoState undo = super.makeMove(board);
-      board.setEnPassantPawn((Pawn) board.getPiece(this.destinationCoordinate));
-      return undo;
-    }
-
-    /**
      * Returns a string representation of the PawnJump move, showing only the destination coordinate.
      *
      * @return A string representing the PawnJump move.
@@ -756,53 +517,17 @@ public abstract class Move {
     public PawnEnPassantAttack(final Board board, final Piece pieceMoved, final int destinationCoordinate, final Piece pieceAttacked) {
       super(board, pieceMoved, destinationCoordinate, pieceAttacked);
     }
-
-    /**
-     * Applies this en passant capture to the given board in place. The captured pawn sits beside
-     * the destination square, not on it, so it is read from {@link Board#getEnPassantPawn()}
-     * rather than from the destination square the way the base {@link Move#makeMove} does it.
-     * The inherited {@link Move#unmakeMove} still restores it correctly, since it puts a
-     * captured piece back at its own stored position rather than at the destination square.
-     *
-     * @param board The board to mutate.
-     * @return The undo state needed to reverse this move.
-     */
-    @Override
-    public UndoState makeMove(final Board board) {
-      final Piece capturedPawn = board.getEnPassantPawn();
-      final UndoState undo = new UndoState(this.movedPiece, capturedPawn, null,
-              this.destinationCoordinate, -1,
-              board.getEnPassantPawn(), board.getZobristHash(), board.getHalfMoveClock(),
-              board.getTransitionMove(), board.currentPlayer().getAlliance(), this);
-
-      final long newHash = updateZobristHash(board.getZobristHash());
-
-      board.removePiece(this.movedPiece.getPiecePosition());
-      board.removePiece(capturedPawn.getPiecePosition());
-      board.placePiece(this.movedPiece.movePiece(this));
-
-      board.setZobristHash(newHash);
-      board.setEnPassantPawn(null);
-      board.setHalfMoveClock(0);
-      board.setTransitionMove(this);
-
-      return undo;
-    }
   }
 
   /**
    * The PawnPromotion class represents a special move in chess. When a pawn reaches
    * the opponent's back rank, it can be promoted to any other chess piece (queen, rook,
-   * bishop, or knight). This class extends a standard PawnMove by adding promotion information
-   * and handles the execution of the promotion move.
+   * bishop, or knight). This class extends a standard PawnMove by adding promotion information.
    */
   public static class PawnPromotion extends PawnMove {
 
     /** The decorated move that represents the original pawn move. */
     protected Move decoratedMove;
-
-    /** The promoted pawn that is reaching the back rank. */
-    protected Pawn promotedPawn;
 
     /** The piece to which the pawn is promoted (queen, rook, bishop, or knight). */
     protected Piece promotionPiece;
@@ -818,58 +543,7 @@ public abstract class Move {
               decoratedMove != null ? decoratedMove.getMovedPiece() : null,
               decoratedMove != null ? decoratedMove.getDestinationCoordinate() : -1);
       this.decoratedMove = decoratedMove;
-      this.promotedPawn = (decoratedMove != null && decoratedMove.getMovedPiece() instanceof Pawn) ?
-              (Pawn) decoratedMove.getMovedPiece() : null;
       this.promotionPiece = promotionPiece;
-    }
-
-    /**
-     * Updates the Zobrist hash for this pawn promotion move.
-     *
-     * @param currentHash The current board hash.
-     * @return The updated hash.
-     */
-    @Override
-    protected long updateZobristHash(final long currentHash) {
-      long hash = super.updateZobristHash(currentHash);
-
-      hash = ZobristHashing.updateHashPromotion(
-              hash,
-              this.promotedPawn,
-              this.promotionPiece,
-              this.getDestinationCoordinate()
-      );
-
-      return hash;
-    }
-
-    /**
-     * Applies this promotion to the given board in place by first applying the decorated pawn
-     * move or capture, then swapping the pawn now sitting on the destination square for the
-     * promoted piece. Composing the hash update this way, the decorated move's own
-     * {@link Move#updateZobristHash} followed by {@link ZobristHashing#updateHashPromotion},
-     * matches exactly what {@link #updateZobristHash} computes for the immutable path.
-     *
-     * @param board The board to mutate.
-     * @return The undo state needed to reverse this move, restoring the original pawn.
-     */
-    @Override
-    public UndoState makeMove(final Board board) {
-      final UndoState decoratedUndo = this.decoratedMove.makeMove(board);
-
-      final long newHash = ZobristHashing.updateHashPromotion(
-              board.getZobristHash(), this.promotedPawn, this.promotionPiece, this.destinationCoordinate);
-
-      board.removePiece(this.destinationCoordinate);
-      board.placePiece(this.promotionPiece.movePiece(this));
-      board.setZobristHash(newHash);
-      board.setTransitionMove(this);
-
-      return new UndoState(decoratedUndo.movedPieceBefore(), decoratedUndo.capturedPiece(), null,
-              this.destinationCoordinate, -1,
-              decoratedUndo.priorEnPassantPawn(), decoratedUndo.priorZobristHash(),
-              decoratedUndo.priorHalfMoveClock(), decoratedUndo.priorTransitionMove(),
-              decoratedUndo.priorMoveMaker(), this);
     }
 
     /**
@@ -960,100 +634,6 @@ public abstract class Move {
     @Override
     public boolean isCastlingMove() {
       return true;
-    }
-
-    /**
-     * Updates the Zobrist hash for this castling move.
-     *
-     * @param currentHash The current board hash.
-     * @return The updated hash.
-     */
-    @Override
-    protected long updateZobristHash(final long currentHash) {
-      long hash = ZobristHashing.updateHashCastle(
-              currentHash,
-              this.movedPiece,
-              this.castleRook,
-              this.getCurrentCoordinate(),
-              this.getDestinationCoordinate(),
-              this.castleRookStart,
-              this.castleRookDestination
-      );
-
-      hash = ZobristHashing.updateHashSideToMove(hash);
-
-      if (this.board.getEnPassantPawn() != null) {
-        final int enPassantFile = this.board.getEnPassantPawn().getPiecePosition() % 8;
-        hash = ZobristHashing.updateHashEnPassant(hash, enPassantFile);
-      }
-
-      final boolean isWhite = this.movedPiece.getPieceAllegiance().isWhite();
-      if (isWhite) {
-        if (ZobristHashing.canCastle(this.board, true, true)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 0);
-        }
-        if (ZobristHashing.canCastle(this.board, true, false)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 1);
-        }
-      } else {
-        if (ZobristHashing.canCastle(this.board, false, true)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 2);
-        }
-        if (ZobristHashing.canCastle(this.board, false, false)) {
-          hash = ZobristHashing.updateHashCastlingRight(hash, 3);
-        }
-      }
-
-      return hash;
-    }
-
-    /**
-     * Applies this castling move to the given board in place, relocating both the king and the
-     * rook, since the base {@link Move#makeMove} only relocates one piece. Castling never
-     * captures, so the undo state's captured piece is always null.
-     *
-     * @param board The board to mutate.
-     * @return The undo state needed to reverse this move, restoring both the king and the rook.
-     */
-    @Override
-    public UndoState makeMove(final Board board) {
-      final UndoState undo = new UndoState(this.movedPiece, null, this.castleRook,
-              this.destinationCoordinate, this.castleRookDestination,
-              board.getEnPassantPawn(), board.getZobristHash(), board.getHalfMoveClock(),
-              board.getTransitionMove(), board.currentPlayer().getAlliance(), this);
-
-      final long newHash = updateZobristHash(board.getZobristHash());
-
-      board.removePiece(this.movedPiece.getPiecePosition());
-      board.removePiece(this.castleRook.getPiecePosition());
-      board.placePiece(this.movedPiece.movePiece(this));
-      board.placePiece(new Rook(this.castleRook.getPieceAllegiance(), this.castleRookDestination, false, 1));
-
-      board.setZobristHash(newHash);
-      board.setEnPassantPawn(null);
-      board.setHalfMoveClock(board.getHalfMoveClock() + 1);
-      board.setTransitionMove(this);
-
-      return undo;
-    }
-
-    /**
-     * Reverses {@link #makeMove}, restoring both the king and the rook to their original squares.
-     *
-     * @param board The board to restore.
-     * @param undo The undo state returned by the matching {@link #makeMove} call.
-     */
-    @Override
-    public void unmakeMove(final Board board, final UndoState undo) {
-      board.removePiece(undo.destinationCoordinate());
-      board.removePiece(undo.castleRookDestination());
-      board.placePiece(undo.movedPieceBefore());
-      board.placePiece(undo.castleRookBefore());
-
-      board.setZobristHash(undo.priorZobristHash());
-      board.setEnPassantPawn(undo.priorEnPassantPawn());
-      board.setHalfMoveClock(undo.priorHalfMoveClock());
-      board.setTransitionMove(undo.priorTransitionMove());
     }
   }
 

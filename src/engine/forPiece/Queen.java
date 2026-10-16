@@ -209,18 +209,6 @@ public final class Queen extends Piece {
   }
 
   /**
-   * Creates and returns a new queen instance representing the piece after a move is executed.
-   * The new instance is retrieved from the piece utility pool for memory efficiency.
-   *
-   * @param move The move being executed.
-   * @return A new queen instance at the move's destination coordinate.
-   */
-  @Override
-  public Queen movePiece(final Move move) {
-    return PieceUtils.Instance.getMovedQueen(move.getMovedPiece().getPieceAllegiance(), move.getDestinationCoordinate());
-  }
-
-  /**
    * Returns the string representation of the queen piece type.
    *
    * @return The string representation of the queen ("Q").

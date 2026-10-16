@@ -206,18 +206,6 @@ public final class Bishop extends Piece {
   }
 
   /**
-   * Creates a new Bishop instance representing this piece after making the specified move.
-   * This method uses the piece pool to efficiently reuse Bishop objects.
-   *
-   * @param move The move to be executed.
-   * @return A new Bishop instance at the destination position.
-   */
-  @Override
-  public Bishop movePiece(final Move move) {
-    return PieceUtils.Instance.getMovedBishop(move.getMovedPiece().getPieceAllegiance(), move.getDestinationCoordinate());
-  }
-
-  /**
    * Returns the string representation of this bishop piece.
    *
    * @return The character "B" representing a bishop.

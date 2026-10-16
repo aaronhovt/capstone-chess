@@ -297,16 +297,4 @@ public final class Pawn extends Piece {
   public String toString() {
     return this.pieceType.toString();
   }
-
-  /**
-   * Creates a new Pawn instance representing this pawn after the specified move is executed.
-   * The new pawn will be positioned at the move's destination coordinate.
-   *
-   * @param move The move to be executed.
-   * @return A new Pawn instance at the destination position.
-   */
-  @Override
-  public Pawn movePiece(final Move move) {
-    return PieceUtils.Instance.getMovedPawn(move.getMovedPiece().getPieceAllegiance(), move.getDestinationCoordinate());
-  }
 }
