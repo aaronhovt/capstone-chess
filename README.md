@@ -182,9 +182,19 @@ that a change helped without saying where the engine stands. The evaluation stil
 residuals on material-equal positions, which is the current limit on its positional play and the
 focus of ongoing work.
 
+## Acknowledgments
+
+The engine began from Amir Afghani's [BlackWidow-Chess](https://github.com/amir650/BlackWidow-Chess)
+and his video walkthrough of it, which supplied the original board, move, piece, player, and Swing
+interface classes. Those classes have since been reworked, and the search, evaluation, bitboard
+move generation, and testing code were written for this project.
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+The project is licensed under the MIT License (see [LICENSE](LICENSE)), except for the files derived
+from BlackWidow-Chess. Those are licensed under the GNU Lesser General Public License, version 2.1
+(see [LICENSE-LGPL-2.1](LICENSE-LGPL-2.1)), and each carries a header saying so.
+[NOTICE](NOTICE) lists them.
 
 ## Contact
 
