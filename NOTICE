@@ -1,42 +1,11 @@
 Capstone Chess
 Copyright (c) 2023-2026 Aaron Ho
 
-This project is licensed under the MIT License (see LICENSE), except for the files listed
-below.
+This project is licensed under the MIT License (see LICENSE).
 
-The files listed below are derived from BlackWidow-Chess by Amir Afghani
-(https://github.com/amir650/BlackWidow-Chess), copyright (c) 2014-2023 Amir Afghani, and
-have been modified by Aaron Ho between 2023 and 2026. They are licensed under the GNU Lesser
-General Public License, version 2.1 (see LICENSE-LGPL-2.1), not under the MIT License. Each
-carries a header saying so.
-
-  src/engine/Alliance.java
-  src/engine/forBoard/Board.java
-  src/engine/forBoard/BoardUtils.java
-  src/engine/forBoard/Move.java
-  src/engine/forBoard/MoveUtils.java
-  src/engine/forGUI/DebugPanel.java
-  src/engine/forGUI/GameHistoryPanel.java
-  src/engine/forGUI/GameSetup.java
-  src/engine/forGUI/Table.java
-  src/engine/forPiece/Bishop.java
-  src/engine/forPiece/King.java
-  src/engine/forPiece/Knight.java
-  src/engine/forPiece/Pawn.java
-  src/engine/forPiece/Piece.java
-  src/engine/forPiece/PieceUtils.java
-  src/engine/forPiece/Queen.java
-  src/engine/forPiece/Rook.java
-  src/engine/forPlayer/BlackPlayer.java
-  src/engine/forPlayer/Player.java
-  src/engine/forPlayer/WhitePlayer.java
-  src/engine/forPlayer/forAI/BoardEvaluator.java
-  src/engine/forPlayer/forAI/MoveStrategy.java
-
-Earlier commits in this repository, including the v1.0 and v1.1 releases, contain further
-code and images from BlackWidow-Chess, among them src/engine/forBoard/Tile.java, the piece
-images in the initial commit, and art/misc/green_dot.png, red_dot.png and illegal.png. That material was
-published with only an MIT notice, but it is covered by the GNU Lesser General Public
-License, version 2.1, and not by the MIT License.
-
-The source code for every LGPL-licensed file is in this repository.
+Parts of it are derived from BlackWidow-Chess by Amir Afghani
+(https://github.com/amir650/BlackWidow-Chess), copyright (c) 2014-2023 Amir Afghani, which is
+published under the GNU Lesser General Public License, version 2.1. Amir Afghani gave written
+permission by email on 2026-10-16 for Aaron Ho's modifications of his code to be distributed
+under the MIT License, including the versions published before that date, so the whole of this
+project, its earlier commits and its releases are covered by the MIT License.

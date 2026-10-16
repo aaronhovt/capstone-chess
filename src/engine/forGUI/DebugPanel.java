@@ -1,13 +1,3 @@
-/*
- * Derived from BlackWidow-Chess by Amir Afghani (https://github.com/amir650/BlackWidow-Chess).
- * Copyright (c) 2014-2023 Amir Afghani
- * Modified by Aaron Ho, 2023-2026. Modifications copyright (c) 2023-2026 Aaron Ho
- *
- * This file is licensed under the GNU Lesser General Public License, version 2.1, not under the
- * MIT License that covers the rest of this project. See LICENSE-LGPL-2.1 and NOTICE.
- *
- * SPDX-License-Identifier: LGPL-2.1-only
- */
 package engine.forGUI;
 
 import javax.swing.*;

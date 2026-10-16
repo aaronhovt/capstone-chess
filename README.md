@@ -191,10 +191,8 @@ move generation, and testing code were written for this project.
 
 ## License
 
-The project is licensed under the MIT License (see [LICENSE](LICENSE)), except for the files derived
-from BlackWidow-Chess. Those are licensed under the GNU Lesser General Public License, version 2.1
-(see [LICENSE-LGPL-2.1](LICENSE-LGPL-2.1)), and each carries a header saying so.
-[NOTICE](NOTICE) lists them.
+MIT. See [LICENSE](LICENSE). The code derived from BlackWidow-Chess is distributed under the MIT
+License with its author's written permission, as [NOTICE](NOTICE) records.
 
 ## Contact
 
