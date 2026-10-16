@@ -2,9 +2,9 @@
 
 A chess engine written in Java. It began as a STEM Academy capstone project at Essex High School
 between January 2023 and May 2025 and has been developed continuously since. The repository holds
-20,818 lines across 47 source files and carries three front ends: a Swing interface for playing the
-engine by hand, a UCI adapter that lets another program drive it, and a testing package that
-validates move generation, search, and evaluation.
+21,028 lines of Java and Javadoc across 52 source files and carries three front ends: a Swing
+interface for playing the engine by hand, a UCI adapter that lets another program drive it, and a
+testing package that validates move generation, search, and evaluation.
 
 ## Requirements
 
@@ -22,7 +22,7 @@ build script will not run there.
 ## Running a Release
 
 Both jars are attached to each entry on the
-[Releases](https://github.com/aaronhovt/capstone-chess/releases) page.
+[Releases](https://github.com/aaronho01/capstoneChess/releases) page.
 
 `CapstoneChess.jar` is the graphical interface. It needs the `lib/` and `art/` directories beside it,
 since its manifest resolves Batik out of `lib/`.
@@ -40,7 +40,8 @@ java -jar capstone-chess-uci.jar
 
 It answers `uci`, `isready`, `ucinewgame`, `setoption`, `position`, `go`, and `quit`. The `position`
 command accepts `startpos` or `fen` with an optional `moves` list, and `go` accepts `depth`, `nodes`,
-and `movetime` limits. `Hash` and `Threads` are exposed as options.
+and `movetime` limits as well as the `wtime`, `btime`, `winc`, and `binc` clock. `Hash` and
+`Threads` are exposed as options.
 
 A release documents one build. The repository moves ahead of it between releases, so build from
 source to run current code.
@@ -92,12 +93,15 @@ Every tool but the bench exits with a non-zero status when a check fails, which 
 one to gate a commit.
 
 **PerftSuite** counts the leaf nodes of the move tree for seven reference positions and compares them
-against published counts, to depth four by default. `--verify-hash` adds a walk checking that the
+against published counts, to depth four by default. `--int-moves` takes the counts with the packed
+int move generator instead of move objects. `--verify-hash` adds a walk checking that the
 incrementally updated Zobrist hash of every position matches one computed from scratch.
-`--verify-mutation` adds a walk checking that making and unmaking a move, including a null move,
-restores the board exactly. The `divide` subcommand breaks a single position down by root move, which
-is how a count mismatch gets localized. Depths past five are expensive, since the engine regenerates
-the legal moves of both players at every node. This is the gate for any move generation change.
+`--verify-mutation` adds a walk checking that copying the board, making and unmaking a move, and
+making and unmaking a null move each restore the position exactly, that the bitboards and piece
+lists agree with the pieces on the board, that the int move generator produces exactly the legal
+move list, and that making a move as a packed int matches making it as a move object. The `divide`
+subcommand breaks a single position down by root move, which is how a count mismatch gets
+localized. Depths past five are expensive. This is the gate for any move generation change.
 
 **TacticalSuite** searches nineteen positions grouped into mate, material, and draw categories. Each
 position carries its own recorded depth, and it counts as solved only when the engine both plays an
@@ -108,18 +112,21 @@ own transposition table. `--category` restricts the run and `--verbose` prints t
 position. A depth argument overrides every recorded depth, and overriding downward is expected to
 fail positions. This is the gate for any search or evaluation change.
 
-**EvaluationSuite** reports three checks over eight positions. Balance prints the score each
-evaluator gives. Mirror symmetry prints the residual left when a position is added to its
-colour-mirrored twin, which is zero for an evaluation that treats both colours alike. Side to move
-prints the difference between evaluating one placement with each side to move. Only the mirror check
-carries a verdict, and it is the one that can fail the run.
+**EvaluationSuite** reports four quantities over eight positions for the middlegame, endgame, and
+tapered evaluators. Balance prints the score each evaluator gives. Agreement prints the spread
+between the highest and lowest score the evaluators give a position. Mirror symmetry prints the
+residual left when a position is added to its colour-mirrored twin, which is zero for an evaluation
+that treats both colours alike. Side to move prints the difference between evaluating one placement
+with each side to move. Only the mirror check carries a verdict, and it is the one that can fail the
+run.
 
-**EvaluationBench** runs all three evaluators over 150 positions, fifty per phase, with no search. It
-reports the bytes one evaluation allocates as measured after a warmup, the fastest and median batch
-times, the resulting rate, and a checksum folding the raw bits of every score. Nothing here can fail,
-so it always exits zero. The checksum is what makes a behaviour-preserving evaluation refactor
-checkable, and the allocation figure is where evaluator cost actually shows, since the evaluator is a
-small fraction of tactical suite runtime.
+**EvaluationBench** runs the middlegame, endgame, and tapered evaluators over 150 positions, fifty
+per phase, with no search. It reports the bytes one evaluation allocates as measured after a warmup,
+the fastest and median batch times, the resulting rate, and a checksum folding the raw bits of every
+score. Nothing here can fail, so it always exits zero. The checksum is what makes a
+behaviour-preserving evaluation refactor checkable. Each position's legal moves are generated once
+during the warmup and reused, so the bench measures the evaluators' own work but not the move
+generation they trigger inside a search, which is a large part of what evaluation costs there.
 
 **OpeningBook** verifies the 33,398-line book at `book/openings.txt`, or a book at a given path. A line
 holds the moves of one opening in long algebraic notation, its ECO code, and its name, separated by
@@ -151,36 +158,39 @@ be built this way, which sets the oldest ref a comparison can reach back to.
 
 | Package | Lines | Responsibility |
 | --- | --- | --- |
-| `engine` | 358 | The alliance type and the entry point that opens the interface. |
-| `engine.forBoard` | 3,087 | Board and tile representation, moves, make and unmake, undo state, Zobrist hashing. |
-| `engine.forPiece` | 1,946 | The piece hierarchy and the candidate move generation for each piece type. |
-| `engine.forPlayer` | 513 | Per-colour legal move generation and check, mate, and castling state. |
-| `engine.forPlayer.forAI` | 7,027 | Search, transposition table, evaluation cache, the three phase evaluators, static exchange evaluation, and phase detection. |
-| `engine.forGUI` | 1,659 | The Swing interface, move history, debug panel, and game setup dialog. |
-| `engine.forTesting` | 5,795 | Perft, tactical, evaluation, and bench suites, FEN parsing, the opening book, and the self-play harness. |
-| `engine.forUCI` | 433 | The UCI adapter. |
+| `engine` | 305 | The alliance type and the entry point that opens the interface. |
+| `engine.forBoard` | 3,403 | Board state with piece bitboards, move objects and packed int moves, the int move generator, attack detection, make and unmake, undo state, Zobrist hashing. |
+| `engine.forPiece` | 1,948 | The piece hierarchy and the candidate move generation for each piece type. |
+| `engine.forPlayer` | 463 | Per-colour legal move generation and check, mate, and castling state. |
+| `engine.forPlayer.forAI` | 6,301 | Search, transposition table, evaluation and pawn structure caches, the middlegame and endgame evaluators and the tapered evaluator that blends them, evaluation weights, and static exchange evaluation. |
+| `engine.forGUI` | 1,343 | The Swing interface, move history, debug panel, and game setup dialog. |
+| `engine.forTesting` | 6,828 | Perft, tactical, evaluation, and bench suites, FEN parsing, the opening book, the self-play harness with its match statistics and adjudication, and the Texel tuner. |
+| `engine.forUCI` | 437 | The UCI adapter. |
 
 Outside the source tree, `art/` holds the piece artwork, `book/` holds the opening book, and `lib/`
 holds the vendored dependencies.
 
 ## Current Capability
 
-Move generation matches the published perft counts at the tested depths and passes both the hash
-consistency walk and the make and unmake walk.
+Move generation runs on bitboards, matches the published perft counts at the tested depths, and
+passes both the hash consistency walk and the make and unmake walk.
 
-Search is alpha-beta with iterative deepening, aspiration windows, Lazy SMP across threads, a
-transposition table, quiescence search with delta pruning, null move pruning, late move reductions,
-futility and razoring margins, and move ordering drawn from killer moves, history, countermoves, and
-static exchange evaluation.
+Search is a negamax alpha-beta with principal variation search, iterative deepening, aspiration
+windows, Lazy SMP across threads, a transposition table, quiescence search with delta pruning, null
+move pruning with verification at depth, logarithmic late move reductions, late move pruning,
+reverse futility and futility pruning, razoring, pruning of losing captures by static exchange
+evaluation, and move ordering drawn from killer moves, history, countermoves, and static exchange
+evaluation.
 
-Evaluation uses three separate evaluators, one for each phase of the game, chosen per search.
+Evaluation blends a middlegame and an endgame evaluator by the material left on the board. Their
+weights were tuned with the Texel tuner in the testing package.
 
-The honest limits are worth stating plainly. The engine has never played a rated opponent or any
-external engine, so its absolute strength is unknown and no rating is claimed for it. The self-play
-harness measures the difference between two revisions of this engine and nothing else, so it can show
-that a change helped without saying where the engine stands. The evaluation still carries large
-residuals on material-equal positions, which is the current limit on its positional play and the
-focus of ongoing work.
+In a gauntlet of 1,720 games at 60 seconds plus 0.6 seconds a move, played single-threaded against
+Blunder 7.1.0 and 8.5.5 and Leorik 2.1 and 2.4, revision 2841e15 rated 2528 ± 13 on the CCRL Blitz
+scale, fitted with Ordo using those four engines' CCRL Blitz ratings as anchors. The self-play
+harness measures the difference between two revisions of this engine and nothing else, so it shows
+whether a change helped, while a gauntlet against rated engines is what says where the engine
+stands.
 
 ## Acknowledgments
 
