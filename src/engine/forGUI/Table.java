@@ -154,7 +154,7 @@ public final class Table {
 
   /**
    * Returns the message announcing the end of the game, if it has ended by checkmate, stalemate,
-   * threefold repetition or the fifty-move rule.
+   * threefold repetition, the fifty-move rule or insufficient material.
    *
    * @param toMove The player to move.
    * @return The message, or null if the game goes on.
@@ -171,6 +171,9 @@ public final class Table {
     }
     if (this.board.isFiftyMoveRule()) {
       return "Game Over: Draw by the fifty-move rule.";
+    }
+    if (this.board.isInsufficientMaterial()) {
+      return "Game Over: Draw by insufficient material.";
     }
     return null;
   }
