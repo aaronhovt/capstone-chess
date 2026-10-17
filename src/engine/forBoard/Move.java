@@ -1,69 +1,141 @@
 package engine.forBoard;
 
-import engine.forPiece.Pawn;
 import engine.forPiece.Piece;
-import engine.forPiece.Rook;
 
 /**
- * The Move class represents a move in a game of chess.
- * This abstract class provides the base functionality for all types of chess moves,
- * including standard moves, attack moves, castling, en passant, and pawn promotion.
- * <p>
- * Different types of moves are represented by specialized subclasses, each implementing
- * the specific behavior and rules for that move type.
+ * A move of a chess game as an object, for the code that works with moves outside the search:
+ * the GUI, the UCI adapter, the opening book and the testing tools. Each one wraps a packed move
+ * from {@link MoveGenerator} together with the pieces it involves, read from the board it was
+ * created on. The search works on the packed moves directly.
  * <p>
  * A move is applied to a board through {@link Board#makeMove(Move)}, which applies its packed
  * form, {@link MoveCode#of(Move)}.
  *
  * @author Aaron Ho
  */
-public abstract class Move {
+public final class Move {
+
+  /** The move that stands for the absence of a move. */
+  private static final Move NULL_MOVE = new Move(null, MoveCode.NONE, null, null, null);
 
   /**
-   * The board this move was generated against. Under the mutable board model this is a live
-   * board that will have moved on by the time anything reads it back, not a frozen snapshot of
-   * the position the move belongs to. It is meaningful only before that board is mutated. In
-   * particular, walking backwards through game history via getBoard().getTransitionMove() no
-   * longer terminates, since a move's board reports that same move as its transition move.
+   * The board this move was created on. It is a live board that will have moved on by the time
+   * anything reads it back, so it is read only for {@link #toString()}, which is meaningful only
+   * before that board is mutated.
    */
-  protected Board board;
+  private final Board board;
 
-  /** The destination coordinate of the move. */
-  protected int destinationCoordinate;
+  /** The packed form of this move, or {@link MoveCode#NONE} for the null move. */
+  private final int code;
 
-  /** The piece that is being moved. */
-  protected Piece movedPiece;
+  /** The piece that moves, or null for the null move. */
+  private final Piece movedPiece;
 
-  /** Indicates whether it's the first move for the piece being moved. */
-  protected boolean isFirstMove;
+  /** The piece this move captures, or null if it captures nothing. */
+  private final Piece attackedPiece;
+
+  /** The piece a pawn becomes by this move, or null if this move is not a promotion. */
+  private final Piece promotionPiece;
 
   /**
-   * Creates a new Move object with the given board, moved piece, and destination coordinate.
+   * Creates a move from its packed form and the pieces it involves.
    *
-   * @param board The current state of the chess board.
-   * @param pieceMoved The piece that is being moved.
-   * @param destinationCoordinate The destination coordinate of the move.
+   * @param board The board the move was created on.
+   * @param code The packed move.
+   * @param movedPiece The piece that moves.
+   * @param attackedPiece The piece captured, or null.
+   * @param promotionPiece The piece promoted to, or null.
    */
-  protected Move(final Board board, final Piece pieceMoved, final int destinationCoordinate) {
+  private Move(final Board board, final int code, final Piece movedPiece,
+               final Piece attackedPiece, final Piece promotionPiece) {
     this.board = board;
-    this.destinationCoordinate = destinationCoordinate;
-    this.movedPiece = pieceMoved;
-    this.isFirstMove = pieceMoved != null && pieceMoved.isFirstMove();
+    this.code = code;
+    this.movedPiece = movedPiece;
+    this.attackedPiece = attackedPiece;
+    this.promotionPiece = promotionPiece;
   }
 
   /**
-   * Creates a new Move object with the given board and destination coordinate.
-   * This constructor is used for pawn jump moves and for initializing move objects
-   * that do not have a moved piece.
+   * Returns the move that stands for the absence of a move. There is one such move, so it may be
+   * compared by identity.
+   *
+   * @return The null move.
+   */
+  public static Move nullMove() {
+    return NULL_MOVE;
+  }
+
+  /**
+   * Creates the move the given packed move describes on the given board.
+   *
+   * @param board The board the move belongs to, standing in the position it was generated in.
+   * @param move A move {@link MoveGenerator} generates on that board, for either side.
+   * @return The move.
+   */
+  public static Move fromCode(final Board board, final int move) {
+    final int destination = MoveCode.destination(move);
+    final Piece moved = board.getPiece(MoveCode.origin(move));
+    final Piece attacked;
+    if (MoveCode.isCastle(move)) {
+      attacked = null;
+    } else if (MoveCode.isEnPassant(move)) {
+      attacked = board.getEnPassantPawn();
+    } else {
+      attacked = board.getPiece(destination);
+    }
+    final Piece.PieceType promotionType = MoveCode.promotionType(move);
+    final Piece promotion = promotionType == null ? null :
+            Piece.moved(promotionType, moved.getPieceAllegiance(), destination, false);
+    return new Move(board, move, moved, attacked, promotion);
+  }
+
+  /**
+   * Returns the legal move between the given squares on the given board, promoting to a queen if
+   * the move turns out to be a promotion. This is the form to use where the promotion piece is
+   * not a choice, such as replaying a recorded move.
    *
    * @param board The current state of the chess board.
-   * @param destinationCoordinate The destination coordinate of the move.
+   * @param origin The square the moved piece stands on.
+   * @param destination The square it moves to.
+   * @return The matching legal move, or the null move if there is no such move.
    */
-  protected Move(final Board board, final int destinationCoordinate) {
-    this.board = board;
-    this.destinationCoordinate = destinationCoordinate;
-    this.movedPiece = null;
-    this.isFirstMove = false;
+  public static Move find(final Board board, final int origin, final int destination) {
+    return find(board, origin, destination, Piece.PieceType.QUEEN);
+  }
+
+  /**
+   * Returns the legal move between the given squares on the given board, promoting to the
+   * requested piece type if the move is a promotion. Four legal moves can share a pair of squares
+   * when a pawn reaches the back rank, so the promotion type is what tells them apart. It is
+   * ignored for every other kind of move.
+   *
+   * @param board The current state of the chess board.
+   * @param origin The square the moved piece stands on.
+   * @param destination The square it moves to.
+   * @param promotionType The piece type to promote to if this move is a promotion.
+   * @return The matching legal move, or the null move if there is no such move.
+   */
+  public static Move find(final Board board, final int origin, final int destination,
+                          final Piece.PieceType promotionType) {
+    for (final Move move : board.getAllLegalMoves()) {
+      if (move.getCurrentCoordinate() != origin ||
+              move.getDestinationCoordinate() != destination) {
+        continue;
+      }
+      if (move.promotionPiece == null || move.promotionPiece.getPieceType() == promotionType) {
+        return move;
+      }
+    }
+    return NULL_MOVE;
+  }
+
+  /**
+   * Returns the packed form of this move.
+   *
+   * @return The packed move, or {@link MoveCode#NONE} for the null move.
+   */
+  int code() {
+    return this.code;
   }
 
   /**
@@ -74,26 +146,20 @@ public abstract class Move {
    * @return The promotion piece, or null if this move is not a promotion.
    */
   public Piece getPromotionPiece() {
-    return null;
+    return this.promotionPiece;
   }
 
   /**
    * Compares this move to another for equality. Two moves are equal when they leave the same
    * square, arrive at the same square, and promote to the same piece type, which is exactly what
-   * identifies a move within a position. The moved piece, the captured piece, the castling rook,
-   * and the originating board are deliberately excluded. They are all recoverable from the
-   * position, and including the moved piece made the same logical move compare unequal across two
-   * positions, because Piece equality covers the piece's move count and first move flag. That is
-   * precisely the comparison killer move and countermove matching depends on.
-   * <p>
-   * This method is final. Per subclass overrides are what made equality asymmetric, with a plain
-   * pawn move reporting equal to the promotion decorating it but not the reverse.
+   * identifies a move within a position. The moved piece, the captured piece and the board are
+   * excluded, so the same move compares equal across two positions.
    *
    * @param other The other object to compare to.
    * @return True if the moves are equal, false otherwise.
    */
   @Override
-  public final boolean equals(final Object other) {
+  public boolean equals(final Object other) {
     if (this == other) return true;
     if (!(other instanceof Move otherMove)) return false;
     return getCurrentCoordinate() == otherMove.getCurrentCoordinate() &&
@@ -107,7 +173,7 @@ public abstract class Move {
    * @return The calculated hash code.
    */
   @Override
-  public final int hashCode() {
+  public int hashCode() {
     final Piece.PieceType promotion = promotionType();
     return ((getCurrentCoordinate() + 1) << 9) | (getDestinationCoordinate() << 3) |
             (promotion == null ? 0 : promotion.ordinal() + 1);
@@ -119,106 +185,74 @@ public abstract class Move {
    * @return The promotion piece type, or null.
    */
   private Piece.PieceType promotionType() {
-    final Piece promotion = getPromotionPiece();
-    return promotion != null ? promotion.getPieceType() : null;
+    return this.promotionPiece != null ? this.promotionPiece.getPieceType() : null;
   }
 
   /**
-   * Gets the board this move was generated against. See {@link #board} for the constraints on
-   * using it: it is a live mutable board, not a snapshot of the position this move belongs to.
+   * Gets the square the moved piece stands on.
    *
-   * @return The board this move was generated against.
-   */
-  public Board getBoard() {
-    return this.board;
-  }
-
-  /**
-   * Gets the current coordinate of the moved piece.
-   *
-   * @return The current coordinate, or -1 if no piece is being moved.
+   * @return The origin square, or -1 for the null move.
    */
   public int getCurrentCoordinate() {
     return this.movedPiece != null ? this.movedPiece.getPiecePosition() : -1;
   }
 
   /**
-   * Gets the destination coordinate of the move.
+   * Gets the square the moved piece arrives on.
    *
-   * @return The destination coordinate.
+   * @return The destination square, or -1 for the null move.
    */
   public int getDestinationCoordinate() {
-    return this.destinationCoordinate;
+    return this.code == MoveCode.NONE ? -1 : MoveCode.destination(this.code);
   }
 
   /**
    * Gets the piece that is being moved.
    *
-   * @return The moved piece.
+   * @return The moved piece, or null for the null move.
    */
   public Piece getMovedPiece() {
     return this.movedPiece;
   }
 
   /**
-   * Checks if the move is an attack.
-   * This base implementation returns false; subclasses that represent attack moves
-   * should override this method to return true.
+   * Checks whether this move captures a piece.
    *
-   * @return True if the move is an attack, false otherwise.
+   * @return True if the move captures, false otherwise.
    */
   public boolean isAttack() {
-    return false;
+    return this.attackedPiece != null;
   }
 
   /**
-   * Checks if the move is a castling move.
-   * This base implementation returns false; subclasses that represent castling moves
-   * should override this method to return true.
+   * Checks whether this move castles.
    *
-   * @return True if the move is a castling move, false otherwise.
+   * @return True if the move castles, false otherwise.
    */
   public boolean isCastlingMove() {
-    return false;
+    return this.code != MoveCode.NONE && MoveCode.isCastle(this.code);
   }
 
   /**
-   * Gets the attacked piece in case of an attack move.
-   * This base implementation returns null; subclasses that represent attack moves
-   * should override this method to return the attacked piece.
+   * Gets the piece this move captures.
    *
-   * @return The attacked piece, or null if this is not an attack move.
+   * @return The captured piece, or null if the move captures nothing.
    */
   public Piece getAttackedPiece() {
-    return null;
+    return this.attackedPiece;
   }
 
   /**
-   * Generates disambiguation information for moves involving pieces of the same type, resolved
-   * against the position the move is being played from.
+   * Renders this move in algebraic notation, with the file of origin added to a piece move when
+   * another piece of the same type can reach the same square. That test is made against this
+   * move's own board, so the result is correct only before that board has been mutated. Anything
+   * that needs stable notation should use {@link #toNotation(Board)}.
    *
-   * @param position The board as it stood immediately before this move was made.
-   * @return The disambiguation file character, or an empty string if disambiguation is not needed.
+   * @return The algebraic notation for this move.
    */
-  String disambiguationFile(final Board position) {
-    for (final Move move: position.currentPlayer().getLegalMoves()) {
-      if (move.getDestinationCoordinate() == this.destinationCoordinate && !this.equals(move) &&
-              this.movedPiece.getPieceType().equals(move.getMovedPiece().getPieceType())) {
-        return BoardUtils.getPositionAtCoordinate(this.movedPiece.getPiecePosition()).substring(0, 1);
-      }
-    } return "";
-  }
-
-  /**
-   * Generates disambiguation information against this move's own board reference. Under the
-   * mutable board model that reference is the single live board rather than a frozen snapshot
-   * of the position this move belongs to, so this is only meaningful before that board has been
-   * mutated. Anything that needs stable notation should use {@link #toNotation(Board)}.
-   *
-   * @return The disambiguation file character, or an empty string if disambiguation is not needed.
-   */
-  String disambiguationFile() {
-    return disambiguationFile(this.board);
+  @Override
+  public String toString() {
+    return render(this.board);
   }
 
   /**
@@ -231,596 +265,54 @@ public abstract class Move {
    * @return The algebraic notation for this move.
    */
   public String toNotation(final Board position) {
-    return toString();
+    return render(position);
   }
 
   /**
-   * The AttackMove class represents a move that results in attacking an opponent's piece in chess.
-   * This abstract class provides the base functionality for all types of attack moves.
+   * Renders this move in algebraic notation, disambiguating a piece move against the given
+   * position: "Nbd7" or "Rxe1" for a piece, "e4" or "dxe5" for a pawn, "e7-e8=Q" for a promotion,
+   * and "O-O" or "O-O-O" for castling.
+   *
+   * @param position The board the piece move is disambiguated against.
+   * @return The algebraic notation for this move.
    */
-  static abstract class AttackMove extends Move {
-
-    /** The piece that is attacked as a result of this move. */
-    protected Piece attackedPiece;
-
-    /**
-     * Constructs an AttackMove instance with the provided board, moving piece, destination coordinate,
-     * and the piece being attacked.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The piece being moved.
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     * @param pieceAttacked         The piece that is attacked in this move.
-     */
-    AttackMove(final Board board, final Piece pieceMoved,
-               final int destinationCoordinate, final Piece pieceAttacked) {
-      super(board, pieceMoved, destinationCoordinate);
-      this.attackedPiece = pieceAttacked;
-    }
-
-    /**
-     * Gets the piece attacked as a result of this move.
-     *
-     * @return The attacked piece.
-     */
-    @Override
-    public Piece getAttackedPiece() {
-      return this.attackedPiece;
-    }
-
-    /**
-     * Indicates whether this move is an attack on an opponent's piece.
-     *
-     * @return True for an attack move, false otherwise.
-     */
-    @Override
-    public boolean isAttack() {
-      return true;
-    }
-  }
-
-  /**
-   * The NullMove class represents a placeholder for no move in a chess game.
-   * It is used as a sentinel value to indicate the absence of a valid move.
-   */
-  public static class NullMove extends Move {
-
-    /**
-     * Constructs a NullMove instance. A null move has no board or destination coordinate.
-     */
-    public NullMove() {
-      super(null, -1);
-    }
-
-    /**
-     * Gets the current coordinate, which is set to -1 for a null move.
-     *
-     * @return The current coordinate, which is -1.
-     */
-    @Override
-    public int getCurrentCoordinate() {
-      return -1;
-    }
-
-    /**
-     * Gets the destination coordinate, which is also set to -1 for a null move.
-     *
-     * @return The destination coordinate, which is -1.
-     */
-    @Override
-    public int getDestinationCoordinate() {
-      return -1;
-    }
-
-    /**
-     * Gets a string representation of the null move.
-     *
-     * @return The string "Null Move."
-     */
-    @Override
-    public String toString() {
+  private String render(final Board position) {
+    if (this == NULL_MOVE) {
       return "Null Move";
     }
+    final int origin = getCurrentCoordinate();
+    final int destination = getDestinationCoordinate();
+    final String target = BoardUtils.getPositionAtCoordinate(destination);
+    if (isCastlingMove()) {
+      return destination > origin ? "O-O" : "O-O-O";
+    }
+    if (this.promotionPiece != null) {
+      return BoardUtils.getPositionAtCoordinate(origin) + "-" + target + "=" +
+              this.promotionPiece.getPieceType();
+    }
+    final String capture = isAttack() ? "x" : "";
+    if (this.movedPiece.getPieceType() == Piece.PieceType.PAWN) {
+      return isAttack() ? BoardUtils.getPositionAtCoordinate(origin).charAt(0) + capture + target :
+              target;
+    }
+    return this.movedPiece.getPieceType() + disambiguationFile(position) + capture + target;
   }
 
   /**
-   * The MajorMove class represents a standard major move in chess. This move is typically
-   * associated with major pieces (queen, rook, knight, or bishop) and involves the piece
-   * moving to a new destination coordinate on the board without capturing any opponent's piece.
+   * Returns the file this move's piece leaves when another legal move of a piece of the same type
+   * arrives on the same square in the given position.
+   *
+   * @param position The board as it stood immediately before this move was made.
+   * @return The file of the origin square, or an empty string if no other piece needs telling
+   *         apart.
    */
-  public static class MajorMove extends Move {
-
-    /**
-     * Constructs a MajorMove instance with the provided board, piece, and destination coordinate.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The major piece (queen, rook, bishop, or knight) that is moved.
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     */
-    public MajorMove(final Board board, final Piece pieceMoved, final int destinationCoordinate) {
-      super(board, pieceMoved, destinationCoordinate);
-    }
-
-    /**
-     * Generates a string representation of the major move.
-     *
-     * @return The string representing the move, e.g., "Qd4" for a queen move to d4.
-     */
-    @Override
-    public String toString() {
-      return movedPiece.getPieceType().toString() + disambiguationFile() +
-              BoardUtils.getPositionAtCoordinate(this.destinationCoordinate);
-    }
-
-    /**
-     * Generates a string representation of the major move, disambiguated against the given position.
-     *
-     * @param position The board as it stood immediately before this move was made.
-     * @return The string representing the move, e.g., "Qd4" for a queen move to d4.
-     */
-    @Override
-    public String toNotation(final Board position) {
-      return movedPiece.getPieceType().toString() + disambiguationFile(position) +
-              BoardUtils.getPositionAtCoordinate(this.destinationCoordinate);
-    }
-  }
-
-  /**
-   * The MajorAttackMove class represents a major attack move in chess. This type of move
-   * involves a major piece (queen, rook, knight, or bishop) moving to a new destination
-   * coordinate and capturing an opponent's piece.
-   */
-  public static class MajorAttackMove extends AttackMove {
-
-    /**
-     * Constructs a MajorAttackMove instance with the provided board, moving piece,
-     * destination coordinate, and the attacked piece.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The major piece (queen, rook, bishop, or knight) that is moved.
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     * @param pieceAttacked         The opponent's piece that is being attacked and captured.
-     */
-    public MajorAttackMove(final Board board, final Piece pieceMoved, final int destinationCoordinate, final Piece pieceAttacked) {
-      super(board, pieceMoved, destinationCoordinate, pieceAttacked);
-    }
-
-    /**
-     * Generates a string representation of the major attack move.
-     *
-     * @return The string representing the move, e.g., "Qxd4" for a queen capturing a piece on d4.
-     */
-    @Override
-    public String toString() {
-      return movedPiece.getPieceType() + disambiguationFile() + "x" +
-              BoardUtils.getPositionAtCoordinate(this.destinationCoordinate);
-    }
-
-    /**
-     * Generates a string representation of the major attack move, disambiguated against the
-     * given position.
-     *
-     * @param position The board as it stood immediately before this move was made.
-     * @return The string representing the move, e.g., "Qxd4" for a queen capturing a piece on d4.
-     */
-    @Override
-    public String toNotation(final Board position) {
-      return movedPiece.getPieceType() + disambiguationFile(position) + "x" +
-              BoardUtils.getPositionAtCoordinate(this.destinationCoordinate);
-    }
-  }
-
-  /**
-   * The PawnMove class represents a basic pawn move in chess. This move involves a pawn
-   * advancing to a new destination coordinate without capturing any opponent's piece.
-   */
-  public static class PawnMove extends Move {
-
-    /**
-     * Constructs a PawnMove instance with the provided board, moving piece, and destination coordinate.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The pawn piece that is moved.
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     */
-    public PawnMove(final Board board, final Piece pieceMoved, final int destinationCoordinate) {
-      super(board, pieceMoved, destinationCoordinate);
-    }
-
-    /**
-     * Generates a string representation of the pawn move.
-     *
-     * @return The string representing the move, e.g., "e4" for a pawn moving to e4.
-     */
-    @Override
-    public String toString() {
-      return BoardUtils.getPositionAtCoordinate(this.destinationCoordinate);
-    }
-  }
-
-  /**
-   * The PawnAttackMove class represents a pawn attack move in chess. This type of move
-   * involves a pawn moving to a new destination coordinate and capturing an opponent's piece.
-   */
-  public static class PawnAttackMove extends AttackMove {
-
-    /**
-     * Constructs a PawnAttackMove instance with the provided board, moving piece,
-     * destination coordinate, and the attacked piece.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The pawn piece that is moved.
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     * @param pieceAttacked         The opponent's piece that is being attacked and captured.
-     */
-    public PawnAttackMove(final Board board, final Piece pieceMoved, final int destinationCoordinate, final Piece pieceAttacked) {
-      super(board, pieceMoved, destinationCoordinate, pieceAttacked);
-    }
-
-    /**
-     * Generates a string representation of the pawn attack move.
-     *
-     * @return The string representing the move, e.g., "exd4" for a pawn capturing a piece on d4.
-     */
-    @Override
-    public String toString() {
-      return BoardUtils.getPositionAtCoordinate(this.movedPiece.getPiecePosition()).charAt(0) + "x" +
-              BoardUtils.getPositionAtCoordinate(this.destinationCoordinate);
-    }
-  }
-
-  /**
-   * The PawnJump class represents a pawn move where a pawn advances two squares from its starting position.
-   * This special move is only available on a pawn's first move and creates an en passant opportunity
-   * for opponent pawns on adjacent files.
-   */
-  public static class PawnJump extends Move {
-
-    /**
-     * Constructs a PawnJump instance with the provided board, moving pawn, and destination coordinate.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The pawn piece that is moved.
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     */
-    public PawnJump(final Board board, final Pawn pieceMoved, final int destinationCoordinate) {
-      super(board, pieceMoved, destinationCoordinate);
-    }
-
-    /**
-     * Returns a string representation of the PawnJump move, showing only the destination coordinate.
-     *
-     * @return A string representing the PawnJump move.
-     */
-    @Override
-    public String toString() {
-      return BoardUtils.getPositionAtCoordinate(this.destinationCoordinate);
-    }
-  }
-
-  /**
-   * The PawnEnPassantAttack class represents a special pawn attack move called "en passant" in chess.
-   * En passant is a situation where a pawn captures an opponent's pawn that has moved two squares
-   * forward from its starting position, as if the opponent's pawn had moved only one square.
-   */
-  public static class PawnEnPassantAttack extends PawnAttackMove {
-
-    /**
-     * Constructs a PawnEnPassantAttack instance with the provided board,
-     * moving a piece, destination coordinate, and piece attacked.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The pawn piece that is moved.
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     * @param pieceAttacked         The opponent's pawn piece that is attacked en passant.
-     */
-    public PawnEnPassantAttack(final Board board, final Piece pieceMoved, final int destinationCoordinate, final Piece pieceAttacked) {
-      super(board, pieceMoved, destinationCoordinate, pieceAttacked);
-    }
-  }
-
-  /**
-   * The PawnPromotion class represents a special move in chess. When a pawn reaches
-   * the opponent's back rank, it can be promoted to any other chess piece (queen, rook,
-   * bishop, or knight). This class extends a standard PawnMove by adding promotion information.
-   */
-  public static class PawnPromotion extends PawnMove {
-
-    /** The decorated move that represents the original pawn move. */
-    protected Move decoratedMove;
-
-    /** The piece to which the pawn is promoted (queen, rook, bishop, or knight). */
-    protected Piece promotionPiece;
-
-    /**
-     * Constructs a PawnPromotion instance.
-     *
-     * @param decoratedMove    The decorated move representing the original pawn move.
-     * @param promotionPiece   The piece to which the pawn is promoted (queen, rook, bishop, or knight).
-     */
-    public PawnPromotion(final Move decoratedMove, final Piece promotionPiece) {
-      super(decoratedMove != null ? decoratedMove.getBoard() : null,
-              decoratedMove != null ? decoratedMove.getMovedPiece() : null,
-              decoratedMove != null ? decoratedMove.getDestinationCoordinate() : -1);
-      this.decoratedMove = decoratedMove;
-      this.promotionPiece = promotionPiece;
-    }
-
-    /**
-     * Checks if the pawn promotion move is an attack on an opponent's piece.
-     *
-     * @return True if it's an attack, false otherwise.
-     */
-    @Override
-    public boolean isAttack() {
-      return this.decoratedMove.isAttack();
-    }
-
-    /**
-     * Gets the piece attacked by this pawn promotion move.
-     *
-     * @return The attacked piece, or null if it's not an attack move.
-     */
-    @Override
-    public Piece getAttackedPiece() {
-      return this.decoratedMove.getAttackedPiece();
-    }
-
-    /**
-     * Generates a string representation of the pawn promotion move.
-     *
-     * @return The string representing the move, e.g., "e8=Q" for a pawn promoting to a queen.
-     */
-    @Override
-    public String toString() {
-      return BoardUtils.getPositionAtCoordinate(this.movedPiece.getPiecePosition()) + "-" +
-              BoardUtils.getPositionAtCoordinate(this.destinationCoordinate) + "=" + this.promotionPiece.getPieceType();
-    }
-
-    /**
-     * Returns the piece this pawn promotes to.
-     *
-     * @return The promotion piece.
-     */
-    @Override
-    public Piece getPromotionPiece() {
-      return this.promotionPiece;
-    }
-  }
-
-  /**
-   * The CastleMove class represents a move that involves castling, which is a special king and rook move.
-   * This abstract class provides the base functionality for king-side and queen-side castling moves.
-   */
-  static abstract class CastleMove extends Move {
-
-    /** The rook involved in the castling move. */
-    protected Rook castleRook;
-
-    /** The starting position of the castle rook. */
-    protected int castleRookStart;
-
-    /** The destination position of the castle rook. */
-    protected int castleRookDestination;
-
-    /**
-     * Constructs a CastleMove instance with the provided board, moving piece, destination coordinate,
-     * castle rook, and rook start and destination positions.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The piece being moved (usually the king).
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     * @param castleRook            The rook involved in the castling move.
-     * @param castleRookStart       The starting position of the castle rook.
-     * @param castleRookDestination The destination position of the castle rook.
-     */
-    CastleMove(final Board board,
-               final Piece pieceMoved,
-               final int destinationCoordinate,
-               final Rook castleRook,
-               final int castleRookStart,
-               final int castleRookDestination) {
-      super(board, pieceMoved, destinationCoordinate);
-      this.castleRook = castleRook;
-      this.castleRookStart = castleRookStart;
-      this.castleRookDestination = castleRookDestination;
-    }
-
-    /**
-     * Checks if this move is a castling move.
-     *
-     * @return True since it is a castling move.
-     */
-    @Override
-    public boolean isCastlingMove() {
-      return true;
-    }
-  }
-
-  /**
-   * The KingSideCastleMove class represents a move for king-side castling in chess.
-   * King-side castling involves the king moving two squares towards the h-file (kingside)
-   * and the rook moving to the square the king crossed.
-   */
-  public static class KingSideCastleMove extends CastleMove {
-
-    /**
-     * Constructs a KingSideCastleMove instance with the provided board, moving piece, destination coordinate,
-     * castle rook, and rook start and destination positions.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The piece being moved (usually the king).
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     * @param castleRook            The rook involved in the castling move.
-     * @param castleRookStart       The starting position of the castle rook.
-     * @param castleRookDestination The destination position of the castle rook.
-     */
-    public KingSideCastleMove(final Board board,
-                              final Piece pieceMoved,
-                              final int destinationCoordinate,
-                              final Rook castleRook,
-                              final int castleRookStart,
-                              final int castleRookDestination) {
-      super(board, pieceMoved, destinationCoordinate, castleRook, castleRookStart, castleRookDestination);
-    }
-
-    /**
-     * Returns a string representation of the KingSideCastleMove, indicating king-side castling.
-     *
-     * @return The string "O-O" representing king-side castling.
-     */
-    @Override
-    public String toString() {
-      return "O-O";
-    }
-  }
-
-  /**
-   * The QueenSideCastleMove class represents a move for queen-side castling in chess.
-   * Queen-side castling involves the king moving two squares towards the a-file (queenside)
-   * and the rook moving to the square the king crossed.
-   */
-  public static class QueenSideCastleMove extends CastleMove {
-
-    /**
-     * Constructs a QueenSideCastleMove instance with the provided board, moving piece, destination coordinate,
-     * castle rook, and rook start and destination positions.
-     *
-     * @param board                 The chess board on which the move is made.
-     * @param pieceMoved            The piece being moved (usually the king).
-     * @param destinationCoordinate The coordinate to which the piece is moved.
-     * @param castleRook            The rook involved in the castling move.
-     * @param castleRookStart       The starting position of the castle rook.
-     * @param rookCastleDestination The destination position of the castle rook.
-     */
-    public QueenSideCastleMove(final Board board,
-                               final Piece pieceMoved,
-                               final int destinationCoordinate,
-                               final Rook castleRook,
-                               final int castleRookStart,
-                               final int rookCastleDestination) {
-      super(board, pieceMoved, destinationCoordinate, castleRook, castleRookStart, rookCastleDestination);
-    }
-
-    /**
-     * Returns a string representation of the QueenSideCastleMove, indicating queen-side castling.
-     *
-     * @return The string "O-O-O" representing queen-side castling.
-     */
-    @Override
-    public String toString() {
-      return "O-O-O";
-    }
-  }
-
-  /**
-   * The MoveFactory class provides factory methods for creating different types of moves.
-   * It ensures that moves are created consistently and efficiently.
-   */
-  public static class MoveFactory {
-
-    /**
-     * Private constructor to prevent instantiation.
-     *
-     * @throws RuntimeException Always thrown when attempting to instantiate MoveFactory.
-     */
-    private MoveFactory() {
-      throw new RuntimeException("Not instantiatable!");
-    }
-
-    /**
-     * Creates and returns a null move.
-     * A null move is used as a sentinel value to indicate the absence of a valid move.
-     *
-     * @return The created null move.
-     */
-    public static Move getNullMove() {
-      return MoveUtils.NULL_MOVE;
-    }
-
-    /**
-     * Creates the move the given packed move describes on the given board, as the subclass that
-     * describes its kind.
-     *
-     * @param board The board the move belongs to, standing in the position it was generated in.
-     * @param move A move {@link MoveGenerator} generates on that board, for either side.
-     * @return The move.
-     */
-    public static Move fromCode(final Board board, final int move) {
-      final int origin = MoveCode.origin(move);
-      final int destination = MoveCode.destination(move);
-      final Piece moved = board.getPiece(origin);
-      if (MoveCode.isCastle(move)) {
-        final boolean kingSide = destination > origin;
-        final int rookOrigin = kingSide ? origin + 3 : origin - 4;
-        final int rookDestination = kingSide ? origin + 1 : origin - 1;
-        final Rook rook = (Rook) board.getPiece(rookOrigin);
-        return kingSide ?
-                new KingSideCastleMove(board, moved, destination, rook, rookOrigin, rookDestination) :
-                new QueenSideCastleMove(board, moved, destination, rook, rookOrigin, rookDestination);
+  private String disambiguationFile(final Board position) {
+    for (final Move move : position.currentPlayer().getLegalMoves()) {
+      if (move.getDestinationCoordinate() == getDestinationCoordinate() && !this.equals(move) &&
+              this.movedPiece.getPieceType() == move.getMovedPiece().getPieceType()) {
+        return BoardUtils.getPositionAtCoordinate(getCurrentCoordinate()).substring(0, 1);
       }
-      if (moved.getPieceType() != Piece.PieceType.PAWN) {
-        return MoveCode.isCapture(move) ?
-                new MajorAttackMove(board, moved, destination, board.getPiece(destination)) :
-                new MajorMove(board, moved, destination);
-      }
-      if (MoveCode.isEnPassant(move)) {
-        return new PawnEnPassantAttack(board, moved, destination, board.getEnPassantPawn());
-      }
-      if (MoveCode.isPawnJump(move)) {
-        return new PawnJump(board, (Pawn) moved, destination);
-      }
-      final Move pawnMove = MoveCode.isCapture(move) ?
-              new PawnAttackMove(board, moved, destination, board.getPiece(destination)) :
-              new PawnMove(board, moved, destination);
-      final Piece.PieceType promotionType = MoveCode.promotionType(move);
-      return promotionType == null ? pawnMove : new PawnPromotion(pawnMove,
-              Piece.moved(promotionType, moved.getPieceAllegiance(), destination, false));
     }
-
-    /**
-     * Creates a move with the specified current and destination coordinates on the given board,
-     * promoting to a queen if the move turns out to be a promotion. This is the form to use where
-     * the promotion piece is not a choice, such as replaying a recorded move.
-     *
-     * @param board The current state of the chess board.
-     * @param currentCoordinate The current coordinate of the moved piece.
-     * @param destinationCoordinate The destination coordinate of the move.
-     * @return The matching legal move, or a null move if there is no such move.
-     */
-    public static Move createMove(final Board board,
-                                  final int currentCoordinate,
-                                  final int destinationCoordinate) {
-      return createMove(board, currentCoordinate, destinationCoordinate, Piece.PieceType.QUEEN);
-    }
-
-    /**
-     * Creates a move with the specified current and destination coordinates on the given board,
-     * promoting to the requested piece type if the move is a promotion. Four legal moves can share
-     * a pair of squares when a pawn reaches the back rank, so the promotion type is what tells them
-     * apart. It is ignored for every other kind of move.
-     *
-     * @param board The current state of the chess board.
-     * @param currentCoordinate The current coordinate of the moved piece.
-     * @param destinationCoordinate The destination coordinate of the move.
-     * @param promotionType The piece type to promote to if this move is a promotion.
-     * @return The matching legal move, or a null move if there is no such move.
-     */
-    public static Move createMove(final Board board,
-                                  final int currentCoordinate,
-                                  final int destinationCoordinate,
-                                  final Piece.PieceType promotionType) {
-      for (final Move move : board.getAllLegalMoves()) {
-        if (move.getCurrentCoordinate() != currentCoordinate ||
-                move.getDestinationCoordinate() != destinationCoordinate) {
-          continue;
-        }
-        final Piece promotion = move.getPromotionPiece();
-        if (promotion == null || promotion.getPieceType() == promotionType) {
-          return move;
-        }
-      }
-      return MoveUtils.NULL_MOVE;
-    }
+    return "";
   }
 }

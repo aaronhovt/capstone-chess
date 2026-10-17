@@ -67,31 +67,13 @@ public final class MoveCode {
   }
 
   /**
-   * Packs the given move, with the flags its kind carries.
+   * Returns the packed form of the given move, with the flags its kind carries.
    *
    * @param move The move, or the null move.
    * @return The packed move, or {@link #NONE} for the null move.
    */
   public static int of(final Move move) {
-    if (move == Move.MoveFactory.getNullMove()) {
-      return NONE;
-    }
-    final Piece promotion = move.getPromotionPiece();
-    int flags = 0;
-    if (move.isAttack()) {
-      flags |= CAPTURE;
-    }
-    if (move instanceof Move.PawnEnPassantAttack) {
-      flags |= EN_PASSANT;
-    }
-    if (move.isCastlingMove()) {
-      flags |= CASTLE;
-    }
-    if (move instanceof Move.PawnJump) {
-      flags |= PAWN_JUMP;
-    }
-    return of(move.getCurrentCoordinate(), move.getDestinationCoordinate(),
-            promotion == null ? null : promotion.getPieceType(), flags);
+    return move.code();
   }
 
   /**

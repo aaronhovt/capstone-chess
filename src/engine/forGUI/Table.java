@@ -20,8 +20,6 @@ import java.io.File;
 import java.util.List;
 import java.util.*;
 
-import static engine.forBoard.Move.MoveFactory.createMove;
-import static engine.forBoard.Move.MoveFactory.getNullMove;
 import static javax.swing.JDialog.setDefaultLookAndFeelDecorated;
 import static javax.swing.SwingUtilities.*;
 
@@ -604,7 +602,7 @@ public final class Table extends Observable {
           System.out.println("Discarding the computer's move: the position changed while it was thinking.");
           return;
         }
-        if (bestMove == getNullMove()) {
+        if (bestMove == Move.nullMove()) {
           System.out.println("The search returned no move, so there is nothing to play.");
           return;
         }
@@ -836,11 +834,11 @@ public final class Table extends Observable {
               sourceTile = chessBoard.getPiece(tileId);
               humanMovedPiece = sourceTile;
             } else {
-              final Move candidate = createMove(chessBoard, sourceTile.getPiecePosition(), tileId);
-              if (candidate != getNullMove() &&
+              final Move candidate = Move.find(chessBoard, sourceTile.getPiecePosition(), tileId);
+              if (candidate != Move.nullMove() &&
                   candidate.getMovedPiece().getPieceAllegiance() == chessBoard.currentPlayer().getAlliance()) {
                 final Move move = resolvePromotion(candidate);
-                if (move != getNullMove()) {
+                if (move != Move.nullMove()) {
                   final String notation = move.toNotation(chessBoard);
                   chessBoard.makeMove(move);
                   if (chessBoard.currentPlayer().getOpponent().isInCheck()) {
@@ -914,9 +912,9 @@ public final class Table extends Observable {
       }
       final Piece.PieceType chosen = promptForPromotionPiece();
       if (chosen == null) {
-        return getNullMove();
+        return Move.nullMove();
       }
-      return createMove(chessBoard, candidate.getCurrentCoordinate(),
+      return Move.find(chessBoard, candidate.getCurrentCoordinate(),
           candidate.getDestinationCoordinate(), chosen);
     }
     /**

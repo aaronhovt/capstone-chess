@@ -16,7 +16,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 
-import static engine.forBoard.Move.MoveFactory;
 
 /**
  * The AlphaBeta class implements a chess engine using the alpha-beta search algorithm
@@ -672,7 +671,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    */
   private static Move toMove(final Board board, final int move) {
     if (move == MoveCode.NONE) {
-      return MoveFactory.getNullMove();
+      return Move.nullMove();
     }
     for (final Move candidate : board.currentPlayer().getLegalMoves()) {
       if (MoveCode.of(candidate) == move) {
@@ -1001,7 +1000,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
    * @return True if the node is to be scored as a draw.
    */
   private static boolean isDrawnByRule(final Board board) {
-    if (board.getTransitionMove() == MoveFactory.getNullMove()) {
+    if (board.getTransitionMove() == Move.nullMove()) {
       return false;
     }
     if (board.isFiftyMoveRule()) {

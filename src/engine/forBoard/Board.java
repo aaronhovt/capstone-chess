@@ -8,7 +8,6 @@ import engine.forPlayer.WhitePlayer;
 
 import java.util.*;
 
-import static engine.forBoard.Move.MoveFactory.getNullMove;
 
 /**
  * The Board class represents a chess board containing 64 tiles and chess pieces.
@@ -247,7 +246,7 @@ public final class Board {
     establishKings();
     this.enPassantPawn = builder.enPassantPawn;
     refreshPlayers(builder.nextMoveMaker);
-    this.transitionMove = getNullMove();
+    this.transitionMove = Move.nullMove();
     this.zobristHash = builder.zobristHash != 0 ? builder.zobristHash :
             ZobristHashing.calculateBoardHash(this);
     this.halfMoveClock = builder.halfMoveClock;
@@ -694,7 +693,7 @@ public final class Board {
     this.zobristHash = hash;
     this.enPassantPawn = null;
     this.halfMoveClock = this.halfMoveClock + 1;
-    this.transitionMove = getNullMove();
+    this.transitionMove = Move.nullMove();
     this.mutationDepth++;
     refreshPlayers(nextMover);
     this.nullMoveUndoStack.push(undo);

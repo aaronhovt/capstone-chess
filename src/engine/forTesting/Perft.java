@@ -513,13 +513,13 @@ public class Perft {
     if (MoveCode.isCapture(code) != move.isAttack()) {
       return "generated the capture flag as " + MoveCode.isCapture(code) + ".";
     }
-    if (MoveCode.isEnPassant(code) != (move instanceof Move.PawnEnPassantAttack)) {
+    if (MoveCode.isEnPassant(code) != MoveCode.isEnPassant(MoveCode.of(move))) {
       return "generated the en passant flag as " + MoveCode.isEnPassant(code) + ".";
     }
     if (MoveCode.isCastle(code) != move.isCastlingMove()) {
       return "generated the castle flag as " + MoveCode.isCastle(code) + ".";
     }
-    if (MoveCode.isPawnJump(code) != (move instanceof Move.PawnJump)) {
+    if (MoveCode.isPawnJump(code) != MoveCode.isPawnJump(MoveCode.of(move))) {
       return "generated the pawn jump flag as " + MoveCode.isPawnJump(code) + ".";
     }
     return null;

@@ -91,7 +91,7 @@ public class StaticExchangeEvaluator {
     final Piece capturedPiece = move.getAttackedPiece();
     final int capturedValue = getPieceValue(capturedPiece.getPieceType());
 
-    if (move instanceof Move.PawnEnPassantAttack) {
+    if (MoveCode.isEnPassant(MoveCode.of(move))) {
       return SEE_PIECE_VALUES[0];
     }
 

@@ -404,7 +404,7 @@ public class UciEngine {
    * @return The long algebraic notation of the move, or the null move notation if there is none.
    */
   private String notationOf(final Move move) {
-    if (move == null || move == Move.MoveFactory.getNullMove()) {
+    if (move == null || move == Move.nullMove()) {
       return NULL_MOVE_NOTATION;
     }
     this.board.makeMove(move);

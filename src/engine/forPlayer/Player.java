@@ -172,7 +172,7 @@ public abstract class Player {
    * Retrieves this player's pseudo-legal moves on the current board, castling included, computing
    * and caching them on the first call. They are the moves {@link MoveGenerator#generate} writes
    * for this player's alliance, in the same order, each converted by
-   * {@link Move.MoveFactory#fromCode}.
+   * {@link Move#fromCode}.
    *
    * @return An unmodifiable collection of legal moves.
    */
@@ -182,7 +182,7 @@ public abstract class Player {
       final int count = MoveGenerator.generate(this.board, getAlliance(), codes);
       final List<Move> moves = new ArrayList<>(count);
       for (int index = 0; index < count; index++) {
-        moves.add(Move.MoveFactory.fromCode(this.board, codes[index]));
+        moves.add(Move.fromCode(this.board, codes[index]));
       }
       this.legalMoves = Collections.unmodifiableList(moves);
     }
