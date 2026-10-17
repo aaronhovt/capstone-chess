@@ -1,77 +1,14 @@
 package engine.forBoard;
 
-import java.util.Arrays;
-import java.util.List;
+import java.util.Objects;
 
 /**
- * The BoardUtils class provides utility methods and constants for working with a chess board.
- * It includes functions for validating coordinates, checking threats, evaluating moves,
- * and tracking game progression. This class is implemented as an enum singleton to ensure
- * a single global instance.
- * <p>
- * The class maintains information about board geometry (rows and columns), handles algebraic
- * notation, and provides helper methods for various chess-related calculations.
+ * Board geometry and game state helpers. Squares are numbered 0 to 63 from a8 to h1, a row at a
+ * time, so row 0 is the eighth rank and row 7 the first.
  *
  * @author Aaron Ho
  */
-public enum BoardUtils {
-
-  /** The singleton instance of the BoardUtils class. */
-  Instance;
-
-  /** A list indicating whether each tile belongs to the first column (a-file) on the chessboard. */
-  public final List<Boolean> FirstColumn = initColumn(0);
-
-  /** A list indicating whether each tile belongs to the second column (b-file) on the chessboard. */
-  public final List<Boolean> SecondColumn = initColumn(1);
-
-  /** A list indicating whether each tile belongs to the third column (c-file) on the chessboard. */
-  public final List<Boolean> ThirdColumn = initColumn(2);
-
-  /** A list indicating whether each tile belongs to the fourth column (d-file) on the chessboard. */
-  public final List<Boolean> FourthColumn = initColumn(3);
-
-  /** A list indicating whether each tile belongs to the fifth column (e-file) on the chessboard. */
-  public final List<Boolean> FifthColumn = initColumn(4);
-
-  /** A list indicating whether each tile belongs to the sixth column (f-file) on the chessboard. */
-  public final List<Boolean> SixthColumn = initColumn(5);
-
-  /** A list indicating whether each tile belongs to the seventh column (g-file) on the chessboard. */
-  public final List<Boolean> SeventhColumn = initColumn(6);
-
-  /** A list indicating whether each tile belongs to the eighth column (h-file) on the chessboard. */
-  public final List<Boolean> EighthColumn = initColumn(7);
-
-  /** A list indicating whether each tile belongs to the first row (8th rank) on the chessboard. */
-  public final List<Boolean> FirstRow = initRow(0);
-
-  /** A list indicating whether each tile belongs to the second row (7th rank) on the chessboard. */
-  public final List<Boolean> SecondRow = initRow(8);
-
-  /** A list indicating whether each tile belongs to the third row (6th rank) on the chessboard. */
-  public final List<Boolean> ThirdRow = initRow(16);
-
-  /** A list indicating whether each tile belongs to the fourth row (5th rank) on the chessboard. */
-  public final List<Boolean> FourthRow = initRow(24);
-
-  /** A list indicating whether each tile belongs to the fifth row (4th rank) on the chessboard. */
-  public final List<Boolean> FifthRow = initRow(32);
-
-  /** A list indicating whether each tile belongs to the sixth row (3rd rank) on the chessboard. */
-  public final List<Boolean> SixthRow = initRow(40);
-
-  /** A list indicating whether each tile belongs to the seventh row (2nd rank) on the chessboard. */
-  public static final List<Boolean> SeventhRow = initRow(48);
-
-  /** A list indicating whether each tile belongs to the eighth row (1st rank) on the chessboard. */
-  public final List<Boolean> EighthRow = initRow(56);
-
-  /** A list of algebraic notation strings representing each tile on the chessboard. */
-  public static final List<String> ALGEBRAIC_NOTATION = initializeAlgebraicNotation();
-
-  /** The index of the starting tile (a8). */
-  public static final int START_TILE_INDEX = 0;
+public final class BoardUtils {
 
   /** The number of tiles per row on the chessboard. */
   public static final int NUM_TILES_PER_ROW = 8;
@@ -79,57 +16,8 @@ public enum BoardUtils {
   /** The total number of tiles on the chessboard. */
   public static final int NUM_TILES = 64;
 
-  /**
-   * Initializes a list of boolean values representing the tiles in a specified column.
-   * Each element corresponds to a position on the board, with true indicating that
-   * the position is in the specified column.
-   *
-   * @param columnNumber The column number for which to generate the list (0-7).
-   * @return A list of boolean values indicating the tiles in the specified column.
-   */
-  private static List<Boolean> initColumn(int columnNumber) {
-    final Boolean[] column = new Boolean[NUM_TILES];
-    Arrays.fill(column, false);
-    do {
-      column[columnNumber] = true;
-      columnNumber += NUM_TILES_PER_ROW;
-    } while (columnNumber < NUM_TILES);
-    return List.of((column));
-  }
-
-  /**
-   * Initializes a list of boolean values representing the tiles in a specified row.
-   * Each element corresponds to a position on the board, with true indicating that
-   * the position is in the specified row.
-   *
-   * @param rowNumber The starting index of the row for which to generate the list.
-   * @return A list of boolean values indicating the tiles in the specified row.
-   */
-  private static List<Boolean> initRow(int rowNumber) {
-    final Boolean[] row = new Boolean[NUM_TILES];
-    Arrays.fill(row, false);
-    do {
-      row[rowNumber] = true;
-      rowNumber++;
-    } while (rowNumber % NUM_TILES_PER_ROW != 0);
-    return List.of(row);
-  }
-
-  /**
-   * Initializes a list of strings representing algebraic notation positions for each tile on the chessboard.
-   * The positions range from a8 to h1, corresponding to tile indices 0 to 63.
-   *
-   * @return A list of algebraic notation positions.
-   */
-  private static List<String> initializeAlgebraicNotation() {
-    return List.of("a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8",
-            "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7",
-            "a6", "b6", "c6", "d6", "e6", "f6", "g6", "h6",
-            "a5", "b5", "c5", "d5", "e5", "f5", "g5", "h5",
-            "a4", "b4", "c4", "d4", "e4", "f4", "g4", "h4",
-            "a3", "b3", "c3", "d3", "e3", "f3", "g3", "h3",
-            "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2",
-            "a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1");
+  /** Prevents instantiation, since this class holds only constants and static helpers. */
+  private BoardUtils() {
   }
 
   /**
@@ -162,18 +50,49 @@ public enum BoardUtils {
    * @return True if the coordinate is valid, false otherwise.
    */
   public static boolean isValidTileCoordinate(final int coordinate) {
-    return coordinate >= START_TILE_INDEX && coordinate < NUM_TILES;
+    return coordinate >= 0 && coordinate < NUM_TILES;
   }
 
   /**
-   * Returns the algebraic notation position corresponding to a given tile coordinate.
-   * For example, coordinate 0 corresponds to "a8", and coordinate 63 corresponds to "h1".
+   * Returns the row of the given square, 0 for the eighth rank through 7 for the first.
    *
-   * @param coordinate The tile coordinate to convert (0-63).
-   * @return The corresponding algebraic notation position.
+   * @param square The square, 0 to 63.
+   * @return The square's row.
    */
-  public static String getPositionAtCoordinate(final int coordinate) {
-    return ALGEBRAIC_NOTATION.get(coordinate);
+  public static int rowOf(final int square) {
+    return square / NUM_TILES_PER_ROW;
+  }
+
+  /**
+   * Returns the algebraic name of the given square, such as "a8" for 0 and "h1" for 63.
+   *
+   * @param square The square, 0 to 63.
+   * @return The square's name.
+   * @throws IndexOutOfBoundsException If the square is not on the board.
+   */
+  public static String squareName(final int square) {
+    Objects.checkIndex(square, NUM_TILES);
+    return String.valueOf((char) ('a' + square % NUM_TILES_PER_ROW)) +
+            (char) ('8' - rowOf(square));
+  }
+
+  /**
+   * Returns the square with the given algebraic name, which must be a lowercase file letter
+   * followed by a rank digit.
+   *
+   * @param name The square's name, such as "e4".
+   * @return The square, or -1 if the name is not a square's name.
+   */
+  public static int squareOf(final String name) {
+    if (name.length() != 2) {
+      return -1;
+    }
+    final int file = name.charAt(0) - 'a';
+    final int rank = name.charAt(1) - '1';
+    if (file < 0 || file >= NUM_TILES_PER_ROW || rank < 0 || rank >= NUM_TILES_PER_ROW) {
+      return -1;
+    }
+    return (NUM_TILES_PER_ROW - 1 - rank) * NUM_TILES_PER_ROW + file;
   }
 
   /**

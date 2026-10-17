@@ -451,7 +451,7 @@ public class Perft {
     String describeIdentityDifference(final Snapshot other) {
       for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
         if (this.pieces[square] != other.pieces[square]) {
-          return "the piece on " + BoardUtils.getPositionAtCoordinate(square) + " differs.";
+          return "the piece on " + BoardUtils.squareName(square) + " differs.";
         }
       }
       if (this.whiteKing != other.whiteKing || this.blackKing != other.blackKing) {
@@ -504,8 +504,8 @@ public class Perft {
     final Piece promotion = move.getPromotionPiece();
     if (MoveCode.origin(code) != move.getCurrentCoordinate() ||
             MoveCode.destination(code) != move.getDestinationCoordinate()) {
-      return "generated " + BoardUtils.getPositionAtCoordinate(MoveCode.origin(code)) +
-              BoardUtils.getPositionAtCoordinate(MoveCode.destination(code)) + ".";
+      return "generated " + BoardUtils.squareName(MoveCode.origin(code)) +
+              BoardUtils.squareName(MoveCode.destination(code)) + ".";
     }
     if (MoveCode.promotionType(code) != (promotion == null ? null : promotion.getPieceType())) {
       return "generated promotion " + MoveCode.promotionType(code) + ".";
@@ -564,7 +564,7 @@ public class Perft {
         if (piece != null && piece.getPieceAllegiance() == alliance &&
                 (!listed.hasNext() || listed.next() != piece)) {
           return "Piece list of " + alliance + " differs at square " +
-                  BoardUtils.getPositionAtCoordinate(coordinate) + ".";
+                  BoardUtils.squareName(coordinate) + ".";
         }
       }
       if (listed.hasNext()) {
@@ -623,7 +623,7 @@ public class Perft {
     }
     for (int coordinate = 0; coordinate < BoardUtils.NUM_TILES; coordinate++) {
       if (clone.getPiece(coordinate) != board.getPiece(coordinate)) {
-        return "Copy differs at square " + BoardUtils.getPositionAtCoordinate(coordinate) + ".";
+        return "Copy differs at square " + BoardUtils.squareName(coordinate) + ".";
       }
     }
     final String bitboardFault = describeBitboardFault(clone);
@@ -712,8 +712,8 @@ public class Perft {
       return NULL_MOVE_NOTATION;
     }
     final int destination = move.getDestinationCoordinate();
-    final String notation = BoardUtils.getPositionAtCoordinate(origin) +
-            BoardUtils.getPositionAtCoordinate(destination);
+    final String notation = BoardUtils.squareName(origin) +
+            BoardUtils.squareName(destination);
     final Piece placedPiece = resultingBoard.getPiece(destination);
     if (move.getMovedPiece().getPieceType() == Piece.PieceType.PAWN &&
             placedPiece != null && placedPiece.getPieceType() != Piece.PieceType.PAWN) {

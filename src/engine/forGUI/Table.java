@@ -1028,17 +1028,8 @@ public final class Table extends Observable {
      * Assigns the appropriate background color to the tile based on its position.
      */
     private void assignTileColor() {
-      if (BoardUtils.Instance.FirstRow.get(this.tileId) ||
-              BoardUtils.Instance.ThirdRow.get(this.tileId) ||
-              BoardUtils.Instance.FifthRow.get(this.tileId) ||
-              BoardUtils.SeventhRow.get(this.tileId)) {
-        setBackground(this.tileId % 2 == 0 ? lightTileColor : darkTileColor);
-      } else if (BoardUtils.Instance.SecondRow.get(this.tileId) ||
-              BoardUtils.Instance.FourthRow.get(this.tileId) ||
-              BoardUtils.Instance.SixthRow.get(this.tileId) ||
-              BoardUtils.Instance.EighthRow.get(this.tileId)) {
-        setBackground(this.tileId % 2 != 0 ? lightTileColor : darkTileColor);
-      }
+      final boolean light = (BoardUtils.rowOf(this.tileId) + this.tileId) % 2 == 0;
+      setBackground(light ? lightTileColor : darkTileColor);
     }
   }
 }

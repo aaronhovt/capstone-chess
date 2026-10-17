@@ -31,7 +31,7 @@ public enum Alliance {
 
     @Override
     public boolean isPawnPromotionSquare(final int position) {
-      return BoardUtils.Instance.FirstRow.get(position);
+      return BoardUtils.rowOf(position) == 0;
     }
 
     @Override
@@ -69,7 +69,7 @@ public enum Alliance {
 
     @Override
     public boolean isPawnPromotionSquare(final int position) {
-      return BoardUtils.Instance.EighthRow.get(position);
+      return BoardUtils.rowOf(position) == 7;
     }
 
     @Override

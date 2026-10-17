@@ -232,8 +232,7 @@ public class FenParser {
    * @return True if the pawn stands on its home rank, false otherwise.
    */
   private static boolean isOnPawnHomeRank(final Alliance alliance, final int coordinate) {
-    return alliance.isWhite() ? BoardUtils.SeventhRow.get(coordinate)
-            : BoardUtils.Instance.SecondRow.get(coordinate);
+    return BoardUtils.rowOf(coordinate) == (alliance.isWhite() ? 6 : 1);
   }
 
   /**
@@ -311,7 +310,7 @@ public class FenParser {
   private static Pawn resolveEnPassantPawn(final String targetSquare,
                                            final Alliance nextMoveMaker,
                                            final Map<Integer, Pawn> placedPawns) {
-    final int targetCoordinate = BoardUtils.ALGEBRAIC_NOTATION.indexOf(targetSquare.toLowerCase());
+    final int targetCoordinate = BoardUtils.squareOf(targetSquare.toLowerCase());
     if (targetCoordinate == -1) {
       throw new IllegalArgumentException("Unrecognised en passant target square in FEN: " + targetSquare);
     }

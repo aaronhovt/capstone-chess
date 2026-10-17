@@ -282,17 +282,17 @@ public final class Move {
     }
     final int origin = getCurrentCoordinate();
     final int destination = getDestinationCoordinate();
-    final String target = BoardUtils.getPositionAtCoordinate(destination);
+    final String target = BoardUtils.squareName(destination);
     if (isCastlingMove()) {
       return destination > origin ? "O-O" : "O-O-O";
     }
     if (this.promotionPiece != null) {
-      return BoardUtils.getPositionAtCoordinate(origin) + "-" + target + "=" +
+      return BoardUtils.squareName(origin) + "-" + target + "=" +
               this.promotionPiece.getPieceType();
     }
     final String capture = isAttack() ? "x" : "";
     if (this.movedPiece.getPieceType() == Piece.PieceType.PAWN) {
-      return isAttack() ? BoardUtils.getPositionAtCoordinate(origin).charAt(0) + capture + target :
+      return isAttack() ? BoardUtils.squareName(origin).charAt(0) + capture + target :
               target;
     }
     return this.movedPiece.getPieceType() + disambiguationFile(position) + capture + target;
@@ -310,7 +310,7 @@ public final class Move {
     for (final Move move : position.currentPlayer().getLegalMoves()) {
       if (move.getDestinationCoordinate() == getDestinationCoordinate() && !this.equals(move) &&
               this.movedPiece.getPieceType() == move.getMovedPiece().getPieceType()) {
-        return BoardUtils.getPositionAtCoordinate(getCurrentCoordinate()).substring(0, 1);
+        return BoardUtils.squareName(getCurrentCoordinate()).substring(0, 1);
       }
     }
     return "";
