@@ -1,22 +1,15 @@
 package engine.forGUI;
 
-import com.google.common.collect.Lists;
 import engine.forBoard.*;
 import engine.forPiece.Piece;
 import engine.forPlayer.Player;
 import engine.forPlayer.forAI.AlphaBeta;
 import engine.forTesting.FenParser;
 
-import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
-import java.awt.event.MouseListener;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.util.List;
 import java.util.*;
 
@@ -40,8 +33,8 @@ public final class Table extends Observable {
   /** The panel for displaying debug information or messages. */
   private final DebugPanel debugPanel;
 
-  /** The panel representing the chess board and its tiles. */
-  private final BoardPanel boardPanel;
+  /** The view of the chess board. */
+  private final BoardView boardPanel;
 
   /** The log of moves made in the game. */
   public static MoveLog moveLog;
@@ -60,12 +53,6 @@ public final class Table extends Observable {
 
   /** The piece moved by the human player. */
   private Piece humanMovedPiece;
-
-  /** The direction of the chess board (normal or flipped). */
-  private BoardDirection boardDirection;
-
-  /** The file path for the icons representing chess pieces. */
-  private final String pieceIconPath;
 
   /**
    * The search currently running, or null when none is. Only ever read or written on the event
@@ -88,28 +75,8 @@ public final class Table extends Observable {
    */
   private AlphaBeta engine;
 
-  /** The color of light tiles on the chess board. */
-  private final Color lightTileColor = Color.decode("#FFFACD");
-
-  /** The color of dark tiles on the chess board. */
-  private final Color darkTileColor = Color.decode("#593E1A");
-
   /** The outer frame dimension of the chessboard. */
   private static final Dimension OUTER_FRAME_DIMENSION = Toolkit.getDefaultToolkit().getScreenSize();
-
-  /** The board panel dimension. */
-  private static final Dimension BOARD_PANEL_DIMENSION = new Dimension(620, 620);
-
-  /** The tile panel dimension. */
-  private static final Dimension TILE_PANEL_DIMENSION = new Dimension(40, 40);
-
-  /**
-   * Cache of rendered piece icons, keyed by SVG file path. A given piece renders identically
-   * every time at a fixed tile size, so the Batik transcode is done once per distinct piece
-   * rather than once per tile per redraw. Only ever touched from the EDT, so a plain HashMap
-   * is sufficient.
-   */
-  private static final Map<String, ImageIcon> PIECE_ICON_CACHE = new HashMap<>();
 
   /** The single instance of the Table class (singleton). */
   private static final Table Instance = new Table();
@@ -126,11 +93,9 @@ public final class Table extends Observable {
     gameFrame.setJMenuBar(tableMenuBar);
     gameFrame.setLayout(new BorderLayout());
     this.chessBoard = Board.createStandardBoard();
-    this.boardDirection = BoardDirection.NORMAL;
-    this.pieceIconPath = "art/simple/";
     this.gameHistoryPanel = new GameHistoryPanel();
     this.debugPanel = new DebugPanel();
-    this.boardPanel = new BoardPanel();
+    this.boardPanel = new BoardView(this::squareClicked);
     moveLog = new MoveLog();
     this.addObserver(new TableGameAIWatcher());
     this.gameSetup = new GameSetup(gameFrame, true);
@@ -173,11 +138,11 @@ public final class Table extends Observable {
   }
 
   /**
-   * Retrieves the BoardPanel object for rendering the chess board.
+   * Retrieves the view of the chess board.
    *
-   * @return The BoardPanel object for rendering the chess board.
+   * @return The board view.
    */
-  private BoardPanel getBoardPanel() {
+  private BoardView getBoardPanel() {
     return this.boardPanel;
   }
 
@@ -229,7 +194,7 @@ public final class Table extends Observable {
   public void show() {
     if (moveLog.size() == 0) {
       Table.get().getGameHistoryPanel().redo(chessBoard, Table.get().getMoveLog());
-      Table.get().getBoardPanel().drawBoard(Table.get().getGameBoard());
+      Table.get().redrawBoard(Table.get().getGameBoard());
       Table.get().getDebugPanel().redo();
       setChanged();
       notifyObservers();
@@ -277,8 +242,8 @@ public final class Table extends Observable {
 
     final JMenuItem flipBoardMenuItem = new JMenuItem("Flip board");
     flipBoardMenuItem.addActionListener(e -> {
-      boardDirection = boardDirection.opposite();
-      boardPanel.drawBoard(chessBoard);
+      boardPanel.flip();
+      redrawBoard(chessBoard);
     });
     optionsMenu.add(flipBoardMenuItem);
 
@@ -360,7 +325,7 @@ public final class Table extends Observable {
     this.sourceTile = null;
     this.humanMovedPiece = null;
     Table.get().getGameHistoryPanel().redo(chessBoard, Table.get().getMoveLog());
-    Table.get().getBoardPanel().drawBoard(chessBoard);
+    Table.get().redrawBoard(chessBoard);
     Table.get().getDebugPanel().redo();
     if (isSearchRunning()) {
       this.restartEngineAfterSearch = true;
@@ -569,11 +534,9 @@ public final class Table extends Observable {
     }
 
     /**
-     * Returns whether the game has moved on from the position this search was run against. A
-     * move carries a reference to the board it was generated from and reads that board's
-     * castling rights and en passant state while computing its hash update, so applying a move
-     * to a board that no longer stands in the position the move belongs to does not merely play
-     * a wrong move, it leaves the board carrying a hash that does not describe it.
+     * Returns whether the game has moved on from the position this search was run against, in
+     * which case the move the search found belongs to a position that no longer exists and must
+     * not be played.
      *
      * @param board The game board as it stands now.
      * @return True if the position changed and the search result must be discarded.
@@ -612,7 +575,7 @@ public final class Table extends Observable {
         board.makeMove(bestMove);
         Table.get().getMoveLog().addMove(bestMove, notation);
         Table.get().getGameHistoryPanel().redo(board, Table.get().getMoveLog());
-        Table.get().getBoardPanel().drawBoard(board);
+        Table.get().redrawBoard(board);
         Table.get().getDebugPanel().redo();
         Table.get().moveMadeUpdate(PlayerType.COMPUTER);
       } catch (final Exception e) {
@@ -622,94 +585,6 @@ public final class Table extends Observable {
         Table.get().restartEngineIfRequested();
       }
     }
-  }
-
-  /**
-   * The BoardPanel class represents a graphical panel displaying the chess board and its tiles.
-   */
-  private class BoardPanel extends JPanel {
-
-    /** List of tile panels representing the individual tiles on the chess board. */
-    final List <TilePanel> boardTiles;
-
-    /** Constructs a new BoardPanel and initializes its tile panels. */
-    BoardPanel() {
-      super(new GridLayout(8, 8));
-      setFocusTraversalPolicyProvider(false);
-      setFocusable(false);
-      this.boardTiles = new ArrayList < > ();
-      for (int i = 0; i < BoardUtils.NUM_TILES; i++) {
-        final TilePanel tilePanel = new TilePanel(this, i);
-        this.boardTiles.add(tilePanel);
-        add(tilePanel);
-      }
-
-      setPreferredSize(BOARD_PANEL_DIMENSION);
-      setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-      setBackground(Color.decode("#8B4726"));
-      validate();
-    }
-
-    /**
-     * Draws the chess board based on the given board state, updating the display.
-     *
-     * @param board The current state of the chess board.
-     */
-    void drawBoard(final Board board) {
-      removeAll();
-      for (final TilePanel boardTile: boardDirection.traverse(boardTiles)) {
-        boardTile.drawTile(board);
-        add(boardTile);
-      } validate();
-      repaint();
-    }
-  }
-
-  /**
-   * The BoardDirection enumeration represents the two possible directions of the chess board display.
-   */
-  enum BoardDirection {
-
-    /** Represents the normal direction of the chess board. */
-    NORMAL {
-      @Override
-      List <TilePanel> traverse(final List <TilePanel> boardTiles) {
-        return boardTiles;
-      }
-
-      @Override
-      BoardDirection opposite() {
-        return FLIPPED;
-      }
-    },
-
-    /** Represents the flipped direction of the chess board. */
-    FLIPPED {
-      @Override
-      List <TilePanel> traverse(final List <TilePanel> boardTiles) {
-        return Lists.reverse(boardTiles);
-      }
-
-      @Override
-      BoardDirection opposite() {
-        return NORMAL;
-      }
-    };
-
-    /**
-     * Traverses the list of tile panels according to the current board direction.
-     *
-     * @param boardTiles The list of tile panels to traverse.
-     * @return A list of tile panels in the desired traversal order.
-     */
-    abstract List <TilePanel> traverse(final List <TilePanel> boardTiles);
-
-    /**
-     * Returns the opposite board direction.
-     *
-     * @return The opposite board direction.
-     */
-    abstract BoardDirection opposite();
   }
 
   /**
@@ -796,240 +671,106 @@ public final class Table extends Observable {
   }
 
   /**
-   * The TilePanel class represents a graphical panel for an individual tile on the chessboard.
-   * Each TilePanel displays a single tile with its associated piece, the border marking a
-   * selected piece, and the background marking the computer's last move.
+   * Shows the given position on the board view, outlining the selected piece when it belongs to
+   * the side to move and marking the computer's last move.
+   *
+   * @param board The position to show.
    */
-  private class TilePanel extends JPanel {
+  private void redrawBoard(final Board board) {
+    final int selected = this.humanMovedPiece != null &&
+            this.humanMovedPiece.getPieceAllegiance() == board.currentPlayer().getAlliance() ?
+            this.humanMovedPiece.getPiecePosition() : -1;
+    this.boardPanel.drawBoard(board, selected, this.computerMove);
+  }
 
-    /** The tile number identifier. */
-    private final int tileId;
-
-    /**
-     * Constructs a TilePanel for a specific tile on the chessboard.
-     *
-     * @param boardPanel The parent BoardPanel that contains this tile.
-     * @param tileId The unique identifier of the tile (0 to 63).
-     */
-    TilePanel(final BoardPanel boardPanel,
-              final int tileId) {
-      super(new GridBagLayout());
-      this.tileId = tileId;
-      setPreferredSize(TILE_PANEL_DIMENSION);
-      assignTileColor();
-      assignTilePieceIcon(chessBoard);
-      highlightTileBorder(chessBoard);
-      addMouseListener(new MouseListener() {
-        @Override
-        public void mouseClicked(final MouseEvent event) {
-          if (Table.get().getGameSetup().isAIPlayer(Table.get().getGameBoard().currentPlayer()) ||
-              BoardUtils.isEndOfGame(Table.get().getGameBoard()) ||
-              BoardUtils.isDrawnPosition(Table.get().getGameBoard())) {
-            return;
-          } if (isRightMouseButton(event)) {
-            sourceTile = null;
-            humanMovedPiece = null;
-          } else if (isLeftMouseButton(event)) {
-            if (sourceTile == null) {
-              sourceTile = chessBoard.getPiece(tileId);
-              humanMovedPiece = sourceTile;
-            } else {
-              final Move candidate = Move.find(chessBoard, sourceTile.getPiecePosition(), tileId);
-              if (candidate != Move.nullMove() &&
-                  candidate.getMovedPiece().getPieceAllegiance() == chessBoard.currentPlayer().getAlliance()) {
-                final Move move = resolvePromotion(candidate);
-                if (move != Move.nullMove()) {
-                  final String notation = move.toNotation(chessBoard);
-                  chessBoard.makeMove(move);
-                  if (chessBoard.currentPlayer().getOpponent().isInCheck()) {
-                    chessBoard.unmakeMove();
-                  } else {
-                    moveLog.addMove(move, notation);
-                  }
-                }
-              } sourceTile = null;
-              humanMovedPiece = null;
-            }
-          } invokeLater(() -> {
-            gameHistoryPanel.redo(chessBoard, moveLog);
-            Table.get().moveMadeUpdate(PlayerType.HUMAN);
-            boardPanel.drawBoard(chessBoard);
-            debugPanel.redo();
-          });
-        }
-
-        @Override
-        public void mouseExited(final MouseEvent e) {}
-
-        @Override
-        public void mouseEntered(final MouseEvent e) {}
-
-        @Override
-        public void mouseReleased(final MouseEvent e) {}
-
-        @Override
-        public void mousePressed(final MouseEvent e) {}
-      });
-      validate();
-    }
-
-    /**
-     * Asks the player which piece a promoting pawn should become.
-     *
-     * @return The chosen promotion piece type, or null if the player dismissed the dialog.
-     */
-    private Piece.PieceType promptForPromotionPiece() {
-      final String[] choices = { "Queen", "Rook", "Bishop", "Knight" };
-      final int chosen = JOptionPane.showOptionDialog(
-          Table.get().getBoardPanel(),
-          "Promote the pawn to:",
-          "Pawn Promotion",
-          JOptionPane.DEFAULT_OPTION,
-          JOptionPane.PLAIN_MESSAGE,
-          null,
-          choices,
-          choices[0]);
-      return switch (chosen) {
-        case 0 -> Piece.PieceType.QUEEN;
-        case 1 -> Piece.PieceType.ROOK;
-        case 2 -> Piece.PieceType.BISHOP;
-        case 3 -> Piece.PieceType.KNIGHT;
-        default -> null;
-      };
-    }
-
-    /**
-     * Resolves a candidate move into the move the player actually intends, asking which piece to
-     * promote to when the candidate is a promotion. Non promotions are returned untouched, and a
-     * dismissed dialog cancels the move rather than silently promoting to a queen.
-     *
-     * @param candidate The move matched from the squares the player clicked.
-     * @return The move to play, or the null move if the player cancelled.
-     */
-    private Move resolvePromotion(final Move candidate) {
-      if (candidate.getPromotionPiece() == null) {
-        return candidate;
-      }
-      final Piece.PieceType chosen = promptForPromotionPiece();
-      if (chosen == null) {
-        return Move.nullMove();
-      }
-      return Move.find(chessBoard, candidate.getCurrentCoordinate(),
-          candidate.getDestinationCoordinate(), chosen);
-    }
-    /**
-     * Draws the appearance of the tile based on the current state of the chessboard.
-     *
-     * @param board The current chessboard.
-     */
-    void drawTile(final Board board) {
-      SwingUtilities.invokeLater(() -> {
-        assignTileColor();
-        assignTilePieceIcon(board);
-        highlightTileBorder(board);
-        highlightAIMove();
-        validate();
-        repaint();
-      });
-    }
-
-    /**
-     * Highlights the border of the tile based on the current state of the game.
-     *
-     * @param board The current state of the chessboard.
-     */
-    private void highlightTileBorder(final Board board) {
-      if (humanMovedPiece != null &&
-              humanMovedPiece.getPieceAllegiance() == board.currentPlayer().getAlliance() &&
-              humanMovedPiece.getPiecePosition() == this.tileId) {
-        setBorder(BorderFactory.createLineBorder(Color.cyan));
+  /**
+   * Handles a click on a square of the board. A left click selects the piece on the square, or,
+   * with a piece already selected, plays the move from its square to this one if that is a legal
+   * move of the side to move. A right click clears the selection. Clicks are ignored while the
+   * computer is to move or the game is over.
+   *
+   * @param tileId The square clicked.
+   * @param event The click.
+   */
+  private void squareClicked(final int tileId, final MouseEvent event) {
+    if (Table.get().getGameSetup().isAIPlayer(Table.get().getGameBoard().currentPlayer()) ||
+        BoardUtils.isEndOfGame(Table.get().getGameBoard()) ||
+        BoardUtils.isDrawnPosition(Table.get().getGameBoard())) {
+      return;
+    } if (isRightMouseButton(event)) {
+      sourceTile = null;
+      humanMovedPiece = null;
+    } else if (isLeftMouseButton(event)) {
+      if (sourceTile == null) {
+        sourceTile = chessBoard.getPiece(tileId);
+        humanMovedPiece = sourceTile;
       } else {
-        setBorder(BorderFactory.createLineBorder(Color.GRAY));
+        final Move candidate = Move.find(chessBoard, sourceTile.getPiecePosition(), tileId);
+        if (candidate != Move.nullMove() &&
+            candidate.getMovedPiece().getPieceAllegiance() == chessBoard.currentPlayer().getAlliance()) {
+          final Move move = resolvePromotion(candidate);
+          if (move != Move.nullMove()) {
+            final String notation = move.toNotation(chessBoard);
+            chessBoard.makeMove(move);
+            if (chessBoard.currentPlayer().getOpponent().isInCheck()) {
+              chessBoard.unmakeMove();
+            } else {
+              moveLog.addMove(move, notation);
+            }
+          }
+        } sourceTile = null;
+        humanMovedPiece = null;
       }
+    } invokeLater(() -> {
+      gameHistoryPanel.redo(chessBoard, moveLog);
+      Table.get().moveMadeUpdate(PlayerType.HUMAN);
+      redrawBoard(chessBoard);
+      debugPanel.redo();
+    });
+  }
+
+  /**
+   * Asks the player which piece a promoting pawn should become.
+   *
+   * @return The chosen promotion piece type, or null if the player dismissed the dialog.
+   */
+  private Piece.PieceType promptForPromotionPiece() {
+    final String[] choices = { "Queen", "Rook", "Bishop", "Knight" };
+    final int chosen = JOptionPane.showOptionDialog(
+        Table.get().getBoardPanel(),
+        "Promote the pawn to:",
+        "Pawn Promotion",
+        JOptionPane.DEFAULT_OPTION,
+        JOptionPane.PLAIN_MESSAGE,
+        null,
+        choices,
+        choices[0]);
+    return switch (chosen) {
+      case 0 -> Piece.PieceType.QUEEN;
+      case 1 -> Piece.PieceType.ROOK;
+      case 2 -> Piece.PieceType.BISHOP;
+      case 3 -> Piece.PieceType.KNIGHT;
+      default -> null;
+    };
+  }
+
+  /**
+   * Resolves a candidate move into the move the player actually intends, asking which piece to
+   * promote to when the candidate is a promotion. Non promotions are returned untouched, and a
+   * dismissed dialog cancels the move rather than silently promoting to a queen.
+   *
+   * @param candidate The move matched from the squares the player clicked.
+   * @return The move to play, or the null move if the player cancelled.
+   */
+  private Move resolvePromotion(final Move candidate) {
+    if (candidate.getPromotionPiece() == null) {
+      return candidate;
     }
-
-    /**
-     * Highlights the background of the tile if a computer move is available.
-     */
-    private void highlightAIMove() {
-      if (computerMove != null) {
-        if (this.tileId == computerMove.getCurrentCoordinate()) {
-          setBackground(Color.pink);
-        } else if (this.tileId == computerMove.getDestinationCoordinate()) {
-          setBackground(Color.red);
-        }
-      }
+    final Piece.PieceType chosen = promptForPromotionPiece();
+    if (chosen == null) {
+      return Move.nullMove();
     }
-
-    /**
-     * Assigns the appropriate piece icon to the tile based on the current board state, reusing
-     * a previously rendered icon for that piece when one is available.
-     *
-     * @param board The current state of the chess board.
-     */
-    private void assignTilePieceIcon(final Board board) {
-      this.removeAll();
-      final Piece piece = board.getPiece(this.tileId);
-      if (piece == null) {
-        return;
-      }
-      final String svgFilePath = pieceIconPath +
-          piece.getPieceAllegiance().toString().charAt(0) +
-          piece +
-          ".svg";
-      final ImageIcon cached = PIECE_ICON_CACHE.get(svgFilePath);
-      if (cached != null) {
-        add(new JLabel(cached));
-        return;
-      }
-      try {
-        final BufferedImage image = renderSvgToImage(new File(svgFilePath), TILE_PANEL_DIMENSION.width);
-        final ImageIcon icon = new ImageIcon(image);
-        PIECE_ICON_CACHE.put(svgFilePath, icon);
-        add(new JLabel(icon));
-      } catch (final Exception e) {
-        System.out.println("Exception in assignTilePieceIcon in Table.java: " + e.getMessage());
-        e.printStackTrace();
-      }
-    }
-
-    /**
-     * Renders an SVG file to a BufferedImage for display.
-     *
-     * @param svgFile The SVG file to render.
-     * @param size The desired size of the rendered image.
-     * @return A BufferedImage containing the rendered SVG.
-     * @throws Exception If rendering fails.
-     */
-    private BufferedImage renderSvgToImage(File svgFile, int size) throws Exception {
-      org.apache.batik.transcoder.image.PNGTranscoder transcoder =
-              new org.apache.batik.transcoder.image.PNGTranscoder();
-
-      org.apache.batik.transcoder.TranscoderInput input =
-              new org.apache.batik.transcoder.TranscoderInput(svgFile.toURI().toString());
-
-      BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
-      ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-      org.apache.batik.transcoder.TranscoderOutput output =
-              new org.apache.batik.transcoder.TranscoderOutput(outputStream);
-
-      transcoder.addTranscodingHint(org.apache.batik.transcoder.SVGAbstractTranscoder.KEY_WIDTH,
-              (float)size);
-      transcoder.addTranscodingHint(org.apache.batik.transcoder.SVGAbstractTranscoder.KEY_HEIGHT,
-              (float)size);
-
-      transcoder.transcode(input, output);
-
-      ByteArrayInputStream bis = new ByteArrayInputStream(outputStream.toByteArray());
-      return ImageIO.read(bis);
-    }
-
-    /**
-     * Assigns the appropriate background color to the tile based on its position.
-     */
-    private void assignTileColor() {
-      final boolean light = (BoardUtils.rowOf(this.tileId) + this.tileId) % 2 == 0;
-      setBackground(light ? lightTileColor : darkTileColor);
-    }
+    return Move.find(chessBoard, candidate.getCurrentCoordinate(),
+        candidate.getDestinationCoordinate(), chosen);
   }
 }
