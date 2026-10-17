@@ -7,6 +7,7 @@ import engine.forPiece.Bishop;
 import engine.forPiece.King;
 import engine.forPiece.Knight;
 import engine.forPiece.Pawn;
+import engine.forPiece.Piece;
 import engine.forPiece.Queen;
 import engine.forPiece.Rook;
 
@@ -117,36 +118,36 @@ public class FenParser {
               fields.length + ": " + fen);
     }
     final Alliance nextMoveMaker = parseMoveMaker(fields[1]);
-    final Board.Builder builder = new Board.Builder();
+    final Piece[] squares = new Piece[BoardUtils.NUM_TILES];
     final Map<Integer, Pawn> placedPawns = new HashMap<>();
-    parsePiecePlacement(fields[0], fields[2], builder, placedPawns);
-    if (!"-".equals(fields[3])) {
-      builder.setEnPassantPawn(resolveEnPassantPawn(fields[3], nextMoveMaker, placedPawns));
-    }
-    builder.setMoveMaker(nextMoveMaker);
+    parsePiecePlacement(fields[0], fields[2], squares, placedPawns);
+    final Pawn enPassantPawn = "-".equals(fields[3]) ? null :
+            resolveEnPassantPawn(fields[3], nextMoveMaker, placedPawns);
+    int halfMoveClock = 0;
+    int plyCount = 0;
     if (fields.length > HALF_MOVE_CLOCK_FIELD) {
-      builder.setHalfMoveClock(parseCounter(fields[HALF_MOVE_CLOCK_FIELD], 0, "halfmove clock"));
+      halfMoveClock = parseCounter(fields[HALF_MOVE_CLOCK_FIELD], 0, "halfmove clock");
     } if (fields.length > FULL_MOVE_NUMBER_FIELD) {
       final int fullMoveNumber = parseCounter(fields[FULL_MOVE_NUMBER_FIELD], 1, "fullmove number");
-      builder.setPlyCount(((fullMoveNumber - 1) * PLIES_PER_FULL_MOVE) +
-              (nextMoveMaker.isWhite() ? 0 : 1));
-    } return builder.build();
+      plyCount = ((fullMoveNumber - 1) * PLIES_PER_FULL_MOVE) + (nextMoveMaker.isWhite() ? 0 : 1);
+    } return Board.of(squares, nextMoveMaker, enPassantPawn, halfMoveClock, plyCount);
   }
 
   /**
    * Parses the piece placement field of a Forsyth-Edwards Notation string and adds every piece
-   * it describes to the given builder. Ranks are listed from the eighth rank to the first,
+   * it describes to the given array. Ranks are listed from the eighth rank to the first,
    * which matches the coordinate ordering used by the engine, where coordinate zero is a8.
    *
    * @param placement The piece placement field of the notation string.
    * @param castlingRights The castling rights field of the notation string.
-   * @param builder The builder collecting the pieces described by the notation string.
+   * @param squares The array, indexed by square, collecting the pieces described by the notation
+   *                string.
    * @param placedPawns A map recording every placed pawn by coordinate for later en passant resolution.
    * @throws IllegalArgumentException If a rank is missing, overfull, or contains an unrecognised symbol.
    */
   private static void parsePiecePlacement(final String placement,
                                           final String castlingRights,
-                                          final Board.Builder builder,
+                                          final Piece[] squares,
                                           final Map<Integer, Pawn> placedPawns) {
     final String[] ranks = placement.split("/");
     if (ranks.length != NUM_RANKS) {
@@ -164,7 +165,7 @@ public class FenParser {
           throw new IllegalArgumentException("Rank " + (NUM_RANKS - rank) +
                   " describes more than eight files: " + ranks[rank]);
         }
-        placePiece(symbol, (rank * NUM_FILES) + file, castlingRights, builder, placedPawns);
+        placePiece(symbol, (rank * NUM_FILES) + file, castlingRights, squares, placedPawns);
         file++;
       }
       if (file != NUM_FILES) {
@@ -175,7 +176,7 @@ public class FenParser {
   }
 
   /**
-   * Creates the piece denoted by a single placement symbol and adds it to the given builder.
+   * Creates the piece denoted by a single placement symbol and stores it in the given array.
    * Uppercase symbols denote white pieces and lowercase symbols denote black pieces. Rooks and
    * kings are created with the first move status implied by the castling rights field, and pawns
    * are created with the first move status implied by the rank they stand on.
@@ -183,14 +184,15 @@ public class FenParser {
    * @param symbol The placement symbol describing the piece.
    * @param coordinate The board coordinate the piece occupies.
    * @param castlingRights The castling rights field of the notation string.
-   * @param builder The builder collecting the pieces described by the notation string.
+   * @param squares The array, indexed by square, collecting the pieces described by the notation
+   *                string.
    * @param placedPawns A map recording every placed pawn by coordinate for later en passant resolution.
    * @throws IllegalArgumentException If the placement symbol does not denote a chess piece.
    */
   private static void placePiece(final char symbol,
                                  final int coordinate,
                                  final String castlingRights,
-                                 final Board.Builder builder,
+                                 final Piece[] squares,
                                  final Map<Integer, Pawn> placedPawns) {
     final Alliance alliance = Character.isUpperCase(symbol) ? Alliance.WHITE : Alliance.BLACK;
     switch (Character.toLowerCase(symbol)) {
@@ -198,25 +200,25 @@ public class FenParser {
         final boolean isUnmoved = isOnPawnHomeRank(alliance, coordinate);
         final Pawn pawn = new Pawn(alliance, coordinate, isUnmoved, isUnmoved ? 0 : 1);
         placedPawns.put(coordinate, pawn);
-        builder.setPiece(pawn);
+        squares[coordinate] = pawn;
       } case 'n' -> {
         final boolean isUnmoved = isOnHomeSquare(alliance, coordinate, 'n');
-        builder.setPiece(new Knight(alliance, coordinate, isUnmoved, isUnmoved ? 0 : 1));
+        squares[coordinate] = new Knight(alliance, coordinate, isUnmoved, isUnmoved ? 0 : 1);
       } case 'b' -> {
         final boolean isUnmoved = isOnHomeSquare(alliance, coordinate, 'b');
-        builder.setPiece(new Bishop(alliance, coordinate, isUnmoved, isUnmoved ? 0 : 1));
+        squares[coordinate] = new Bishop(alliance, coordinate, isUnmoved, isUnmoved ? 0 : 1);
       } case 'r' -> {
         final boolean retainsRight = retainsRookCastlingRight(alliance, coordinate, castlingRights);
-        builder.setPiece(new Rook(alliance, coordinate, retainsRight, retainsRight ? 0 : 1));
+        squares[coordinate] = new Rook(alliance, coordinate, retainsRight, retainsRight ? 0 : 1);
       } case 'q' -> {
         final boolean isUnmoved = isOnHomeSquare(alliance, coordinate, 'q');
-        builder.setPiece(new Queen(alliance, coordinate, isUnmoved, isUnmoved ? 0 : 1));
+        squares[coordinate] = new Queen(alliance, coordinate, isUnmoved, isUnmoved ? 0 : 1);
       }       case 'k' -> {
         final boolean kingSide = castlingRights.indexOf(alliance.isWhite() ? 'K' : 'k') >= 0;
         final boolean queenSide = castlingRights.indexOf(alliance.isWhite() ? 'Q' : 'q') >= 0;
         final boolean retainsRight = kingSide || queenSide;
-        builder.setPiece(new King(alliance, coordinate, retainsRight,
-                !retainsRight && isOnCastledSquare(alliance, coordinate), kingSide, queenSide));
+        squares[coordinate] = new King(alliance, coordinate, retainsRight,
+                !retainsRight && isOnCastledSquare(alliance, coordinate), kingSide, queenSide);
       } default -> throw new IllegalArgumentException("Unrecognised piece symbol in FEN: " + symbol);
     }
   }

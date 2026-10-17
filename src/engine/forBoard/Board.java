@@ -15,13 +15,10 @@ import java.util.*;
  * and players, and calculating legal moves. The board keeps track of white and black pieces,
  * the current player, en passant opportunities, and the transition move that created the current state.
  * <p>
- * A board built through {@link Builder} still behaves as a fixed snapshot in the sense that
- * nothing else mutates it implicitly. In addition, a board now supports being mutated in place
- * through {@link #makeMove(Move)} and {@link #unmakeMove()}, which relocate pieces and update
- * state directly rather than constructing a new Board instance, pushing an undo record onto an
- * internal stack so the change can be exactly reversed. This mutating path is the only way a
- * move is applied anywhere in the engine; there is no longer an immutable transition that builds
- * a fresh board per move.
+ * A board is created through {@link #of} or {@link #createStandardBoard()} and changes only
+ * through {@link #makeMove(Move)} and {@link #unmakeMove()}, their packed forms, and the null
+ * move, which relocate pieces and update state in place and record what is needed to reverse the
+ * change exactly.
  *
  * @author Aaron Ho
  * @author dareTo81
@@ -224,19 +221,32 @@ public final class Board {
   /** The number of entries of {@link #positionHistory} in use. */
   private int positionHistorySize;
 
+  /** The piece types of the back rank in the starting position, from the a-file to the h-file. */
+  private static final Piece.PieceType[] BACK_RANK = {
+          Piece.PieceType.ROOK, Piece.PieceType.KNIGHT, Piece.PieceType.BISHOP,
+          Piece.PieceType.QUEEN, Piece.PieceType.KING, Piece.PieceType.BISHOP,
+          Piece.PieceType.KNIGHT, Piece.PieceType.ROOK };
+
   /**
    * A pre-constructed standard chess board configuration representing the starting position.
-   * This is a constant instance shared across all instances of the Board class.
+   * This is a constant instance shared across all instances of the Board class. This field must
+   * be declared after BACK_RANK, which its initializer reads.
    */
   private static final Board STANDARD_BOARD = createStandardBoardImpl();
 
   /**
-   * Constructs a board from a builder object containing the board configuration.
+   * Constructs a board holding the given pieces, with the given side to move, en passant pawn and
+   * move counters. The Zobrist hash is computed from the position.
    *
-   * @param builder The builder object containing board configuration details.
+   * @param squares The pieces indexed by square, null for an empty square.
+   * @param sideToMove The alliance to move.
+   * @param enPassantPawn The pawn that may be captured en passant, or null.
+   * @param halfMoveClock The number of plies since the last pawn move or capture.
+   * @param plyCount The number of plies already played.
    */
-  private Board(final Builder builder) {
-    this.boardConfig = builder.BoardConfigurations.clone();
+  private Board(final Piece[] squares, final Alliance sideToMove, final Pawn enPassantPawn,
+                final int halfMoveClock, final int plyCount) {
+    this.boardConfig = squares.clone();
     this.pieceBitboards = new long[2 * PIECE_TYPE_COUNT];
     for (final Piece piece : this.boardConfig) {
       if (piece != null) {
@@ -244,16 +254,32 @@ public final class Board {
       }
     }
     establishKings();
-    this.enPassantPawn = builder.enPassantPawn;
-    refreshPlayers(builder.nextMoveMaker);
+    this.enPassantPawn = enPassantPawn;
+    refreshPlayers(sideToMove);
     this.transitionMove = Move.nullMove();
-    this.zobristHash = builder.zobristHash != 0 ? builder.zobristHash :
-            ZobristHashing.calculateBoardHash(this);
-    this.halfMoveClock = builder.halfMoveClock;
-    this.plyCount = builder.plyCount;
+    this.zobristHash = ZobristHashing.calculateBoardHash(this);
+    this.halfMoveClock = halfMoveClock;
+    this.plyCount = plyCount;
     this.positionHistory = new long[POSITION_HISTORY_CAPACITY];
     this.positionHistory[0] = this.zobristHash;
     this.positionHistorySize = 1;
+  }
+
+  /**
+   * Returns a board holding the given pieces, with the given side to move, en passant pawn and
+   * move counters. Each piece must stand at the square it is indexed by. The array is copied.
+   *
+   * @param squares The pieces indexed by square, null for an empty square, of length
+   *                {@link BoardUtils#NUM_TILES}.
+   * @param sideToMove The alliance to move.
+   * @param enPassantPawn The pawn that may be captured en passant, or null.
+   * @param halfMoveClock The number of plies since the last pawn move or capture.
+   * @param plyCount The number of plies already played.
+   * @return The board.
+   */
+  public static Board of(final Piece[] squares, final Alliance sideToMove,
+                         final Pawn enPassantPawn, final int halfMoveClock, final int plyCount) {
+    return new Board(squares, sideToMove, enPassantPawn, halfMoveClock, plyCount);
   }
 
   /**
@@ -306,35 +332,24 @@ public final class Board {
   }
 
   /**
-   * Returns a string representation of the board, showing the piece configuration.
-   * The board is displayed as an 8x8 grid with pieces or empty spaces.
+   * Returns the board as eight lines of eight symbols from a8 to h1, each followed by a space:
+   * the piece letter, uppercase for white and lowercase for black, or a dash for an empty square.
    *
    * @return A string representation of the board.
    */
   @Override
   public String toString() {
-    final StringBuilder builder = new StringBuilder();
-    for (int i = 0; i < BoardUtils.NUM_TILES; i++) {
-      builder.append(prettyPrint(this.boardConfig[i])).append(" ");
-      if ((i + 1) % 8 == 0) {
-        builder.append("\n");
+    final StringBuilder text = new StringBuilder();
+    for (int row = 0; row < BoardUtils.NUM_TILES_PER_ROW; row++) {
+      for (int file = 0; file < BoardUtils.NUM_TILES_PER_ROW; file++) {
+        final Piece piece = this.boardConfig[row * BoardUtils.NUM_TILES_PER_ROW + file];
+        final char letter = piece == null ? '-' : piece.getPieceType().toString().charAt(0);
+        text.append(piece != null && piece.getPieceAllegiance().isBlack() ?
+                Character.toLowerCase(letter) : letter).append(' ');
       }
-    } return builder.toString();
-  }
-
-  /**
-   * Converts a piece to a string representation for display.
-   * White pieces are displayed as uppercase letters, black pieces as lowercase.
-   * A dash represents empty tiles.
-   *
-   * @param piece The piece to convert to string.
-   * @return The string representation of the piece.
-   */
-  private static String prettyPrint(final Piece piece) {
-    if(piece != null) {
-      return piece.getPieceAllegiance().isBlack() ?
-              piece.toString().toLowerCase() : piece.toString();
-    } return "-";
+      text.append('\n');
+    }
+    return text.toString();
   }
 
   /**
@@ -1154,50 +1169,41 @@ public final class Board {
   }
 
   /**
-   * Creates and returns a standard chess board configuration with all pieces
-   * in their initial positions.
+   * Creates the board of the starting position, with every piece unmoved and both sides holding
+   * both castling rights.
    *
    * @return A new Board instance with the standard starting positions of pieces.
    */
   private static Board createStandardBoardImpl() {
-    final Builder builder = new Builder();
+    final int row = BoardUtils.NUM_TILES_PER_ROW;
+    final Piece[] squares = new Piece[BoardUtils.NUM_TILES];
+    for (int file = 0; file < row; file++) {
+      squares[file] = unmovedPiece(BACK_RANK[file], Alliance.BLACK, file);
+      squares[row + file] = new Pawn(Alliance.BLACK, row + file, 0);
+      squares[6 * row + file] = new Pawn(Alliance.WHITE, 6 * row + file, 0);
+      squares[7 * row + file] = unmovedPiece(BACK_RANK[file], Alliance.WHITE, 7 * row + file);
+    }
+    return new Board(squares, Alliance.WHITE, null, 0, 0);
+  }
 
-    builder.setPiece(new Rook(Alliance.BLACK, 0, 0));
-    builder.setPiece(new Knight(Alliance.BLACK, 1, 0));
-    builder.setPiece(new Bishop(Alliance.BLACK, 2, 0));
-    builder.setPiece(new Queen(Alliance.BLACK, 3, 0));
-    builder.setPiece(new King(Alliance.BLACK, 4, true, true));
-    builder.setPiece(new Bishop(Alliance.BLACK, 5, 0));
-    builder.setPiece(new Knight(Alliance.BLACK, 6, 0));
-    builder.setPiece(new Rook(Alliance.BLACK, 7, 0));
-    builder.setPiece(new Pawn(Alliance.BLACK, 8, 0));
-    builder.setPiece(new Pawn(Alliance.BLACK, 9,0));
-    builder.setPiece(new Pawn(Alliance.BLACK, 10, 0));
-    builder.setPiece(new Pawn(Alliance.BLACK, 11, 0));
-    builder.setPiece(new Pawn(Alliance.BLACK, 12, 0));
-    builder.setPiece(new Pawn(Alliance.BLACK, 13, 0));
-    builder.setPiece(new Pawn(Alliance.BLACK, 14, 0));
-    builder.setPiece(new Pawn(Alliance.BLACK, 15, 0));
-
-    builder.setPiece(new Pawn(Alliance.WHITE, 48, 0));
-    builder.setPiece(new Pawn(Alliance.WHITE, 49, 0));
-    builder.setPiece(new Pawn(Alliance.WHITE, 50, 0));
-    builder.setPiece(new Pawn(Alliance.WHITE, 51, 0));
-    builder.setPiece(new Pawn(Alliance.WHITE, 52, 0));
-    builder.setPiece(new Pawn(Alliance.WHITE, 53, 0));
-    builder.setPiece(new Pawn(Alliance.WHITE, 54, 0));
-    builder.setPiece(new Pawn(Alliance.WHITE, 55, 0));
-    builder.setPiece(new Rook(Alliance.WHITE, 56, 0));
-    builder.setPiece(new Knight(Alliance.WHITE, 57, 0));
-    builder.setPiece(new Bishop(Alliance.WHITE, 58, 0));
-    builder.setPiece(new Queen(Alliance.WHITE, 59, 0));
-    builder.setPiece(new King(Alliance.WHITE, 60, true, true));
-    builder.setPiece(new Bishop(Alliance.WHITE, 61, 0));
-    builder.setPiece(new Knight(Alliance.WHITE, 62, 0));
-    builder.setPiece(new Rook(Alliance.WHITE, 63, 0));
-    builder.setMoveMaker(Alliance.WHITE);
-
-    return builder.build();
+  /**
+   * Creates a piece of the given type that has not moved, a king holding both castling rights.
+   *
+   * @param type The type of the piece.
+   * @param alliance The alliance of the piece.
+   * @param square The square the piece stands on.
+   * @return The piece.
+   */
+  private static Piece unmovedPiece(final Piece.PieceType type, final Alliance alliance,
+                                    final int square) {
+    return switch (type) {
+      case PAWN -> new Pawn(alliance, square, 0);
+      case KNIGHT -> new Knight(alliance, square, 0);
+      case BISHOP -> new Bishop(alliance, square, 0);
+      case ROOK -> new Rook(alliance, square, 0);
+      case QUEEN -> new Queen(alliance, square, 0);
+      case KING -> new King(alliance, square, true, true);
+    };
   }
 
   /**
@@ -1222,99 +1228,6 @@ public final class Board {
       this.whiteKing = king;
     } else {
       this.blackKing = king;
-    }
-  }
-
-  /**
-   * A builder class for constructing instances of the Board class with specific configurations.
-   * This class follows the Builder pattern to facilitate the creation of complex Board objects.
-   */
-  public static class Builder {
-    /** The pieces for the board being built, indexed by square, null for an empty square. */
-    private final Piece[] BoardConfigurations;
-    /** The player who will make the next move on the board being built. */
-    private Alliance nextMoveMaker;
-    /** The pawn that can be captured via en passant, if any. */
-    private Pawn enPassantPawn;
-    /** The Zobrist hash value for the board being built. */
-    private long zobristHash;
-    /** The halfmove clock for the board being built, defaulting to zero. */
-    private int halfMoveClock;
-    /** The ply count for the board being built, defaulting to zero for a freshly started game. */
-    private int plyCount;
-
-    /*** Constructs a new Builder instance with empty configurations. */
-    public Builder() {
-      this.BoardConfigurations = new Piece[BoardUtils.NUM_TILES];
-      this.zobristHash = 0;
-    }
-
-    /**
-     * Sets a piece at a specific position on the board being built.
-     *
-     * @param piece The piece to be placed on the board at its specified position.
-     * @return The current builder instance to continue configuring the board.
-     */
-    public Builder setPiece(final Piece piece) {
-      this.BoardConfigurations[piece.getPiecePosition()] = piece;
-      return this;
-    }
-
-    /**
-     * Sets the alliance of the player who will make the next move.
-     *
-     * @param nextMoveMaker The alliance of the player who has the next move.
-     */
-    public void setMoveMaker(final Alliance nextMoveMaker) {
-      this.nextMoveMaker = nextMoveMaker;
-    }
-
-    /**
-     * Sets the en passant pawn for the current board state.
-     *
-     * @param enPassantPawn The pawn that can be captured en passant in the current move.
-     */
-    public void setEnPassantPawn(final Pawn enPassantPawn) {
-      this.enPassantPawn = enPassantPawn;
-    }
-
-    /**
-     * Sets the Zobrist hash value for the board being built.
-     *
-     * @param zobristHash The Zobrist hash value.
-     */
-    public void setZobristHash(final long zobristHash) {
-      this.zobristHash = zobristHash;
-    }
-
-    /**
-     * Sets the halfmove clock for the board being built, for the fifty-move rule. Defaults to
-     * zero when not set, which is correct for a freshly started game but should be supplied
-     * when building a position parsed from FEN or otherwise reached mid-game.
-     *
-     * @param halfMoveClock The number of plies since the last pawn move or capture.
-     */
-    public void setHalfMoveClock(final int halfMoveClock) {
-      this.halfMoveClock = halfMoveClock;
-    }
-
-    /**
-     * Sets the ply count for the board being built, for {@link Board#getPlyCount()}. Defaults
-     * to zero, which is correct for a freshly started game.
-     *
-     * @param plyCount The number of plies already played.
-     */
-    public void setPlyCount(final int plyCount) {
-      this.plyCount = plyCount;
-    }
-
-    /**
-     * Constructs and returns a new instance of the Board class based on the configured parameters.
-     *
-     * @return A new Board instance with the specified configurations.
-     */
-    public Board build() {
-      return new Board(this);
     }
   }
 }
