@@ -247,6 +247,88 @@ public final class AttackDetector {
   }
 
   /**
+   * Returns the squares a knight on the given square attacks.
+   *
+   * @param square The knight's square.
+   * @return The attacked squares, as one bit per tile.
+   */
+  public static long knightAttacks(final int square) {
+    return KNIGHT_ATTACKERS[square];
+  }
+
+  /**
+   * Returns the squares a king on the given square attacks, castling aside.
+   *
+   * @param square The king's square.
+   * @return The attacked squares, as one bit per tile.
+   */
+  public static long kingAttacks(final int square) {
+    return KING_ATTACKERS[square];
+  }
+
+  /**
+   * Returns the squares a pawn of the given alliance on the given square attacks, being the two
+   * squares one rank ahead of it and one file to either side.
+   *
+   * @param alliance The pawn's alliance.
+   * @param square The pawn's square.
+   * @return The attacked squares, as one bit per tile.
+   */
+  public static long pawnAttacks(final Alliance alliance, final int square) {
+    return alliance.isWhite() ? BLACK_PAWN_ATTACKERS[square] : WHITE_PAWN_ATTACKERS[square];
+  }
+
+  /**
+   * Returns the squares a bishop on the given square attacks, being every square along each
+   * diagonal up to and including the first occupied one.
+   *
+   * @param square The bishop's square.
+   * @param occupancy The occupied squares, as one bit per tile.
+   * @return The attacked squares, as one bit per tile.
+   */
+  public static long bishopAttacks(final int square, final long occupancy) {
+    return slideAttacks(DIAGONAL_RAYS, square, occupancy);
+  }
+
+  /**
+   * Returns the squares a rook on the given square attacks, being every square along each rank
+   * and file direction up to and including the first occupied one.
+   *
+   * @param square The rook's square.
+   * @param occupancy The occupied squares, as one bit per tile.
+   * @return The attacked squares, as one bit per tile.
+   */
+  public static long rookAttacks(final int square, final long occupancy) {
+    return slideAttacks(ORTHOGONAL_RAYS, square, occupancy);
+  }
+
+  /**
+   * Returns the squares along the given rays out of the given square up to and including the
+   * first occupied square of each.
+   *
+   * @param rays The rays out of each square, indexed by square and then by direction.
+   * @param square The square the rays lead out of.
+   * @param occupancy The occupied squares, as one bit per tile.
+   * @return The squares reached, as one bit per tile.
+   */
+  private static long slideAttacks(final long[][] rays, final int square, final long occupancy) {
+    long attacks = 0L;
+    final long[] squareRays = rays[square];
+    for (int direction = 0; direction < squareRays.length; direction++) {
+      final long ray = squareRays[direction];
+      final long blockers = ray & occupancy;
+      if (blockers == 0L) {
+        attacks |= ray;
+        continue;
+      }
+      final int nearest = direction < DECREASING_DIRECTIONS ?
+              63 - Long.numberOfLeadingZeros(blockers) : Long.numberOfTrailingZeros(blockers);
+      attacks |= ray & ~rays[nearest][direction];
+    }
+    return attacks;
+  }
+
+  /**
    * Returns the nearest occupied square on each of the given rays out of the given square.
    *
    * @param rays The rays out of each square, indexed by square and then by direction.

@@ -1,10 +1,8 @@
 package engine.forPiece;
 
 import engine.Alliance;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
-import engine.forBoard.BoardUtils;
-
-import java.util.*;
 
 /**
  * The Knight class represents a knight chess piece. It extends the Piece class and defines the specific properties and behaviors
@@ -18,15 +16,6 @@ import java.util.*;
  * @author Aaron Ho
  */
 public final class Knight extends Piece {
-
-  /** An array of possible candidate move coordinates for a knight in its L-shaped move pattern. */
-  private final static int[] CANDIDATE_MOVE_COORDINATES = { -17, -15, -10, -6, 6, 10, 15, 17 };
-
-  /**
-   * An array, indexed by tile coordinate, of the precomputed legal destination squares for
-   * each tile on the board, taking edge cases into consideration.
-   */
-  private final static int[][] PRECOMPUTED_CANDIDATES = computeCandidates();
 
   /**
    * Constructs a new Knight instance with the given alliance, piece position, and number of moves.
@@ -57,87 +46,14 @@ public final class Knight extends Piece {
   }
 
   /**
-   * Computes and precomputes the legal destination squares for each tile on the board for the
-   * knight. Takes edge cases to exclude illegal move offsets into consideration.
-   *
-   * @return An array, indexed by tile coordinate, containing the precomputed legal destination
-   *         squares for each tile on the board.
-   */
-  private static int[][] computeCandidates() {
-    final int[][] candidates = new int[BoardUtils.NUM_TILES][];
-    for (int position = 0; position < BoardUtils.NUM_TILES; position++) {
-      final int[] legalOffsets = new int[CANDIDATE_MOVE_COORDINATES.length];
-      int numLegalMoves = 0;
-      for (final int offset: CANDIDATE_MOVE_COORDINATES) {
-        if (isFirstColumnExclusion(position, offset) ||
-                isSecondColumnExclusion(position, offset) ||
-                isSeventhColumnExclusion(position, offset) ||
-                isEighthColumnExclusion(position, offset)) {
-          continue;
-        }
-        final int destination = position + offset;
-        if (BoardUtils.isValidTileCoordinate(destination)) {
-          legalOffsets[numLegalMoves++] = destination;
-        }
-      }
-      candidates[position] = Arrays.copyOf(legalOffsets, numLegalMoves);
-    }
-    return candidates;
-  }
-
-  /**
-   * Returns the destination squares of this knight's legal moves on the given board, being every
-   * square a knight's jump away that is empty or holds an opposing piece.
+   * Returns the squares this knight attacks, being every square a knight's jump away.
    *
    * @param board The current chess board.
-   * @return The destination squares, as one bit per square.
+   * @return The attacked squares, as one bit per square.
    */
   @Override
-  public long legalDestinations(final Board board) {
-    long destinations = 0L;
-    for (final int candidateDestinationCoordinate: PRECOMPUTED_CANDIDATES[this.piecePosition]) {
-      final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
-      if (pieceAtDestination == null ||
-              this.pieceAlliance != pieceAtDestination.getPieceAllegiance()) {
-        destinations |= 1L << candidateDestinationCoordinate;
-      }
-    }
-    return destinations;
-  }
-
-  /**
-   * Determines whether this knight bears on the given square, using the same precomputed
-   * offsets as {@link #legalDestinations(Board)}. Occupancy of the target square is disregarded.
-   *
-   * @param targetSquare The square to test.
-   * @param board The current board.
-   * @return True if this knight defends targetSquare, false otherwise.
-   */
-  @Override
-  public boolean defendsSquare(final int targetSquare, final Board board) {
-    final int[] candidates = PRECOMPUTED_CANDIDATES[this.piecePosition];
-    for (final int candidateDestinationCoordinate : candidates) {
-      if (candidateDestinationCoordinate == targetSquare) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Increments the entry of the given array for every square this knight defends on the given
-   * board.
-   *
-   * @param board The current board.
-   * @param defenderCounts The per square counts to increment, of length {@link
-   *                       BoardUtils#NUM_TILES}.
-   */
-  @Override
-  public void addDefendedSquares(final Board board, final int[] defenderCounts) {
-    final int[] candidates = PRECOMPUTED_CANDIDATES[this.piecePosition];
-    for (final int candidateDestinationCoordinate : candidates) {
-      defenderCounts[candidateDestinationCoordinate]++;
-    }
+  long attackedSquares(final Board board) {
+    return AttackDetector.knightAttacks(this.piecePosition);
   }
 
   /**
@@ -160,55 +76,4 @@ public final class Knight extends Piece {
   public String toString() {
     return this.pieceType.toString();
   }
-
-  /**
-   * Checks if the current position is on the first column and the candidate offset is excluded.
-   *
-   * @param currentPosition  The current position on the board.
-   * @param candidateOffset  The candidate offset to check.
-   * @return true if the exclusion criteria are met, otherwise false.
-   */
-  private static boolean isFirstColumnExclusion(final int currentPosition,
-                                                final int candidateOffset) {
-    return BoardUtils.Instance.FirstColumn.get(currentPosition) && ((candidateOffset == -17) ||
-            (candidateOffset == -10) || (candidateOffset == 6) || (candidateOffset == 15));
-  }
-
-  /**
-   * Checks if the current position is on the second column and the candidate offset is excluded.
-   *
-   * @param currentPosition  The current position on the board.
-   * @param candidateOffset  The candidate offset to check.
-   * @return true if the exclusion criteria are met, otherwise false.
-   */
-  private static boolean isSecondColumnExclusion(final int currentPosition,
-                                                 final int candidateOffset) {
-    return BoardUtils.Instance.SecondColumn.get(currentPosition) && ((candidateOffset == -10) || (candidateOffset == 6));
-  }
-
-  /**
-   * Checks if the current position is on the seventh column and the candidate offset is excluded.
-   *
-   * @param currentPosition  The current position on the board.
-   * @param candidateOffset  The candidate offset to check.
-   * @return true if the exclusion criteria are met, otherwise false.
-   */
-  private static boolean isSeventhColumnExclusion(final int currentPosition,
-                                                  final int candidateOffset) {
-    return BoardUtils.Instance.SeventhColumn.get(currentPosition) && ((candidateOffset == -6) || (candidateOffset == 10));
-  }
-
-  /**
-   * Checks if the current position is on the eighth column and the candidate offset is excluded.
-   *
-   * @param currentPosition  The current position on the board.
-   * @param candidateOffset  The candidate offset to check.
-   * @return true if the exclusion criteria are met, otherwise false.
-   */
-  private static boolean isEighthColumnExclusion(final int currentPosition,
-                                                 final int candidateOffset) {
-    return BoardUtils.Instance.EighthColumn.get(currentPosition) && ((candidateOffset == -15) || (candidateOffset == -6) ||
-            (candidateOffset == 10) || (candidateOffset == 17));
-  }
-
 }

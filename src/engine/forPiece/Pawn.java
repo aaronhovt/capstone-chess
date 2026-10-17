@@ -1,6 +1,7 @@
 package engine.forPiece;
 
 import engine.Alliance;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
 
@@ -15,9 +16,6 @@ import engine.forBoard.BoardUtils;
  * @author dareTo81
  */
 public final class Pawn extends Piece {
-
-  /** Array of possible move coordinate offsets for pawn movement and capture patterns. */
-  private static final int[] CANDIDATE_MOVE_COORDINATES = { 8, 16, 7, 9 };
 
   /**
    * Constructs a new Pawn instance with the specified alliance and position.
@@ -70,109 +68,43 @@ public final class Pawn extends Piece {
    */
   @Override
   public long legalDestinations(final Board board) {
+    final long occupancy = board.getOccupancy();
+    final int direction = this.pieceAlliance.getDirection();
+    final int rank = this.piecePosition / BoardUtils.NUM_TILES_PER_ROW;
     long destinations = 0L;
 
-    for (final int currentCandidateOffset: CANDIDATE_MOVE_COORDINATES) {
-      final int candidateDestinationCoordinate =
-              this.piecePosition + (this.pieceAlliance.getDirection() * currentCandidateOffset);
-      if (!BoardUtils.isValidTileCoordinate(candidateDestinationCoordinate)) {
-        continue;
-      }
-
-      if (currentCandidateOffset == 8 && board.getPiece(candidateDestinationCoordinate) == null) {
-        destinations |= 1L << candidateDestinationCoordinate;
-      }
-      else if (currentCandidateOffset == 16 && this.isFirstMove() &&
-              ((BoardUtils.Instance.SecondRow.get(this.piecePosition) && this.pieceAlliance.isBlack()) ||
-                      (BoardUtils.SeventhRow.get(this.piecePosition) && this.pieceAlliance.isWhite()))) {
-        final int behindCandidateDestinationCoordinate =
-                this.piecePosition + (this.pieceAlliance.getDirection() * 8);
-        if (board.getPiece(candidateDestinationCoordinate) == null &&
-                board.getPiece(behindCandidateDestinationCoordinate) == null) {
-          destinations |= 1L << candidateDestinationCoordinate;
-        }
-      }
-      else if (currentCandidateOffset == 7 &&
-              !((BoardUtils.Instance.EighthColumn.get(this.piecePosition) && this.pieceAlliance.isWhite()) ||
-                      (BoardUtils.Instance.FirstColumn.get(this.piecePosition) && this.pieceAlliance.isBlack()))) {
-        final Piece pieceOnCandidate = board.getPiece(candidateDestinationCoordinate);
-        if (pieceOnCandidate != null) {
-          if (this.pieceAlliance != pieceOnCandidate.getPieceAllegiance()) {
-            destinations |= 1L << candidateDestinationCoordinate;
-          }
-        } else if (board.getEnPassantPawn() != null && board.getEnPassantPawn().getPiecePosition() ==
-                (this.piecePosition + (this.pieceAlliance.getOppositeDirection()))) {
-          if (this.pieceAlliance != board.getEnPassantPawn().getPieceAllegiance()) {
-            destinations |= 1L << candidateDestinationCoordinate;
-          }
-        }
-      }
-      else if (currentCandidateOffset == 9 &&
-              !((BoardUtils.Instance.FirstColumn.get(this.piecePosition) && this.pieceAlliance.isWhite()) ||
-                      (BoardUtils.Instance.EighthColumn.get(this.piecePosition) && this.pieceAlliance.isBlack()))) {
-        final Piece pieceOnCandidate = board.getPiece(candidateDestinationCoordinate);
-        if (pieceOnCandidate != null) {
-          if (this.pieceAlliance != pieceOnCandidate.getPieceAllegiance()) {
-            destinations |= 1L << candidateDestinationCoordinate;
-          }
-        } else if (board.getEnPassantPawn() != null && board.getEnPassantPawn().getPiecePosition() ==
-                (this.piecePosition - (this.pieceAlliance.getOppositeDirection()))) {
-          if (this.pieceAlliance != board.getEnPassantPawn().getPieceAllegiance()) {
-            destinations |= 1L << candidateDestinationCoordinate;
-          }
-        }
+    final int advance = this.piecePosition + direction * 8;
+    if (BoardUtils.isValidTileCoordinate(advance) && (occupancy & (1L << advance)) == 0L) {
+      destinations |= 1L << advance;
+      final int jump = advance + direction * 8;
+      if (this.isFirstMove() && rank == (this.pieceAlliance.isWhite() ? 6 : 1) &&
+              (occupancy & (1L << jump)) == 0L) {
+        destinations |= 1L << jump;
       }
     }
 
+    final long attacks = attackedSquares(board);
+    destinations |= attacks & occupancy & ~board.getOccupancy(this.pieceAlliance);
+
+    final Pawn enPassantPawn = board.getEnPassantPawn();
+    if (enPassantPawn != null && enPassantPawn.getPieceAllegiance() != this.pieceAlliance) {
+      final int enPassantTarget = enPassantPawn.getPiecePosition() + direction * 8;
+      if (BoardUtils.isValidTileCoordinate(enPassantTarget)) {
+        destinations |= attacks & ~occupancy & (1L << enPassantTarget);
+      }
+    }
     return destinations;
   }
 
   /**
-   * Determines whether this pawn bears on the given square, which is either of the two squares
-   * diagonally ahead of it. Occupancy of the target square is disregarded.
+   * Returns the squares this pawn attacks, being the two squares diagonally ahead of it.
    *
-   * @param targetSquare The square to test.
-   * @param board The current board.
-   * @return True if this pawn defends targetSquare, false otherwise.
+   * @param board The current chess board.
+   * @return The attacked squares, as one bit per square.
    */
   @Override
-  public boolean defendsSquare(final int targetSquare, final Board board) {
-    final int candidateSeven = this.piecePosition + (this.pieceAlliance.getDirection() * 7);
-    if (candidateSeven == targetSquare && BoardUtils.isValidTileCoordinate(candidateSeven) &&
-            !((BoardUtils.Instance.EighthColumn.get(this.piecePosition) && this.pieceAlliance.isWhite()) ||
-                    (BoardUtils.Instance.FirstColumn.get(this.piecePosition) && this.pieceAlliance.isBlack()))) {
-      return true;
-    }
-
-    final int candidateNine = this.piecePosition + (this.pieceAlliance.getDirection() * 9);
-    return candidateNine == targetSquare && BoardUtils.isValidTileCoordinate(candidateNine) &&
-            !((BoardUtils.Instance.FirstColumn.get(this.piecePosition) && this.pieceAlliance.isWhite()) ||
-                    (BoardUtils.Instance.EighthColumn.get(this.piecePosition) && this.pieceAlliance.isBlack()));
-  }
-
-  /**
-   * Increments the entry of the given array for every square this pawn defends on the given
-   * board, being its two capture squares.
-   *
-   * @param board The current board.
-   * @param defenderCounts The per square counts to increment, of length {@link
-   *                       BoardUtils#NUM_TILES}.
-   */
-  @Override
-  public void addDefendedSquares(final Board board, final int[] defenderCounts) {
-    final int candidateSeven = this.piecePosition + (this.pieceAlliance.getDirection() * 7);
-    if (BoardUtils.isValidTileCoordinate(candidateSeven) &&
-            !((BoardUtils.Instance.EighthColumn.get(this.piecePosition) && this.pieceAlliance.isWhite()) ||
-                    (BoardUtils.Instance.FirstColumn.get(this.piecePosition) && this.pieceAlliance.isBlack()))) {
-      defenderCounts[candidateSeven]++;
-    }
-
-    final int candidateNine = this.piecePosition + (this.pieceAlliance.getDirection() * 9);
-    if (BoardUtils.isValidTileCoordinate(candidateNine) &&
-            !((BoardUtils.Instance.FirstColumn.get(this.piecePosition) && this.pieceAlliance.isWhite()) ||
-                    (BoardUtils.Instance.EighthColumn.get(this.piecePosition) && this.pieceAlliance.isBlack()))) {
-      defenderCounts[candidateNine]++;
-    }
+  long attackedSquares(final Board board) {
+    return AttackDetector.pawnAttacks(this.pieceAlliance, this.piecePosition);
   }
 
   /**

@@ -13,8 +13,8 @@ import java.util.Objects;
  * on the chessboard, first move status, and the number of moves made. This class encapsulates the common attributes and behaviors
  * of all chess pieces, providing a foundation for specific piece implementations. The class includes methods to retrieve the
  * piece type, alliance, position, first move status, number of moves, and the piece's value based on its type. Additionally,
- * abstract methods are defined for calculating location-based bonuses and for the squares the piece moves to and
- * defends on a given chessboard. The `equals` and `hashCode` methods are overridden to facilitate
+ * abstract methods are defined for calculating location-based bonuses and for the squares the piece bears on a
+ * given chessboard, from which the squares it moves to and defends are derived. The `equals` and `hashCode` methods are overridden to facilitate
  * comparisons between piece instances based on their properties, ensuring accurate equality checks. The class also
  * incorporates the `PieceType` enum, which defines the various types of chess pieces (Pawn, Knight, Bishop, Rook,
  * Queen, King) along with their associated values. The enum includes methods to retrieve the piece value and determine
@@ -146,7 +146,18 @@ public abstract class Piece {
    * @param board The current board.
    * @return The destination squares, as one bit per square.
    */
-  public abstract long legalDestinations(final Board board);
+  public long legalDestinations(final Board board) {
+    return attackedSquares(board) & ~board.getOccupancy(this.pieceAlliance);
+  }
+
+  /**
+   * Returns the squares this piece attacks on the given board, being the squares for which
+   * {@link #defendsSquare(int, Board)} returns true.
+   *
+   * @param board The current board.
+   * @return The squares this piece bears on, as one bit per square.
+   */
+  abstract long attackedSquares(final Board board);
 
   /**
    * Determines whether this piece bears on the given square on the given board, without
@@ -158,7 +169,9 @@ public abstract class Piece {
    * @param board The current board.
    * @return True if this piece defends targetSquare, false otherwise.
    */
-  public abstract boolean defendsSquare(final int targetSquare, final Board board);
+  public boolean defendsSquare(final int targetSquare, final Board board) {
+    return ((attackedSquares(board) >>> targetSquare) & 1L) != 0L;
+  }
 
   /**
    * Increments the entry of the given array for every square this piece defends on the given
@@ -170,7 +183,11 @@ public abstract class Piece {
    * @param defenderCounts The per square counts to increment, of length {@link
    *                       BoardUtils#NUM_TILES}.
    */
-  public abstract void addDefendedSquares(final Board board, final int[] defenderCounts);
+  public void addDefendedSquares(final Board board, final int[] defenderCounts) {
+    for (long remaining = attackedSquares(board); remaining != 0L; remaining &= remaining - 1) {
+      defenderCounts[Long.numberOfTrailingZeros(remaining)]++;
+    }
+  }
 
   /**
    * Overrides the `equals` method to compare two pieces for equality.

@@ -1,19 +1,15 @@
 package engine.forPiece;
 
 import engine.Alliance;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
-import engine.forBoard.BoardUtils;
-import engine.forBoard.MoveUtils;
-
-import java.util.*;
 
 /**
  * The Queen class represents a queen chess piece, the most powerful piece on the board.
  * Queens can move diagonally, horizontally, and vertically any number of squares, combining
  * the movement patterns of rooks and bishops. This class extends the Piece class and provides
  * methods for calculating legal moves, evaluating positional bonuses, and creating new instances
- * after moves are executed. The implementation uses precomputed movement lines for efficient
- * move generation and integrates with the move pooling system for memory optimization.
+ * after moves are executed.
  * <p>
  * The queen's movement is restricted by board boundaries and other pieces, following standard
  * chess rules where it cannot jump over pieces and captures by moving to a square occupied
@@ -22,18 +18,6 @@ import java.util.*;
  * @author Aaron Ho
  */
 public final class Queen extends Piece {
-
-  /** Array of coordinate offsets representing all possible queen movement directions. */
-  private static final int[] CANDIDATE_MOVE_COORDINATES = { -9, -8, -7, -1, 1, 7, 8, 9 };
-
-  /** Empty array constant used when no movement lines are available for a position. */
-  private static final MoveUtils.Line[] EMPTY_LINES_ARRAY = new MoveUtils.Line[0];
-
-  /**
-   * An array, indexed by board position, of the precomputed movement lines available from that
-   * position. This field must be declared after EMPTY_LINES_ARRAY, which its initializer reads.
-   */
-  private static final MoveUtils.Line[][] PRECOMPUTED_CANDIDATES = computeCandidates();
 
   /**
    * Constructs a queen chess piece with the specified alliance, position, and move count.
@@ -63,109 +47,16 @@ public final class Queen extends Piece {
   }
 
   /**
-   * Precomputes and returns all possible movement lines for every position on the board.
-   * This method calculates valid queen movements considering board boundaries and edge case
-   * exclusions to optimize runtime move generation performance.
-   *
-   * @return An array, indexed by position, of the arrays of movement lines available from that
-   *         position.
-   */
-  private static MoveUtils.Line[][] computeCandidates() {
-    MoveUtils.Line[][] candidates = new MoveUtils.Line[BoardUtils.NUM_TILES][];
-    for (int position = 0; position < BoardUtils.NUM_TILES; position++) {
-      List<MoveUtils.Line> lines = new ArrayList<>();
-      for (int offset : CANDIDATE_MOVE_COORDINATES) {
-        int destination = position;
-        MoveUtils.Line line = new MoveUtils.Line();
-        while (BoardUtils.isValidTileCoordinate(destination)) {
-          if (isFirstColumnExclusion(destination, offset) || isEightColumnExclusion(destination, offset)) {
-            break;
-          }
-          destination += offset;
-          if (BoardUtils.isValidTileCoordinate(destination)) {
-            line.addCoordinate(destination);
-          }
-        }
-        if (!line.isEmpty()) {
-          lines.add(line);
-        }
-      }
-      candidates[position] = lines.toArray(EMPTY_LINES_ARRAY);
-    }
-    return candidates;
-  }
-
-  /**
-   * Returns the destination squares of this queen's legal moves on the given board, being every
-   * square along each line up to the first piece, and that piece's square when it is opposing.
+   * Returns the squares this queen attacks on the given board, being every square along each
+   * line up to and including the first occupied one.
    *
    * @param board The current chess board.
-   * @return The destination squares, as one bit per square.
+   * @return The attacked squares, as one bit per square.
    */
   @Override
-  public long legalDestinations(final Board board) {
-    long destinations = 0L;
-    for (final MoveUtils.Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
-        if (pieceAtDestination == null) {
-          destinations |= 1L << candidateDestinationCoordinate;
-        } else {
-          if (this.pieceAlliance != pieceAtDestination.getPieceAllegiance()) {
-            destinations |= 1L << candidateDestinationCoordinate;
-          }
-          break;
-        }
-      }
-    }
-    return destinations;
-  }
-
-  /**
-   * Determines whether this queen bears on the given square, walking the same precomputed
-   * lines as {@link #legalDestinations(Board)}. Occupancy of
-   * the target square is disregarded, while any piece standing strictly between this queen and
-   * the target square blocks the line.
-   *
-   * @param targetSquare The square to test.
-   * @param board The current board.
-   * @return True if this queen defends targetSquare, false otherwise.
-   */
-  @Override
-  public boolean defendsSquare(final int targetSquare, final Board board) {
-    final MoveUtils.Line[] lines = PRECOMPUTED_CANDIDATES[this.piecePosition];
-    for (final MoveUtils.Line line : lines) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        if (candidateDestinationCoordinate == targetSquare) {
-          return true;
-        }
-        if (board.getPiece(candidateDestinationCoordinate) != null) {
-          break;
-        }
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Increments the entry of the given array for every square this queen defends on the given
-   * board.
-   *
-   * @param board The current board.
-   * @param defenderCounts The per square counts to increment, of length {@link
-   *                       BoardUtils#NUM_TILES}.
-   */
-  @Override
-  public void addDefendedSquares(final Board board, final int[] defenderCounts) {
-    final MoveUtils.Line[] lines = PRECOMPUTED_CANDIDATES[this.piecePosition];
-    for (final MoveUtils.Line line : lines) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        defenderCounts[candidateDestinationCoordinate]++;
-        if (board.getPiece(candidateDestinationCoordinate) != null) {
-          break;
-        }
-      }
-    }
+  long attackedSquares(final Board board) {
+    return AttackDetector.bishopAttacks(this.piecePosition, board.getOccupancy()) |
+            AttackDetector.rookAttacks(this.piecePosition, board.getOccupancy());
   }
 
   /**
@@ -189,29 +80,5 @@ public final class Queen extends Piece {
   @Override
   public String toString() {
     return this.pieceType.toString();
-  }
-
-  /**
-   * Determines if a queen movement from a position with a given offset should be excluded
-   * due to first column boundary constraints. Prevents illegal wraparound moves.
-   *
-   * @param position The current position on the board.
-   * @param offset The movement offset being considered.
-   * @return True if the move should be excluded, false otherwise.
-   */
-  private static boolean isFirstColumnExclusion(final int position, final int offset) {
-    return BoardUtils.Instance.FirstColumn.get(position) && ((offset == -9) || (offset == -1) || (offset == 7));
-  }
-
-  /**
-   * Determines if a queen movement from a position with a given offset should be excluded
-   * due to eighth column boundary constraints. Prevents illegal wraparound moves.
-   *
-   * @param position The current position on the board.
-   * @param offset The movement offset being considered.
-   * @return True if the move should be excluded, false otherwise.
-   */
-  private static boolean isEightColumnExclusion(final int position, final int offset) {
-    return BoardUtils.Instance.EighthColumn.get(position) && ((offset == -7) || (offset == 1) || (offset == 9));
   }
 }

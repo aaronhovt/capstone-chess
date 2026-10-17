@@ -1,13 +1,8 @@
 package engine.forPiece;
 
 import engine.Alliance;
+import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
-import engine.forBoard.BoardUtils;
-
-import java.util.*;
-
-import static engine.forBoard.BoardUtils.isValidTileCoordinate;
-import static engine.forBoard.MoveUtils.Line;
 
 /**
  * The Rook class represents a rook chess piece. It extends the Piece class and defines the specific properties and
@@ -15,24 +10,11 @@ import static engine.forBoard.MoveUtils.Line;
  * any number of squares in these directions until blocked by another piece or the edge of the board.
  * <p>
  * This class provides methods for calculating legal moves for a rook, including horizontal and vertical moves,
- * as well as capturing opponent pieces. It precomputes valid move lines for each tile on the board to optimize
- * move generation performance during gameplay.
+ * as well as capturing opponent pieces.
  *
  * @author Aaron Ho
  */
 public final class Rook extends Piece {
-
-  /** An array of possible movement offsets for a rook, representing vertical and horizontal directions. */
-  private static final int[] CANDIDATE_MOVE_COORDINATES = { -8, -1, 1, 8 };
-
-  /** An empty array used as a default value when creating arrays of Line objects. */
-  private static final Line[] EMPTY_LINES_ARRAY = new Line[0];
-
-  /**
-   * An array, indexed by tile coordinate, of the precomputed legal move lines for rook movement
-   * patterns. This field must be declared after EMPTY_LINES_ARRAY, which its initializer reads.
-   */
-  private static final Line[][] PRECOMPUTED_CANDIDATES = computeCandidates();
 
   /**
    * Constructs a rook chess piece with the given alliance, starting position, and number of moves.
@@ -62,108 +44,15 @@ public final class Rook extends Piece {
   }
 
   /**
-   * Computes and precomputes the legal move lines for each tile on the board for rook movement.
-   * This method generates all possible horizontal and vertical movement patterns for rooks,
-   * taking into account board boundaries and edge exclusions.
-   *
-   * @return An array, indexed by tile coordinate, containing the precomputed legal move lines
-   *         for each tile on the board.
-   */
-  private static Line[][] computeCandidates() {
-    Line[][] candidates = new Line[BoardUtils.NUM_TILES][];
-    for (int position = 0; position < BoardUtils.NUM_TILES; position++) {
-      List<Line> lines = new ArrayList<>();
-      for (int offset : CANDIDATE_MOVE_COORDINATES) {
-        int destination = position;
-        Line line = new Line();
-        while (isValidTileCoordinate(destination)) {
-          if (isColumnExclusion(destination, offset)) {
-            break;
-          }
-          destination += offset;
-          if (isValidTileCoordinate(destination)) {
-            line.addCoordinate(destination);
-          }
-        }
-        if (!line.isEmpty()) {
-          lines.add(line);
-        }
-      }
-      candidates[position] = lines.toArray(EMPTY_LINES_ARRAY);
-    }
-    return candidates;
-  }
-
-  /**
-   * Returns the destination squares of this rook's legal moves on the given board, being every
-   * square along each line up to the first piece, and that piece's square when it is opposing.
+   * Returns the squares this rook attacks on the given board, being every square along each
+   * rank and file direction up to and including the first occupied one.
    *
    * @param board The current chess board.
-   * @return The destination squares, as one bit per square.
+   * @return The attacked squares, as one bit per square.
    */
   @Override
-  public long legalDestinations(final Board board) {
-    long destinations = 0L;
-    for (final Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
-        if (pieceAtDestination == null) {
-          destinations |= 1L << candidateDestinationCoordinate;
-        } else {
-          if (this.pieceAlliance != pieceAtDestination.getPieceAllegiance()) {
-            destinations |= 1L << candidateDestinationCoordinate;
-          }
-          break;
-        }
-      }
-    }
-    return destinations;
-  }
-  /**
-   * Determines whether this rook bears on the given square, walking the same precomputed
-   * lines as {@link #legalDestinations(Board)}. Occupancy of
-   * the target square is disregarded, while any piece standing strictly between this rook and
-   * the target square blocks the line.
-   *
-   * @param targetSquare The square to test.
-   * @param board The current board.
-   * @return True if this rook defends targetSquare, false otherwise.
-   */
-  @Override
-  public boolean defendsSquare(final int targetSquare, final Board board) {
-    final Line[] lines = PRECOMPUTED_CANDIDATES[this.piecePosition];
-    for (final Line line : lines) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        if (candidateDestinationCoordinate == targetSquare) {
-          return true;
-        }
-        if (board.getPiece(candidateDestinationCoordinate) != null) {
-          break;
-        }
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Increments the entry of the given array for every square this rook defends on the given
-   * board.
-   *
-   * @param board The current board.
-   * @param defenderCounts The per square counts to increment, of length {@link
-   *                       BoardUtils#NUM_TILES}.
-   */
-  @Override
-  public void addDefendedSquares(final Board board, final int[] defenderCounts) {
-    final Line[] lines = PRECOMPUTED_CANDIDATES[this.piecePosition];
-    for (final Line line : lines) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        defenderCounts[candidateDestinationCoordinate]++;
-        if (board.getPiece(candidateDestinationCoordinate) != null) {
-          break;
-        }
-      }
-    }
+  long attackedSquares(final Board board) {
+    return AttackDetector.rookAttacks(this.piecePosition, board.getOccupancy());
   }
 
   /**
@@ -186,18 +75,5 @@ public final class Rook extends Piece {
   @Override
   public String toString() {
     return this.pieceType.toString();
-  }
-
-  /**
-   * Checks if a given position is at the edge of a column on the chessboard and if the given offset would
-   * result in an invalid horizontal movement for the rook.
-   *
-   * @param position The position to check.
-   * @param offset The offset value for the movement.
-   * @return True if the position is at the column edge and the offset is invalid for horizontal movement, false otherwise.
-   */
-  private static boolean isColumnExclusion(final int position, final int offset) {
-    return (BoardUtils.Instance.FirstColumn.get(position) && (offset == -1)) ||
-            (BoardUtils.Instance.EighthColumn.get(position) && (offset == 1));
   }
 }
