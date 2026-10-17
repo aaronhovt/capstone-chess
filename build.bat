@@ -17,7 +17,6 @@ set "GUI_JAR=CapstoneChess.jar"
 set "UCI_MAIN=engine.forUCI.UciEngine"
 set "GUI_MAIN=engine.engineDriver"
 set "MATCH_MAIN=engine.forTesting.SelfPlayMatch"
-set "ENGINE_LIBS=lib\guava-33.4.0-jre.jar lib\failureaccess-1.0.2.jar"
 set "CONT=  "
 
 rem The jar tool writes each archive to a temporary file first. Keeping temporary files under the
@@ -44,18 +43,6 @@ if not defined JDK_BIN (
     exit /b 1
 )
 echo Using the JDK at !JDK_BIN!
-
-for %%J in (%ENGINE_LIBS%) do (
-    if not exist "%%J" (
-        echo Missing dependency: %%J
-        exit /b 1
-    )
-)
-
-set "ENGINE_CP="
-for %%J in (%ENGINE_LIBS%) do (
-    if defined ENGINE_CP (set "ENGINE_CP=!ENGINE_CP!;%%J") else (set "ENGINE_CP=%%J")
-)
 
 set "TARGET=%~1"
 if not defined TARGET set "TARGET=all"
@@ -218,7 +205,7 @@ call :buildSuite "match" "%MATCH_MAIN%" "src\engine\forTesting\SelfPlayMatch.jav
 echo [compare] engine A is !BASE_LABEL!
 echo [compare] engine B is !TEST_LABEL!
 echo [compare] the engines run under !JAVA_LINE!
-java -cp "%OUT%\match;!ENGINE_CP!" %MATCH_MAIN% --engine-a "java -jar !BASE_JAR!" --engine-b "java -jar !TEST_JAR!" !MATCH_ARGS!
+java -cp "%OUT%\match" %MATCH_MAIN% --engine-a "java -jar !BASE_JAR!" --engine-b "java -jar !TEST_JAR!" !MATCH_ARGS!
 if errorlevel 1 exit /b 1
 goto :done
 
@@ -297,18 +284,6 @@ exit /b 0
 :buildUci
 echo [uci] compiling
 call :compile "uci" "src\engine\forUCI\UciEngine.java" || exit /b 1
-echo [uci] unpacking dependencies
-pushd "%OUT%\uci" || exit /b 1
-for %%J in (%ENGINE_LIBS%) do (
-    "%JDK_BIN%jar" xf "%ROOT%%%J"
-    if errorlevel 1 (
-        popd
-        echo Unpacking %%J failed.
-        exit /b 1
-    )
-)
-popd
-if exist "%OUT%\uci\META-INF" rmdir /s /q "%OUT%\uci\META-INF"
 echo [uci] packaging %UCI_JAR%
 "%JDK_BIN%jar" cfe "%UCI_JAR%" %UCI_MAIN% -C "%OUT%\uci" .
 if errorlevel 1 exit /b 1
@@ -344,5 +319,5 @@ exit /b 0
 rem %1 is the output subdirectory, %2 is the main class, %3 is the entry point source file.
 echo [%~1] compiling
 call :compile "%~1" "%~3" || exit /b 1
-echo [%~1] run from this directory with: java -cp "%OUT%\%~1;%ENGINE_CP%" %~2
+echo [%~1] run from this directory with: java -cp "%OUT%\%~1" %~2
 exit /b 0

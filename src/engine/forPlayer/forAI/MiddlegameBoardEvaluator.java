@@ -1,6 +1,5 @@
 package engine.forPlayer.forAI;
 
-import com.google.common.annotations.VisibleForTesting;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
@@ -820,7 +819,6 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    *                   potential terms, from {@link #kingTermWeight}.
    * @return The evaluation score of the board from the perspective of the specified player.
    */
-  @VisibleForTesting
   private double score(final Player player, final Board board,
                        final MoveStatistics playerStatistics,
                        final MoveStatistics opponentStatistics,

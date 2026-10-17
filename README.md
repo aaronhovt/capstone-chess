@@ -10,9 +10,9 @@ testing package that validates move generation, search, and evaluation.
 
 JDK 25 or later. The build targets Java 25 and will not compile on an older release.
 
-The engine itself depends only on `lib/guava-33.4.0-jre.jar` and `lib/failureaccess-1.0.2.jar`. The
-graphical interface additionally uses the Batik set in `lib/` to render the piece artwork in `art/`.
-Every dependency is vendored, so there is nothing to download and no dependency manager to run.
+The engine has no dependencies beyond the JDK. The graphical interface uses the Batik set in `lib/`
+to render the piece artwork in `art/`. Those jars are vendored, so there is nothing to download and
+no dependency manager to run.
 
 The project is developed on Windows and built primarily for it. `build.bat` is a Windows batch file
 and its `compare` target depends on `git worktree` and on the script being able to invoke itself.
@@ -72,7 +72,7 @@ The suite targets compile only. Each one prints the command that runs what it ju
 example:
 
 ```
-java -cp "out\tactical;lib\guava-33.4.0-jre.jar;lib\failureaccess-1.0.2.jar" engine.forTesting.TacticalSuite
+java -cp "out\tactical" engine.forTesting.TacticalSuite
 ```
 
 On a platform without the batch script, compile an entry point directly. `javac` follows the source
@@ -84,8 +84,8 @@ java -cp "out/gui:lib/*" engine.engineDriver
 ```
 
 Substitute another entry point for a different target: `src/engine/forUCI/UciEngine.java` for the UCI
-engine, or any of the suite classes in `src/engine/forTesting`. Only the interface needs the full
-`lib/*` on the classpath; the engine and the suites need the Guava and failureaccess jars alone.
+engine, or any of the suite classes in `src/engine/forTesting`. Only the interface needs `lib/*` on
+the classpath; the engine and the suites need nothing beyond their own output directory.
 
 ## Validation Tooling
 

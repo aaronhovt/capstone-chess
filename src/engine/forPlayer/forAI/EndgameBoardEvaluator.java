@@ -1,6 +1,5 @@
 package engine.forPlayer.forAI;
 
-import com.google.common.annotations.VisibleForTesting;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
@@ -504,7 +503,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @param opponentTargets The destinations of the opponent's legal moves.
    * @return The evaluation score of the board from the perspective of the specified player.
    */
-  @VisibleForTesting
   private double score(final Player player, final Board board, final PawnLists pawns,
                        final PawnStructureCache.Entry pawnStructure, final Material material,
                        final LegalMoveTally playerTargets, final LegalMoveTally opponentTargets) {
