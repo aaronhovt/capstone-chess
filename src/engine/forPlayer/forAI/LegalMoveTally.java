@@ -3,7 +3,8 @@ package engine.forPlayer.forAI;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
-import engine.forBoard.Move;
+import engine.forBoard.MoveCode;
+import engine.forBoard.MoveGenerator;
 import engine.forPiece.Piece;
 import engine.forPlayer.Player;
 
@@ -54,9 +55,11 @@ final class LegalMoveTally {
             WHITE_PROMOTION_TILES :
             BLACK_PROMOTION_TILES;
 
+    final int[] castles = new int[2];
+    final int castleCount = MoveGenerator.generateCastles(board, player.getAlliance(), castles);
     long castleDestinations = 0L;
-    for (final Move castle : player.getCastleMoves()) {
-      castleDestinations |= 1L << castle.getDestinationCoordinate();
+    for (int castle = 0; castle < castleCount; castle++) {
+      castleDestinations |= 1L << MoveCode.destination(castles[castle]);
     }
 
     final Collection<Piece> pieces = player.getActivePieces();

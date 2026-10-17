@@ -4,10 +4,6 @@ import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
 import java.util.Objects;
 
 
@@ -17,8 +13,8 @@ import java.util.Objects;
  * on the chessboard, first move status, and the number of moves made. This class encapsulates the common attributes and behaviors
  * of all chess pieces, providing a foundation for specific piece implementations. The class includes methods to retrieve the
  * piece type, alliance, position, first move status, number of moves, and the piece's value based on its type. Additionally,
- * abstract methods are defined for calculating location-based bonuses, moving the piece according to a specified move, and determining
- * legal moves for the piece on a given chessboard. The `equals` and `hashCode` methods are overridden to facilitate
+ * abstract methods are defined for calculating location-based bonuses and for the squares the piece moves to and
+ * defends on a given chessboard. The `equals` and `hashCode` methods are overridden to facilitate
  * comparisons between piece instances based on their properties, ensuring accurate equality checks. The class also
  * incorporates the `PieceType` enum, which defines the various types of chess pieces (Pawn, Knight, Bishop, Rook,
  * Queen, King) along with their associated values. The enum includes methods to retrieve the piece value and determine
@@ -142,31 +138,10 @@ public abstract class Piece {
   }
 
   /**
-   * Calculates the legal moves for the piece on the given board.
-   *
-   * @param board The current board.
-   * @return An unmodifiable collection of legal moves for the piece.
-   */
-  public Collection<Move> calculateLegalMoves(final Board board) {
-    final List<Move> legalMoves = new ArrayList<>();
-    addLegalMoves(board, legalMoves);
-    return Collections.unmodifiableList(legalMoves);
-  }
-
-  /**
-   * Appends the legal moves for the piece on the given board to the given list, in the same order
-   * {@link #calculateLegalMoves(Board)} returns them.
-   *
-   * @param board The current board.
-   * @param legalMoves The list to which the piece's legal moves are appended.
-   */
-  public abstract void addLegalMoves(final Board board, final List<Move> legalMoves);
-
-  /**
-   * Returns the destination squares of the moves {@link #addLegalMoves(Board, List)} appends for
-   * this piece on the given board, without allocating any {@link Move} objects. A pawn move onto
-   * the promotion rank appears once here, although one move per promotion piece is appended for
-   * it. No other square is the destination of more than one of this piece's moves.
+   * Returns the destination squares of this piece's pseudo-legal moves on the given board, castling
+   * excluded, without allocating any {@link Move} objects. A pawn move onto the promotion rank
+   * appears once here, although there is one move per promotion piece. No other square is the
+   * destination of more than one of this piece's moves.
    *
    * @param board The current board.
    * @return The destination squares, as one bit per square.

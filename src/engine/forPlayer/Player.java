@@ -4,6 +4,7 @@ import engine.Alliance;
 import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
+import engine.forBoard.MoveGenerator;
 import engine.forPiece.King;
 import engine.forPiece.Piece;
 
@@ -20,15 +21,12 @@ import static engine.forPiece.Piece.PieceType.KING;
  * their king piece, legal moves, and check status. The class answers state queries including check,
  * checkmate, stalemate, and castling status. Applying a move is not a player's responsibility;
  * moves are applied to a board in place through {@link Board#makeMove(Move)}. Concrete subclasses
- * must implement alliance-specific behavior for piece management and castling calculations.
+ * must implement alliance-specific behavior for piece management.
  *
  * @author Aaron Ho
  * @author dareTo81
  */
 public abstract class Player {
-
-  /** The initial capacity of the list a player's legal moves are generated into. */
-  private static final int LEGAL_MOVE_LIST_CAPACITY = 48;
 
   /** The chessboard associated with this player. */
   protected final Board board;
@@ -51,7 +49,7 @@ public abstract class Player {
 
   /**
    * Constructs a Player with the specified board, establishing the player's king. Neither this
-   * player's check status nor its legal moves, including castling, are computed here; they are
+   * player's check status nor its legal moves are computed here; they are
    * computed lazily by {@link #isInCheck()} and {@link #getLegalMoves()} the first time something
    * actually asks for them.
    *
@@ -171,34 +169,24 @@ public abstract class Player {
   }
 
   /**
-   * Retrieves the collection of legal moves for this player, computing and caching it on the
-   * first call. This is the expensive part of standing up a player, full pseudo-legal move
-   * generation for every active piece plus castling, and most positions visited during search
-   * only ever need one side's move list at a given node, so deferring it here rather than
-   * computing it for both sides on every board mutation is the whole point.
+   * Retrieves this player's pseudo-legal moves on the current board, castling included, computing
+   * and caching them on the first call. They are the moves {@link MoveGenerator#generate} writes
+   * for this player's alliance, in the same order, each converted by
+   * {@link Move.MoveFactory#fromCode}.
    *
    * @return An unmodifiable collection of legal moves.
    */
   public Collection<Move> getLegalMoves() {
     if (this.legalMoves == null) {
-      this.legalMoves = calculateLegalMoves();
+      final int[] codes = new int[MoveGenerator.MAX_MOVES];
+      final int count = MoveGenerator.generate(this.board, getAlliance(), codes);
+      final List<Move> moves = new ArrayList<>(count);
+      for (int index = 0; index < count; index++) {
+        moves.add(Move.MoveFactory.fromCode(this.board, codes[index]));
+      }
+      this.legalMoves = Collections.unmodifiableList(moves);
     }
     return this.legalMoves;
-  }
-
-  /**
-   * Computes this player's full legal move list against the current board: pseudo-legal moves
-   * for every active piece, plus castling.
-   *
-   * @return An unmodifiable collection of this player's legal moves.
-   */
-  private Collection<Move> calculateLegalMoves() {
-    final List<Move> playerLegals = new ArrayList<>(LEGAL_MOVE_LIST_CAPACITY);
-    for (final Piece piece : getActivePieces()) {
-      piece.addLegalMoves(this.board, playerLegals);
-    }
-    playerLegals.addAll(calculateKingCastles(playerLegals));
-    return Collections.unmodifiableList(playerLegals);
   }
 
   /**
@@ -224,36 +212,4 @@ public abstract class Player {
    * @return The opponent player.
    */
   public abstract Player getOpponent();
-
-  /**
-   * Calculates and returns possible castling moves for this player's king.
-   * Must be implemented by concrete subclasses to handle alliance-specific castling rules.
-   *
-   * @param playerLegals The legal moves available to this player.
-   * @return A collection of possible castling moves.
-   */
-  protected abstract Collection<Move> calculateKingCastles(Collection<Move> playerLegals);
-
-  /**
-   * Returns the castling moves {@link #getLegalMoves()} includes for this player on the current
-   * board, computed afresh on every call and without generating any other move.
-   *
-   * @return An unmodifiable collection of this player's castling moves.
-   */
-  public Collection<Move> getCastleMoves() {
-    return calculateKingCastles(Collections.emptyList());
-  }
-
-  /**
-   * Determines whether this player has any castling opportunities available.
-   * A player has castling opportunities if they are not in check, have not already castled,
-   * and retain either kingside or queenside castling capabilities.
-   *
-   * @return True if castling opportunities exist, false otherwise.
-   */
-  protected boolean hasCastleOpportunities() {
-    return !this.playerKing.isCastled() &&
-            (this.playerKing.isKingSideCastleCapable() || this.playerKing.isQueenSideCastleCapable()) &&
-            !isInCheck();
-  }
 }

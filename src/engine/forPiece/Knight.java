@@ -3,7 +3,6 @@ package engine.forPiece;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
-import engine.forBoard.Move;
 
 import java.util.*;
 
@@ -87,28 +86,6 @@ public final class Knight extends Piece {
   }
 
   /**
-   * Appends the legal moves for the knight on the given board to the given list.
-   *
-   * @param board The current board.
-   * @param legalMoves The list to which the knight's legal moves are appended.
-   */
-  @Override
-  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
-    for (final int candidateDestinationCoordinate: PRECOMPUTED_CANDIDATES[this.piecePosition]) {
-      final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
-      if (pieceAtDestination == null) {
-        legalMoves.add(new Move.MajorMove(board, this, candidateDestinationCoordinate));
-      } else {
-        final Alliance pieceAtDestinationAllegiance = pieceAtDestination.getPieceAllegiance();
-        if (this.pieceAlliance != pieceAtDestinationAllegiance) {
-          legalMoves.add(new Move.MajorAttackMove(board, this, candidateDestinationCoordinate,
-                  pieceAtDestination));
-        }
-      }
-    }
-  }
-
-  /**
    * Returns the destination squares of this knight's legal moves on the given board, being every
    * square a knight's jump away that is empty or holds an opposing piece.
    *
@@ -130,8 +107,7 @@ public final class Knight extends Piece {
 
   /**
    * Determines whether this knight bears on the given square, using the same precomputed
-   * offsets as {@link #calculateLegalMoves(Board)} but without allocating any moves. Occupancy
-   * of the target square is disregarded.
+   * offsets as {@link #legalDestinations(Board)}. Occupancy of the target square is disregarded.
    *
    * @param targetSquare The square to test.
    * @param board The current board.

@@ -3,7 +3,6 @@ package engine.forPiece;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
-import engine.forBoard.Move;
 
 import java.util.*;
 
@@ -96,32 +95,6 @@ public final class Rook extends Piece {
   }
 
   /**
-   * Appends the legal moves that the rook can make on the given chess board to the given list. A rook can move
-   * horizontally or vertically across the board, capturing opponent pieces along the way until blocked by a piece or
-   * board edge.
-   *
-   * @param board The current state of the chess board.
-   * @param legalMoves The list to which the rook's legal moves are appended.
-   */
-  @Override
-  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
-    for (final Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
-        if (pieceAtDestination == null) {
-          legalMoves.add(new Move.MajorMove(board, this, candidateDestinationCoordinate));
-        } else {
-          final Alliance pieceAlliance = pieceAtDestination.getPieceAllegiance();
-          if (this.pieceAlliance != pieceAlliance) {
-            legalMoves.add(new Move.MajorAttackMove(board, this, candidateDestinationCoordinate, pieceAtDestination));
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  /**
    * Returns the destination squares of this rook's legal moves on the given board, being every
    * square along each line up to the first piece, and that piece's square when it is opposing.
    *
@@ -148,7 +121,7 @@ public final class Rook extends Piece {
   }
   /**
    * Determines whether this rook bears on the given square, walking the same precomputed
-   * lines as {@link #calculateLegalMoves(Board)} but without allocating any moves. Occupancy of
+   * lines as {@link #legalDestinations(Board)}. Occupancy of
    * the target square is disregarded, while any piece standing strictly between this rook and
    * the target square blocks the line.
    *

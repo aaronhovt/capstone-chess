@@ -8,10 +8,10 @@ import engine.forPiece.Piece;
 import java.util.Arrays;
 
 /**
- * MoveGenerator writes a side's pseudo-legal moves into an int array as {@link MoveCode}s. It
- * produces exactly the moves {@link engine.forPlayer.Player#getLegalMoves()} produces for that
- * side, in the same order: the side's pieces in ascending square order, each piece's moves in the
- * order its own class generates them, and the castling moves last, king side first.
+ * MoveGenerator writes a side's pseudo-legal moves into an int array as {@link MoveCode}s, in this
+ * order: the side's pieces in ascending square order, each piece's moves in the order of its
+ * steps or rays, and the castling moves last, king side first.
+ * {@link engine.forPlayer.Player#getLegalMoves()} lists the same moves in the same order.
  *
  * @author Aaron Ho
  */
@@ -86,6 +86,19 @@ public final class MoveGenerator {
    */
   public static int generateQuiescence(final Board board, final Alliance side, final int[] moves) {
     return generate(board, side, moves, true);
+  }
+
+  /**
+   * Writes the given side's castling moves into the given array, from index zero, as
+   * {@link #generate} writes them.
+   *
+   * @param board The board to generate on.
+   * @param side The side whose castling moves are generated.
+   * @param moves The array to write into, of length at least two.
+   * @return The number of moves written.
+   */
+  public static int generateCastles(final Board board, final Alliance side, final int[] moves) {
+    return addCastles(board, side, moves, 0);
   }
 
   /**
@@ -296,8 +309,8 @@ public final class MoveGenerator {
   }
 
   /**
-   * Appends the given side's castling moves, king side first, under the conditions the players
-   * apply: the king has not castled, keeps a castling right on either side, is not in check, has
+   * Appends the given side's castling moves, king side first, under these conditions: the king
+   * has not castled, keeps a castling right on either side, is not in check, has
    * not moved and stands on its home square, and for each side the squares between king and rook
    * are empty, the piece on the rook's home square is an unmoved rook, and the two squares the
    * king's path covers next to the rook are not attacked.

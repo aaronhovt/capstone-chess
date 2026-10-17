@@ -3,7 +3,6 @@ package engine.forPiece;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
-import engine.forBoard.Move;
 import engine.forBoard.MoveUtils;
 
 import java.util.*;
@@ -97,32 +96,6 @@ public final class Queen extends Piece {
   }
 
   /**
-   * Appends all legal moves the queen can make from its current position to the given list.
-   * The method iterates through precomputed movement lines, checking for blocking pieces
-   * and generating appropriate move or attack move instances using the move pool.
-   *
-   * @param board The current chess board state.
-   * @param legalMoves The list to which the queen's legal moves are appended.
-   */
-  @Override
-  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
-    for (final MoveUtils.Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
-        if (pieceAtDestination == null) {
-          legalMoves.add(new Move.MajorMove(board, this, candidateDestinationCoordinate));
-        } else {
-          final Alliance pieceAlliance = pieceAtDestination.getPieceAllegiance();
-          if (this.pieceAlliance != pieceAlliance) {
-            legalMoves.add(new Move.MajorAttackMove(board, this, candidateDestinationCoordinate, pieceAtDestination));
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  /**
    * Returns the destination squares of this queen's legal moves on the given board, being every
    * square along each line up to the first piece, and that piece's square when it is opposing.
    *
@@ -150,7 +123,7 @@ public final class Queen extends Piece {
 
   /**
    * Determines whether this queen bears on the given square, walking the same precomputed
-   * lines as {@link #calculateLegalMoves(Board)} but without allocating any moves. Occupancy of
+   * lines as {@link #legalDestinations(Board)}. Occupancy of
    * the target square is disregarded, while any piece standing strictly between this queen and
    * the target square blocks the line.
    *

@@ -229,7 +229,8 @@ public class Perft {
    * round trip fails to reproduce the position it was given, or at which the board's bitboards or
    * piece lists disagree with its pieces, checked on arriving at each position and again after its
    * moves have been unmade, or at which unmaking a move does not restore the position's player
-   * objects, or at which {@link MoveGenerator} disagrees with either side's legal move list, or
+   * objects, or at which either side's legal move list does not describe the moves
+   * {@link MoveGenerator} writes for it, or
    * at which applying, testing or reversing a move as a packed int disagrees with doing so as a
    * {@link Move}. Nothing in the engine calls either
    * of those yet, so this rather than a node count is what validates them.
@@ -298,9 +299,10 @@ public class Perft {
   }
 
   /**
-   * Checks that {@link MoveGenerator} writes, for each side, exactly the moves that side's player
-   * lists, in the same order, each with the squares, promotion and flags of the listed move, and
-   * that its quiescence moves are exactly the captures and queen promotions among them, in order.
+   * Checks that, for each side, the player's legal move list holds one move for each move
+   * {@link MoveGenerator} writes, in the same order, each with the squares, promotion and flags of
+   * the packed move it was converted from, and that the generator's quiescence moves are exactly
+   * the captures and queen promotions among its moves, in order.
    *
    * @param board The board to check.
    * @return A description of the first difference found, or null if the lists agree.

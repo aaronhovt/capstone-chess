@@ -739,6 +739,46 @@ public abstract class Move {
     }
 
     /**
+     * Creates the move the given packed move describes on the given board, as the subclass that
+     * describes its kind.
+     *
+     * @param board The board the move belongs to, standing in the position it was generated in.
+     * @param move A move {@link MoveGenerator} generates on that board, for either side.
+     * @return The move.
+     */
+    public static Move fromCode(final Board board, final int move) {
+      final int origin = MoveCode.origin(move);
+      final int destination = MoveCode.destination(move);
+      final Piece moved = board.getPiece(origin);
+      if (MoveCode.isCastle(move)) {
+        final boolean kingSide = destination > origin;
+        final int rookOrigin = kingSide ? origin + 3 : origin - 4;
+        final int rookDestination = kingSide ? origin + 1 : origin - 1;
+        final Rook rook = (Rook) board.getPiece(rookOrigin);
+        return kingSide ?
+                new KingSideCastleMove(board, moved, destination, rook, rookOrigin, rookDestination) :
+                new QueenSideCastleMove(board, moved, destination, rook, rookOrigin, rookDestination);
+      }
+      if (moved.getPieceType() != Piece.PieceType.PAWN) {
+        return MoveCode.isCapture(move) ?
+                new MajorAttackMove(board, moved, destination, board.getPiece(destination)) :
+                new MajorMove(board, moved, destination);
+      }
+      if (MoveCode.isEnPassant(move)) {
+        return new PawnEnPassantAttack(board, moved, destination, board.getEnPassantPawn());
+      }
+      if (MoveCode.isPawnJump(move)) {
+        return new PawnJump(board, (Pawn) moved, destination);
+      }
+      final Move pawnMove = MoveCode.isCapture(move) ?
+              new PawnAttackMove(board, moved, destination, board.getPiece(destination)) :
+              new PawnMove(board, moved, destination);
+      final Piece.PieceType promotionType = MoveCode.promotionType(move);
+      return promotionType == null ? pawnMove : new PawnPromotion(pawnMove,
+              Piece.moved(promotionType, moved.getPieceAllegiance(), destination, false));
+    }
+
+    /**
      * Creates a move with the specified current and destination coordinates on the given board,
      * promoting to a queen if the move turns out to be a promotion. This is the form to use where
      * the promotion piece is not a choice, such as replaying a recorded move.

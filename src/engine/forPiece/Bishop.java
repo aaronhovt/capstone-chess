@@ -3,7 +3,6 @@ package engine.forPiece;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
-import engine.forBoard.Move;
 
 import java.util.*;
 
@@ -93,33 +92,6 @@ public final class Bishop extends Piece {
   }
 
   /**
-   * Appends all legal moves for this bishop given the current board state to the given list.
-   * The method generates moves along each diagonal line until blocked by a piece
-   * or the board edge. Captures are allowed if the blocking piece belongs to the opponent.
-   *
-   * @param board The current chess board state.
-   * @param legalMoves The list to which this bishop's legal moves are appended.
-   */
-  @Override
-  public void addLegalMoves(final Board board, final List<Move> legalMoves) {
-    for (final Line line : PRECOMPUTED_CANDIDATES[this.piecePosition]) {
-      for (final int candidateDestinationCoordinate : line.getLineCoordinates()) {
-        final Piece pieceAtDestination = board.getPiece(candidateDestinationCoordinate);
-        if (pieceAtDestination == null) {
-          legalMoves.add(new Move.MajorMove(board, this, candidateDestinationCoordinate));
-        } else {
-          final Alliance pieceAlliance = pieceAtDestination.getPieceAllegiance();
-          if (this.pieceAlliance != pieceAlliance) {
-            legalMoves.add(new Move.MajorAttackMove(board, this, candidateDestinationCoordinate,
-                    pieceAtDestination));
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  /**
    * Returns the destination squares of this bishop's legal moves on the given board, being every
    * square along each diagonal up to the first piece, and that piece's square when it is opposing.
    *
@@ -147,7 +119,7 @@ public final class Bishop extends Piece {
 
   /**
    * Determines whether this bishop bears on the given square, walking the same precomputed
-   * diagonal lines as {@link #calculateLegalMoves(Board)} but without allocating any moves.
+   * diagonal lines as {@link #legalDestinations(Board)}.
    * Occupancy of the target square is disregarded, while any piece standing strictly between
    * this bishop and the target square blocks the line.
    *
