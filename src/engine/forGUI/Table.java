@@ -165,15 +165,15 @@ public final class Table extends Observable {
   }
 
   /**
-   * Returns the engine, creating it and registering the debug panel as its observer on first
-   * use. Must be called on the event dispatch thread.
+   * Returns the engine, creating it on first use with the debug panel receiving its search
+   * reports. Must be called on the event dispatch thread.
    *
    * @return The engine that plays the computer's moves.
    */
   private AlphaBeta getEngine() {
     if (this.engine == null) {
       this.engine = new AlphaBeta(this.gameSetup.getSearchDepth());
-      this.engine.addObserver(this.debugPanel);
+      this.engine.setReportListener(this.debugPanel::showReport);
     }
     return this.engine;
   }

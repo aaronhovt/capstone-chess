@@ -2,18 +2,15 @@ package engine.forGUI;
 
 import javax.swing.*;
 import java.awt.*;
-import java.util.Observable;
-import java.util.Observer;
 
 /**
- * The strip along the bottom of the window that shows the engine's latest search report. It
- * observes the engine, which notifies it with the report text after each completed iteration,
- * and may be notified from any thread.
+ * The strip along the bottom of the window that shows the engine's latest search report. The
+ * engine hands it the report text after each completed iteration, from any thread.
  *
  * @author dareTo81
  * @author Aaron Ho
  */
-final class DebugPanel extends JPanel implements Observer {
+final class DebugPanel extends JPanel {
 
   /** The size the strip asks the window for. */
   private static final Dimension PREFERRED_SIZE = new Dimension(550, 50);
@@ -35,15 +32,13 @@ final class DebugPanel extends JPanel implements Observer {
   }
 
   /**
-   * Shows the given report, on the event dispatch thread.
+   * Shows the given report, on the event dispatch thread. May be called from any thread.
    *
-   * @param source The engine that sent the report.
-   * @param message The report, shown through its string form.
+   * @param message The report.
    */
-  @Override
-  public void update(final Observable source, final Object message) {
+  void showReport(final String message) {
     SwingUtilities.invokeLater(() -> {
-      this.report.setText(String.valueOf(message).trim());
+      this.report.setText(message.trim());
       redo();
     });
   }

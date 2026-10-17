@@ -15,6 +15,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.function.Consumer;
 
 
 /**
@@ -31,7 +32,7 @@ import java.util.concurrent.atomic.AtomicIntegerArray;
  *
  * @author Aaron Ho
  */
-public class AlphaBeta extends Observable implements MoveStrategy {
+public class AlphaBeta implements MoveStrategy {
 
   /** The evaluator used to assess board positions. */
   private final BoardEvaluator evaluator = TaperedEvaluator.get();
@@ -41,6 +42,12 @@ public class AlphaBeta extends Observable implements MoveStrategy {
 
   /** The count of boards evaluated during the search process. */
   private final AtomicLong boardsEvaluated = new AtomicLong(0);
+
+  /**
+   * The receiver of the report line printed after each completed iteration of the main search.
+   * It is called on the thread running {@link #execute}.
+   */
+  private volatile Consumer<String> reportListener = report -> { };
 
   /** The root score of the most recent search, from White's point of view. */
   private volatile double lastScore;
@@ -642,8 +649,7 @@ public class AlphaBeta extends Observable implements MoveStrategy {
                 this.evaluationCache.getStats());
 
         System.out.println(report);
-        setChanged();
-        notifyObservers(report);
+        this.reportListener.accept(report);
       }
     } finally {
       stopHelperSearches(helpers);
@@ -783,6 +789,18 @@ public class AlphaBeta extends Observable implements MoveStrategy {
   public void shutdown() {
     this.searchStopped = true;
     this.searchThreadPool.shutdown();
+  }
+
+  /**
+   * Sets the receiver of the report line printed after each completed iteration of the main
+   * search, replacing any receiver set before. It is called on the thread running
+   * {@link #execute}, so a receiver that updates a user interface must hand the line over to that
+   * interface's thread.
+   *
+   * @param listener The receiver of the report lines.
+   */
+  public void setReportListener(final Consumer<String> listener) {
+    this.reportListener = Objects.requireNonNull(listener);
   }
 
   /**
