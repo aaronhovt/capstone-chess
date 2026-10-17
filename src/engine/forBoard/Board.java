@@ -291,15 +291,9 @@ public final class Board {
    * was copied at, not past it. {@link #positionHistory} is seeded from the source so that a copy
    * taken mid-game carries the repetition history that preceded it.
    * <p>
-   * A {@link Move} generated from a board may be applied to a board other than the exact
-   * instance it was generated from, but only while both boards stand in the position the move
-   * belongs to. It is not enough for the target board to be in the right position:
-   * {@link Move#updateZobristHash} reads castling rights and the en passant pawn from the board
-   * the move was generated against rather than from the board being mutated, so that board must
-   * still be in that position too. A copy taken from a board that is never subsequently mutated
-   * satisfies both halves, which is what makes a shared root move list safe to apply across
-   * search threads that each own a private copy, and what lets a move found by searching a copy
-   * be applied to the board the game is played on.
+   * A {@link Move} created from one board may be applied to any other board that stands in the
+   * position the move belongs to, since {@link #makeMove(Move)} applies only the move's packed
+   * form and reads everything else from the board being changed.
    *
    * @param source The board to copy.
    */

@@ -4,255 +4,122 @@ import engine.forBoard.Board;
 import engine.forBoard.Move;
 
 import javax.swing.*;
-import javax.swing.table.DefaultTableModel;
+import javax.swing.table.AbstractTableModel;
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
 
-import static engine.forGUI.Table.*;
-
 /**
- * The GameHistoryPanel class displays the move history of the game in a table format.
- * It tracks moves made by both white and black players, indicating if a move leads
- * to check or checkmate for the opposing player.
+ * The move list beside the board: one row per move number, with white's move in the first column
+ * and black's in the second, each cell reading "N. move". The last move carries "+" or "#" when
+ * it gives check or mate.
  *
  * @author Aaron Ho
  */
-class GameHistoryPanel extends JPanel {
+final class GameHistoryPanel extends JPanel {
 
-  /** The DataModel containing the moves for the history table. */
-  private final DataModel model;
+  /** The size the panel asks the window for. */
+  private static final Dimension PREFERRED_SIZE = new Dimension(250, 40);
 
-  /** The scroll pane for the panel. */
+  /** The height of a row of the move table, in pixels. */
+  private static final int ROW_HEIGHT = 15;
+
+  /** The rows of the move table. */
+  private final MoveRows rows = new MoveRows();
+
+  /** The scroll pane holding the move table. */
   private final JScrollPane scrollPane;
 
-  /** The dimension of the history panel. */
-  private static final Dimension HistoryPanelDimension = new Dimension(250, 40);
-
-  /**
-   * Constructs a new GameHistoryPanel by setting up the layout and initializing the data model.
-   * The panel displays move history in a table with "White" and "Black" columns.
-   */
+  /** Creates the panel, empty. */
   GameHistoryPanel() {
-    this.setLayout(new BorderLayout());
-    this.model = new DataModel();
-    final JTable table = new JTable(model);
-    table.setRowHeight(15);
+    super(new BorderLayout());
+    final JTable table = new JTable(this.rows);
+    table.setRowHeight(ROW_HEIGHT);
     this.scrollPane = new JScrollPane(table);
-    scrollPane.setColumnHeaderView(table.getTableHeader());
-    scrollPane.setPreferredSize(HistoryPanelDimension);
-    this.add(scrollPane, BorderLayout.CENTER);
-    this.setVisible(true);
+    this.scrollPane.setPreferredSize(PREFERRED_SIZE);
+    add(this.scrollPane, BorderLayout.CENTER);
   }
 
-  void redo(final Board board, final MoveLog moveHistory) {
-    int currentRow = 0;
-    this.model.clear();
-    final List<Move> moves = moveHistory.getMoves();
-    for (int i = 0; i < moves.size(); i++) {
-      final Move move = moves.get(i);
-      final String moveText = moveHistory.getNotation(i);
-      if (move.getMovedPiece().getPieceAllegiance().isWhite()) {
-        this.model.setValueAt(moveText, currentRow, 0);
-      } else if (move.getMovedPiece().getPieceAllegiance().isBlack()) {
-        this.model.setValueAt(moveText, currentRow, 1);
-        currentRow++;
+  /**
+   * Rebuilds the move table from the given log and scrolls to its end. A black move with no white
+   * move before it in its row, as when a game starts with black to move, is shown in a row of its
+   * own.
+   *
+   * @param board The board in the position after the last logged move.
+   * @param moveLog The moves played and the notation each was played with.
+   */
+  void redo(final Board board, final Table.MoveLog moveLog) {
+    final List<String[]> table = new ArrayList<>();
+    final List<Move> moves = moveLog.getMoves();
+    for (int index = 0; index < moves.size(); index++) {
+      final boolean white = moves.get(index).getMovedPiece().getPieceAllegiance().isWhite();
+      if (white || table.isEmpty() || table.get(table.size() - 1)[1] != null) {
+        table.add(new String[2]);
       }
+      final String suffix = index == moves.size() - 1 ? checkSuffix(board) : "";
+      table.get(table.size() - 1)[white ? 0 : 1] =
+              table.size() + ". " + moveLog.getNotation(index) + suffix;
     }
-    if (!moves.isEmpty()) {
-      final int lastIndex = moves.size() - 1;
-      final Move lastMove = moves.get(lastIndex);
-      final String moveText = moveHistory.getNotation(lastIndex);
-      if (lastMove.getMovedPiece().getPieceAllegiance().isWhite()) {
-        this.model.setValueAt(moveText + calculateCheckAndCheckMateHash(board), currentRow, 0);
-      } else if (lastMove.getMovedPiece().getPieceAllegiance().isBlack()) {
-        this.model.setValueAt(moveText + calculateCheckAndCheckMateHash(board), currentRow - 1, 1);
-      }
-    }
-    final JScrollBar vertical = scrollPane.getVerticalScrollBar();
+    this.rows.replace(table);
+    final JScrollBar vertical = this.scrollPane.getVerticalScrollBar();
     vertical.setValue(vertical.getMaximum());
   }
 
   /**
-   * Calculates and returns a string hash indicating check or checkmate status.
+   * Returns the mark for whether the side to move on the given board is mated or in check.
    *
-   * @param board The current game board.
-   * @return A hash string representing the game status: "+" for check, "#" for checkmate, or empty.
+   * @param board The board.
+   * @return "#" for mate, "+" for check, or an empty string.
    */
-  private static String calculateCheckAndCheckMateHash(final Board board) {
+  private static String checkSuffix(final Board board) {
     if (board.currentPlayer().isInCheckMate()) {
       return "#";
-    } else if (board.currentPlayer().isInCheck()) {
-      return "+";
     }
-    return "";
+    return board.currentPlayer().isInCheck() ? "+" : "";
   }
 
-  /**
-   * The Row class represents a row of data in the move history table.
-   * Contains move texts for both white and black players.
-   */
-  private class Row {
+  /** The table model of the move table, a list of rows of two cells each. */
+  private static final class MoveRows extends AbstractTableModel {
 
-    /** The move text for the white player. */
-    private String whiteMove;
+    /** The column headings. */
+    private static final String[] COLUMNS = { "White", "Black" };
 
-    /** The move text for the black player. */
-    private String blackMove;
-
-    /** Constructs a new Row instance. */
-    Row() {
-    }
+    /** The rows, each holding white's and black's move text, null where there is none. */
+    private List<String[]> rows = List.of();
 
     /**
-     * Gets the move text for the white player.
+     * Replaces every row of the table.
      *
-     * @return The move text for the white player.
+     * @param rows The new rows.
      */
-    public String getWhiteMove() {
-      return this.whiteMove;
+    void replace(final List<String[]> rows) {
+      this.rows = rows;
+      fireTableDataChanged();
     }
 
-    /**
-     * Gets the move text for the black player.
-     *
-     * @return The move text for the black player.
-     */
-    public String getBlackMove() {
-      return this.blackMove;
-    }
-
-    /**
-     * Sets the move text for the white player.
-     *
-     * @param move The move text to be set.
-     */
-    public void setWhiteMove(final String move) {
-      this.whiteMove = model.getRowCount() + ". " + move;
-    }
-
-    /**
-     * Sets the move text for the black player.
-     *
-     * @param move The move text to be set.
-     */
-    public void setBlackMove(final String move) {
-      this.blackMove = model.getRowCount() + ". " + move;
-    }
-  }
-
-  /**
-   * The DataModel class provides a custom data model for the move history table.
-   * Manages the storage and retrieval of move texts for display in the table.
-   */
-  private class DataModel extends DefaultTableModel {
-
-    /** The list of row objects representing data in the move history table. */
-    private final List<Row> values;
-
-    /** The column names for the move history table. */
-    private static final String[] NAMES = {
-            "White",
-            "Black"
-    };
-
-    /** Constructs a new DataModel with an empty list of values. */
-    DataModel() {
-      this.values = new ArrayList<>();
-    }
-
-    /** Clears the data model, removing all stored values. */
-    public void clear() {
-      this.values.clear();
-      setRowCount(0);
-    }
-
-    /**
-     * Returns the total row count for the DataModel.
-     *
-     * @return The number of rows in the model.
-     */
     @Override
     public int getRowCount() {
-      if (this.values == null) {
-        return 0;
-      }
-      return this.values.size();
+      return this.rows.size();
     }
 
-    /**
-     * Returns the column count for the DataModel.
-     *
-     * @return The number of columns in the model.
-     */
     @Override
     public int getColumnCount() {
-      return NAMES.length;
+      return COLUMNS.length;
     }
 
-    /**
-     * Returns the value in a specific row and column.
-     *
-     * @param row The row index.
-     * @param col The column index.
-     * @return The value at the specified position.
-     */
     @Override
-    public Object getValueAt(final int row, final int col) {
-      final Row currentRow = this.values.get(row);
-      if (col == 0) {
-        return currentRow.getWhiteMove();
-      } else if (col == 1) {
-        return currentRow.getBlackMove();
-      }
-      return null;
+    public String getColumnName(final int column) {
+      return COLUMNS[column];
     }
 
-    /**
-     * Sets the value in a specific row and column.
-     *
-     * @param aValue The value to be set.
-     * @param row    The row index.
-     * @param col    The column index.
-     */
     @Override
-    public void setValueAt(final Object aValue, final int row, final int col) {
-      final Row currentRow;
-      if (this.values.size() <= row) {
-        currentRow = new Row();
-        this.values.add(currentRow);
-      } else {
-        currentRow = this.values.get(row);
-      }
-      if (col == 0) {
-        currentRow.setWhiteMove((String) aValue);
-        fireTableRowsInserted(row, row);
-      } else if (col == 1) {
-        currentRow.setBlackMove((String) aValue);
-        fireTableCellUpdated(row, col);
-      }
+    public Class<?> getColumnClass(final int column) {
+      return String.class;
     }
 
-    /**
-     * Returns the class type for the specified column.
-     *
-     * @param col The column index.
-     * @return The class type of the column.
-     */
     @Override
-    public Class<?> getColumnClass(final int col) {
-      return Move.class;
-    }
-
-    /**
-     * Returns the name of the specified column.
-     *
-     * @param col The column index.
-     * @return The name of the column.
-     */
-    @Override
-    public String getColumnName(final int col) {
-      return NAMES[col];
+    public Object getValueAt(final int row, final int column) {
+      return this.rows.get(row)[column];
     }
   }
 }

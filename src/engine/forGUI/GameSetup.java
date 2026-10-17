@@ -1,148 +1,122 @@
 package engine.forGUI;
 
 import engine.Alliance;
-import engine.forGUI.Table.PlayerType;
 import engine.forPlayer.Player;
 
 import javax.swing.*;
 import java.awt.*;
+import java.text.ParseException;
 
 /**
- * The `GameSetup` class represents a dialog for configuring game setup options using Java Swing.
- * This dialog allows users to specify player types (human or computer) for both white and black sides, as well
- * as set the search depth for AI move calculation.
+ * The Setup Game dialog, which chooses whether a human or the computer plays each side and the
+ * depth the computer searches to. The choices take effect when the dialog is confirmed with OK;
+ * cancelling or closing it keeps the previous ones.
  *
  * @author dareTo81
  * @author Aaron Ho
  */
-class GameSetup extends JDialog {
+final class GameSetup extends JDialog {
 
-  /*** The PlayerType representing the current white player. */
-  private PlayerType whitePlayerType;
+  /** The depth the computer searches to until another is chosen. */
+  private static final int DEFAULT_SEARCH_DEPTH = 6;
 
-  /*** The PlayerType representing the current black player. */
-  private PlayerType blackPlayerType;
+  /** The entries of each side's player choice, the human first. */
+  private static final String[] PLAYER_CHOICES = { "Human", "Computer" };
 
-  /*** The search depth selector. */
-  private final JSpinner searchDepthSpinner;
+  /** The index of the computer in {@link #PLAYER_CHOICES}. */
+  private static final int COMPUTER_CHOICE = 1;
 
-  /*** String used for representing a human player. */
-  private static final String HUMAN_TEXT = "Human";
+  /** The player choice for white. */
+  private final JComboBox<String> whiteChoice = new JComboBox<>(PLAYER_CHOICES);
 
-  /*** String used for representing a computer player. */
-  private static final String COMPUTER_TEXT = "Computer";
+  /** The player choice for black. */
+  private final JComboBox<String> blackChoice = new JComboBox<>(PLAYER_CHOICES);
+
+  /** The search depth choice. */
+  private final JSpinner depthChoice = new JSpinner(
+          new SpinnerNumberModel(DEFAULT_SEARCH_DEPTH, 0, Integer.MAX_VALUE, 1));
+
+  /** Whether the computer plays white. */
+  private boolean whiteIsComputer;
+
+  /** Whether the computer plays black. */
+  private boolean blackIsComputer;
+
+  /** The depth the computer searches to. */
+  private int searchDepth = DEFAULT_SEARCH_DEPTH;
 
   /**
-   * Constructs a new GameSetup dialog with the specified parent frame and modality.
+   * Creates the dialog, hidden, with a human playing both sides.
    *
-   * @param frame The parent frame for the dialog.
-   * @param modal Specifies whether the dialog should be modal.
+   * @param owner The frame the dialog belongs to.
+   * @param modal Whether the dialog blocks input to the other windows while it is shown.
    */
-  GameSetup(final JFrame frame,
-            final boolean modal) {
-    super(frame, modal);
-    final JPanel myPanel = new JPanel(new GridLayout(0, 1));
-    final JRadioButton whiteHumanButton = new JRadioButton(HUMAN_TEXT);
-    final JRadioButton whiteComputerButton = new JRadioButton(COMPUTER_TEXT);
-    final JRadioButton blackHumanButton = new JRadioButton(HUMAN_TEXT);
-    final JRadioButton blackComputerButton = new JRadioButton(COMPUTER_TEXT);
-    
-    whiteHumanButton.setActionCommand(HUMAN_TEXT);
-    final ButtonGroup whiteGroup = new ButtonGroup();
-    whiteGroup.add(whiteHumanButton);
-    whiteGroup.add(whiteComputerButton);
-    whiteHumanButton.setSelected(true);
-    
-    final ButtonGroup blackGroup = new ButtonGroup();
-    blackGroup.add(blackHumanButton);
-    blackGroup.add(blackComputerButton);
-    blackHumanButton.setSelected(true);
-    
-    getContentPane().add(myPanel);
-    myPanel.add(new JLabel("White"));
-    myPanel.add(whiteHumanButton);
-    myPanel.add(whiteComputerButton);
-    myPanel.add(new JLabel("Black"));
-    myPanel.add(blackHumanButton);
-    myPanel.add(blackComputerButton);
-    myPanel.add(new JLabel("Search"));
-    
-    this.searchDepthSpinner = addLabeledSpinner(myPanel, new SpinnerNumberModel(6, 0, Integer.MAX_VALUE, 1));
-    final JButton cancelButton = new JButton("Cancel");
-    final JButton okButton = new JButton("OK");
-    okButton.addActionListener(e -> {
-      whitePlayerType = whiteComputerButton.isSelected() ? PlayerType.COMPUTER : PlayerType.HUMAN;
-      blackPlayerType = blackComputerButton.isSelected() ? PlayerType.COMPUTER : PlayerType.HUMAN;
-      GameSetup.this.setVisible(false);
-    });
-    cancelButton.addActionListener(e -> GameSetup.this.setVisible(false));
-    myPanel.add(cancelButton);
-    myPanel.add(okButton);
-    setLocationRelativeTo(frame);
+  GameSetup(final JFrame owner, final boolean modal) {
+    super(owner, "Setup Game", modal);
+
+    final JPanel choices = new JPanel(new GridLayout(0, 2, 8, 4));
+    choices.add(new JLabel("White"));
+    choices.add(this.whiteChoice);
+    choices.add(new JLabel("Black"));
+    choices.add(this.blackChoice);
+    choices.add(new JLabel("Search depth"));
+    choices.add(this.depthChoice);
+
+    final JButton confirm = new JButton("OK");
+    confirm.addActionListener(event -> confirm());
+    final JButton cancel = new JButton("Cancel");
+    cancel.addActionListener(event -> setVisible(false));
+    final JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+    buttons.add(confirm);
+    buttons.add(cancel);
+
+    final JPanel content = new JPanel(new BorderLayout(0, 8));
+    content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+    content.add(choices, BorderLayout.CENTER);
+    content.add(buttons, BorderLayout.SOUTH);
+    setContentPane(content);
+    getRootPane().setDefaultButton(confirm);
     pack();
+    setLocationRelativeTo(owner);
+  }
+
+  /** Shows the dialog with the choices now in effect, and returns once it is closed. */
+  void promptUser() {
+    this.whiteChoice.setSelectedIndex(this.whiteIsComputer ? COMPUTER_CHOICE : 0);
+    this.blackChoice.setSelectedIndex(this.blackIsComputer ? COMPUTER_CHOICE : 0);
+    this.depthChoice.setValue(this.searchDepth);
+    setVisible(true);
+  }
+
+  /** Puts the choices shown in the dialog into effect and hides it. */
+  private void confirm() {
+    try {
+      this.depthChoice.commitEdit();
+    } catch (final ParseException unparsable) {
+      // The spinner keeps its last valid value, which is the one used.
+    }
+    this.whiteIsComputer = this.whiteChoice.getSelectedIndex() == COMPUTER_CHOICE;
+    this.blackIsComputer = this.blackChoice.getSelectedIndex() == COMPUTER_CHOICE;
+    this.searchDepth = (Integer) this.depthChoice.getValue();
     setVisible(false);
   }
 
-  /*** Displays the dialog to prompt the user for game setup options. */
-  void promptUser() {
-    setVisible(true);
-    repaint();
-  }
-
   /**
-   * Checks if AI controls the given player on the setup configuration.
+   * Returns whether the computer plays the given player's side.
    *
-   * @param player The player for which to check AI status.
-   * @return       True if the player is AI-controlled, indicating a computer player; false if the player is human-controlled.
+   * @param player The player.
+   * @return True if the computer plays that side, false if a human does.
    */
   boolean isAIPlayer(final Player player) {
-    if (player.getAlliance() == Alliance.WHITE) {
-      return getWhitePlayerType() == PlayerType.COMPUTER;
-    }
-    return getBlackPlayerType() == PlayerType.COMPUTER;
+    return player.getAlliance() == Alliance.WHITE ? this.whiteIsComputer : this.blackIsComputer;
   }
 
   /**
-   * Returns the type of player (human or computer) for the white side.
+   * Returns the depth the computer searches to.
    *
-   * @return The player type for the white side: either human or computer, as configured in the setup dialog.
-   */
-  PlayerType getWhitePlayerType() {
-    return this.whitePlayerType;
-  }
-
-  /**
-   * Returns the type of player (human or computer) for the black side.
-   *
-   * @return The player type for the black side: either human or computer, as configured in the setup dialog.
-   */
-  PlayerType getBlackPlayerType() {
-    return this.blackPlayerType;
-  }
-
-  /**
-   * Returns a JSpinner that will represent a customizable option in the GUI.
-   *
-   * @param c The container to which the label and spinner components will be added.
-   * @param model The spinner model that defines the spinner's behavior, value range, and step size.
-   * @return a label JSpinner.
-   */
-  private static JSpinner addLabeledSpinner(final Container c,
-                                            final SpinnerModel model) {
-    final JLabel l = new JLabel("Search Depth");
-    c.add(l);
-    final JSpinner spinner = new JSpinner(model);
-    l.setLabelFor(spinner);
-    c.add(spinner);
-    return spinner;
-  }
-
-  /**
-   * Returns the search depth specified for AI moves.
-   *
-   * @return The search depth for AI moves.
+   * @return The search depth.
    */
   int getSearchDepth() {
-    return (Integer) this.searchDepthSpinner.getValue();
+    return this.searchDepth;
   }
 }
