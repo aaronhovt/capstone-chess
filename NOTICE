@@ -9,3 +9,22 @@ published under the GNU Lesser General Public License, version 2.1. Amir Afghani
 permission by email on 2026-10-16 for Aaron Ho's modifications of his code to be distributed
 under the MIT License, including the versions published before that date, so the whole of this
 project, its earlier commits and its releases are covered by the MIT License.
+
+Third-party software
+
+The graphical interface uses the libraries below. They are distributed unmodified in lib/, and each
+jar carries its own license files.
+
+Apache Batik 1.7 (lib/batik-*.jar)
+Copyright 1999-2007 The Apache Software Foundation
+Licensed under the Apache License, Version 2.0.
+This product includes software developed at The Apache Software Foundation
+(http://www.apache.org/).
+
+Apache XML Commons External 1.3.04 (lib/xml-apis-ext-1.3.04.jar)
+Copyright 2006 The Apache Software Foundation
+Licensed under the Apache License, Version 2.0. The W3C interfaces it contains, the Simple API for
+CSS and the SVG and SMIL DOM interfaces, are distributed under the W3C licenses in the jar's
+license/ directory.
+This product includes software developed at The Apache Software Foundation
+(http://www.apache.org/).

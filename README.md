@@ -2,7 +2,7 @@
 
 A chess engine written in Java. It began as a STEM Academy capstone project at Essex High School
 between January 2023 and May 2025 and has been developed continuously since. The repository holds
-21,028 lines of Java and Javadoc across 52 source files and carries three front ends: a Swing
+19,022 lines of Java and Javadoc across 52 source files and carries three front ends: a Swing
 interface for playing the engine by hand, a UCI adapter that lets another program drive it, and a
 testing package that validates move generation, search, and evaluation.
 
@@ -158,17 +158,17 @@ be built this way, which sets the oldest ref a comparison can reach back to.
 
 | Package | Lines | Responsibility |
 | --- | --- | --- |
-| `engine` | 305 | The alliance type and the entry point that opens the interface. |
-| `engine.forBoard` | 3,403 | Board state with piece bitboards, move objects and packed int moves, the int move generator, attack detection, make and unmake, undo state, Zobrist hashing. |
-| `engine.forPiece` | 1,948 | The piece hierarchy and the candidate move generation for each piece type. |
-| `engine.forPlayer` | 463 | Per-colour legal move generation and check, mate, and castling state. |
-| `engine.forPlayer.forAI` | 6,301 | Search, transposition table, evaluation and pawn structure caches, the middlegame and endgame evaluators and the tapered evaluator that blends them, evaluation weights, and static exchange evaluation. |
-| `engine.forGUI` | 1,343 | The Swing interface, move history, debug panel, and game setup dialog. |
-| `engine.forTesting` | 6,828 | Perft, tactical, evaluation, and bench suites, FEN parsing, the opening book, the self-play harness with its match statistics and adjudication, and the Texel tuner. |
+| `engine` | 292 | The alliance type and the entry point that opens the interface. |
+| `engine.forBoard` | 2,824 | Board state with piece bitboards, the move class and packed int moves, the int move generator, attack detection, make and unmake, Zobrist hashing. |
+| `engine.forPiece` | 1,041 | The piece types and the squares each one attacks and moves to. |
+| `engine.forPlayer` | 329 | Per-colour move lists and check, mate, and castling state. |
+| `engine.forPlayer.forAI` | 6,315 | Search, transposition table, evaluation and pawn structure caches, the middlegame and endgame evaluators and the tapered evaluator that blends them, evaluation weights, and static exchange evaluation. |
+| `engine.forGUI` | 953 | The Swing interface: the board view, move history, search report strip, and game setup dialog. |
+| `engine.forTesting` | 6,831 | Perft, tactical, evaluation, and bench suites, FEN parsing, the opening book, the self-play harness with its match statistics and adjudication, and the Texel tuner. |
 | `engine.forUCI` | 437 | The UCI adapter. |
 
 Outside the source tree, `art/` holds the piece artwork, `book/` holds the opening book, and `lib/`
-holds the vendored dependencies.
+holds the Batik jars the interface renders the artwork with.
 
 ## Current Capability
 

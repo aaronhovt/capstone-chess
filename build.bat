@@ -281,9 +281,18 @@ if errorlevel 1 (
 )
 exit /b 0
 
+:copyLegalNotices
+rem %1 is the output subdirectory. Copies LICENSE and NOTICE into its META-INF, so the jar packaged
+rem from it carries them.
+if not exist "%OUT%\%~1\META-INF" mkdir "%OUT%\%~1\META-INF"
+copy /y LICENSE "%OUT%\%~1\META-INF\LICENSE" >nul || exit /b 1
+copy /y NOTICE "%OUT%\%~1\META-INF\NOTICE" >nul || exit /b 1
+exit /b 0
+
 :buildUci
 echo [uci] compiling
 call :compile "uci" "src\engine\forUCI\UciEngine.java" || exit /b 1
+call :copyLegalNotices "uci" || exit /b 1
 echo [uci] packaging %UCI_JAR%
 "%JDK_BIN%jar" cfe "%UCI_JAR%" %UCI_MAIN% -C "%OUT%\uci" .
 if errorlevel 1 exit /b 1
@@ -292,6 +301,7 @@ exit /b 0
 :buildGui
 echo [gui] compiling
 call :compile "gui" "src\engine\engineDriver.java" || exit /b 1
+call :copyLegalNotices "gui" || exit /b 1
 echo [gui] writing the manifest
 set "MANIFEST=%OUT%\manifest-gui.txt"
 > "%MANIFEST%" echo Main-Class: %GUI_MAIN%
