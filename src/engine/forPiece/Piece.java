@@ -174,17 +174,21 @@ public abstract class Piece {
   }
 
   /**
-   * Increments the entry of the given array for every square this piece defends on the given
-   * board, which is every square for which {@link #defendsSquare(int, Board)} returns true. The
-   * array holds one entry per tile and is indexed by square. A piece never defends its own
-   * square, so its own entry is left alone.
+   * Increments the entry of the given array for every one of the given squares this piece defends
+   * on the given board, being those for which {@link #defendsSquare(int, Board)} returns true. The
+   * array holds one entry per tile and is indexed by square. Entries for squares outside the given
+   * ones are left alone, and so is this piece's own entry, since a piece never defends its own
+   * square.
    *
    * @param board The current board.
+   * @param squares The squares to count, as one bit per tile.
    * @param defenderCounts The per square counts to increment, of length {@link
    *                       BoardUtils#NUM_TILES}.
    */
-  public void addDefendedSquares(final Board board, final int[] defenderCounts) {
-    for (long remaining = attackedSquares(board); remaining != 0L; remaining &= remaining - 1) {
+  public void addDefendedSquares(final Board board, final long squares,
+                                 final int[] defenderCounts) {
+    for (long remaining = attackedSquares(board) & squares; remaining != 0L;
+         remaining &= remaining - 1) {
       defenderCounts[Long.numberOfTrailingZeros(remaining)]++;
     }
   }

@@ -1503,8 +1503,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
     coordinationScore += evaluateBishopPair(playerLayout.bishops());
     coordinationScore += evaluateRookCoordination(playerLayout.rooks(), playerPawns, opponentPawns);
-    coordinationScore += evaluatePieceProtection(player.getActivePieces(), board,
-            opponentStatistics);
+    coordinationScore += evaluatePieceProtection(player.getActivePieces(), player.getAlliance(),
+            board, opponentStatistics);
     coordinationScore += evaluatePieceActivity(playerLayout);
 
     return coordinationScore;
@@ -1626,11 +1626,13 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * is bounded by that fraction of a queen.
    *
    * @param playerPieces The player's pieces.
+   * @param alliance The player's alliance.
    * @param board The current chess board state.
    * @param opponentStatistics The statistics of the opposing player's legal move list.
    * @return The piece protection evaluation score.
    */
   private double evaluatePieceProtection(final Collection<Piece> playerPieces,
+                                         final Alliance alliance,
                                          final Board board,
                                          final MoveStatistics opponentStatistics) {
     double protectionScore = 0;
@@ -1639,9 +1641,10 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final int[] squareAttackCount = opponentStatistics.destinationCount();
     final long pawnAttacks = opponentStatistics.pawnDestinations();
     final int[] defenderCount = new int[BoardUtils.NUM_TILES];
+    final long playerOccupancy = board.getOccupancy(alliance);
 
     for (final Piece piece : playerPieces) {
-      piece.addDefendedSquares(board, defenderCount);
+      piece.addDefendedSquares(board, playerOccupancy, defenderCount);
     }
 
     for (final Piece piece : playerPieces) {
