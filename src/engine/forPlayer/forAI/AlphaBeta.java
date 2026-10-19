@@ -105,14 +105,6 @@ public class AlphaBeta implements MoveStrategy {
           new short[MAX_SEARCH_DEPTH][MAX_TRACKED_QUIETS]);
 
   /**
-   * The static exchange scores of the moves in the list the standard sorter last returned at each
-   * ply, at the same index as the move, with zero for a move that is not a capture. A ply's
-   * entries are meaningful only while the node that sorted them is searching its moves.
-   */
-  private final ThreadLocal<int[][]> sortedExchangeScores = ThreadLocal.withInitial(() ->
-          new int[MAX_SEARCH_DEPTH][(int) ORDER_INDEX_MASK + 1]);
-
-  /**
    * The arrays a quiescence node at each ply writes its moves, their static exchange scores and
    * their ordering keys into. A ply's entries are meaningful only while the node at that ply is
    * searching its moves.
@@ -121,7 +113,7 @@ public class AlphaBeta implements MoveStrategy {
           ThreadLocal.withInitial(QuiescenceBuffers::new);
 
   /**
-   * The arrays a node of the main search at each ply generates and sorts its moves in. A ply's
+   * The arrays a node of the main search at each ply generates and orders its moves in. A ply's
    * entries are meaningful only while the node at that ply is searching its moves.
    */
   private final ThreadLocal<NegamaxBuffers> negamaxBuffers =
@@ -131,15 +123,14 @@ public class AlphaBeta implements MoveStrategy {
    * The per ply arrays of the main search, indexed by ply and then by move.
    *
    * @param generated The packed moves at each ply in generation order.
-   * @param sorted The same moves in search order.
-   * @param orderKeys The packed ordering keys of the generated moves.
+   * @param orderKeys The packed ordering keys of the generated moves, which the node at that ply
+   *                  rearranges into search order as it searches.
    */
-  private record NegamaxBuffers(int[][] generated, int[][] sorted, long[][] orderKeys) {
+  private record NegamaxBuffers(int[][] generated, long[][] orderKeys) {
 
     /** Creates the arrays for every ply a search can reach. */
     NegamaxBuffers() {
       this(new int[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES],
-              new int[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES],
               new long[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES]);
     }
   }
@@ -307,6 +298,12 @@ public class AlphaBeta implements MoveStrategy {
   /** The tier rank of a capture whose static exchange score is negative. */
   private static final long BAD_CAPTURE_RANK = 2;
 
+  /**
+   * The number of leading moves of a main search node that are each selected from the remaining
+   * ordering keys before the keys left after them are sorted.
+   */
+  private static final int SELECTED_MOVES = 3;
+
   /** The score of a checkmate delivered at the root, reduced by one for each ply to the mate. */
   public static final double MATE_VALUE = 1000000;
 
@@ -386,17 +383,18 @@ public class AlphaBeta implements MoveStrategy {
   }
 
   /**
-   * Writes the moves of the side to move at the given ply into that ply's row of the sorted move
-   * buffer, in search order, and the static exchange score of each capture among them to the same
-   * index of the ply's row of sortedExchangeScores, with zero for each other move. Good captures
-   * come first, then killer moves, the countermove and the other quiet moves by history score,
-   * then bad captures; captures are ordered by static exchange score.
+   * Writes the moves of the side to move at the given ply into that ply's row of the generated
+   * move buffer, in generation order, and the packed ordering key of each to the same index of the
+   * ply's row of the ordering key buffer. Ascending key order is search order: good captures
+   * first, then killer moves, the countermove and the other quiet moves by history score, then
+   * bad captures; captures are ordered by static exchange score. The keys are distinct, and
+   * {@link #moveIndexOf} and {@link #exchangeScoreOf} read a key's move and exchange score.
    *
    * @param board The current board position.
    * @param ply The current search ply.
    * @return The number of moves written.
    */
-  private int orderMoves(final Board board, final int ply) {
+  private int writeOrderKeys(final Board board, final int ply) {
     final NegamaxBuffers buffers = negamaxBuffers.get();
     final int[] generated = buffers.generated()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
@@ -435,18 +433,48 @@ public class AlphaBeta implements MoveStrategy {
 
       orderKeys[i] = (tier << ORDER_TIER_SHIFT) | (secondary << ORDER_INDEX_BITS) | i;
     }
-    Arrays.sort(orderKeys, 0, count);
-
-    final int[] sorted = buffers.sorted()[ply];
-    final int[] exchangeScores = sortedExchangeScores.get()[ply];
-    for (int i = 0; i < count; i++) {
-      final long orderKey = orderKeys[i];
-      final int move = generated[(int) (orderKey & ORDER_INDEX_MASK)];
-      sorted[i] = move;
-      exchangeScores[i] = MoveCode.isCapture(move) ? (int) ((long) Integer.MAX_VALUE -
-              ((orderKey >>> ORDER_INDEX_BITS) & ORDER_SCORE_MASK)) : 0;
-    }
     return count;
+  }
+
+  /**
+   * Returns the generation index of the move a packed standard ordering key belongs to.
+   *
+   * @param orderKey The packed ordering key.
+   * @return The index of its move in the generated move buffer.
+   */
+  private static int moveIndexOf(final long orderKey) {
+    return (int) (orderKey & ORDER_INDEX_MASK);
+  }
+
+  /**
+   * Returns the static exchange score held in a packed standard ordering key. The result is
+   * meaningful only for the key of a capture.
+   *
+   * @param orderKey The packed ordering key of a capture.
+   * @return The static exchange score of the capture.
+   */
+  private static int exchangeScoreOf(final long orderKey) {
+    return (int) ((long) Integer.MAX_VALUE - ((orderKey >>> ORDER_INDEX_BITS) & ORDER_SCORE_MASK));
+  }
+
+  /**
+   * Swaps the smallest of the keys from the given index up to the given count into the given
+   * index.
+   *
+   * @param keys The packed ordering keys.
+   * @param from The index to fill, which must be less than count.
+   * @param count The number of leading entries of keys that hold a key.
+   */
+  private static void selectSmallestKey(final long[] keys, final int from, final int count) {
+    int smallest = from;
+    for (int i = from + 1; i < count; i++) {
+      if (keys[i] < keys[smallest]) {
+        smallest = i;
+      }
+    }
+    final long key = keys[smallest];
+    keys[smallest] = keys[from];
+    keys[from] = key;
   }
 
   /**
@@ -1028,27 +1056,6 @@ public class AlphaBeta implements MoveStrategy {
   }
 
   /**
-   * Moves the move at the given index of a sorted move list to the front, shifting the moves
-   * ahead of it back one place, and moves the entries of the matching exchange scores the same
-   * way. Nothing changes when the index is not positive.
-   *
-   * @param moves The sorted packed moves.
-   * @param exchangeScores The exchange scores at the same indices as the moves.
-   * @param index The index of the move to bring to the front.
-   */
-  private static void moveToFront(final int[] moves, final int[] exchangeScores, final int index) {
-    if (index <= 0) {
-      return;
-    }
-    final int move = moves[index];
-    System.arraycopy(moves, 0, moves, 1, index);
-    moves[0] = move;
-    final int exchangeScore = exchangeScores[index];
-    System.arraycopy(exchangeScores, 0, exchangeScores, 1, index);
-    exchangeScores[0] = exchangeScore;
-  }
-
-  /**
    * Returns the index among the first entries of the given array of the packed move whose
    * transposition table code is the given code.
    *
@@ -1317,23 +1324,42 @@ public class AlphaBeta implements MoveStrategy {
     final short[] quietsSearched = searchedQuiets.get()[ply];
     int quietCount = 0;
 
-    final int moveCount = orderMoves(board, ply);
-    final int[] sortedMoves = negamaxBuffers.get().sorted()[ply];
-    final int[] exchangeScores = sortedExchangeScores.get()[ply];
+    final int moveCount = writeOrderKeys(board, ply);
+    final NegamaxBuffers buffers = negamaxBuffers.get();
+    final int[] generatedMoves = buffers.generated()[ply];
+    final long[] orderKeys = buffers.orderKeys()[ply];
     final int historySide = historySideOf(board);
     final double nodeEval = depth <= QUIET_FUTILITY_DEPTH && !inCheckAtNode ?
             evaluateForSideToMove(board) : Double.NaN;
 
+    // The transposition table move is searched first and the other moves follow in ascending key
+    // order. The keys are still in generation order here, so the move's index is its key's index.
+    boolean ttMoveFirst = false;
     if (ttMoveCode != TranspositionTable.NO_MOVE) {
-      moveToFront(sortedMoves, exchangeScores,
-              indexOfMoveCode(sortedMoves, moveCount, ttMoveCode));
+      final int ttIndex = indexOfMoveCode(generatedMoves, moveCount, ttMoveCode);
+      if (ttIndex >= 0) {
+        final long ttKey = orderKeys[ttIndex];
+        orderKeys[ttIndex] = orderKeys[0];
+        orderKeys[0] = ttKey;
+        ttMoveFirst = true;
+      }
     }
 
     for (int moveIndex = 0; moveIndex < moveCount; moveIndex++) {
-      final int move = sortedMoves[moveIndex];
+      // Most nodes cut off within their first few moves, so those are selected one at a time and
+      // the keys left after them are sorted only when the search reaches them.
+      if (moveIndex < SELECTED_MOVES) {
+        if (moveIndex > 0 || !ttMoveFirst) {
+          selectSmallestKey(orderKeys, moveIndex, moveCount);
+        }
+      } else if (moveIndex == SELECTED_MOVES) {
+        Arrays.sort(orderKeys, moveIndex, moveCount);
+      }
+      final long orderKey = orderKeys[moveIndex];
+      final int move = generatedMoves[moveIndexOf(orderKey)];
       final boolean capture = MoveCode.isCapture(move);
       if (capture && depth < 3 && movesSearched > 2 &&
-              exchangeScores[moveIndex] < SEE_PRUNING_THRESHOLD) {
+              exchangeScoreOf(orderKey) < SEE_PRUNING_THRESHOLD) {
         continue;
       }
 
