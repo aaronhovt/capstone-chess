@@ -254,8 +254,20 @@ public record MatchStatistics(int wins, int losses, int draws) {
    */
   public List<String> report(final String name, final SequentialTest test) {
     final List<String> lines = report(name);
-    lines.add(String.format("Sequential test: LLR %+.2f, bounds %+.2f to %+.2f",
-            logLikelihoodRatio(test), test.lowerBound(), test.upperBound()));
+    lines.addAll(testReport(test));
+    return lines;
+  }
+
+  /**
+   * Writes what the sequential test came to over these games as lines of text.
+   *
+   * @param test The hypotheses the games are weighed between.
+   * @return The lines to report, in order.
+   */
+  public List<String> testReport(final SequentialTest test) {
+    final List<String> lines = new ArrayList<>();
+    lines.add(String.format("Sequential test: LLR %+.2f after %d games, bounds %+.2f to %+.2f",
+            logLikelihoodRatio(test), games(), test.lowerBound(), test.upperBound()));
     lines.add(switch (conclude(test)) {
       case ACCEPTED -> "The test chose the gain of " + eloFigure(test.gainElo()) + " Elo over " +
               "the null of " + eloFigure(test.nullElo()) + " Elo";

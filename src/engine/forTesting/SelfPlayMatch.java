@@ -252,7 +252,7 @@ public class SelfPlayMatch {
       commandA = EngineProcess.tokenize(settings.engineACommand());
       commandB = EngineProcess.tokenize(settings.engineBCommand());
     } catch (final IllegalArgumentException exception) {
-      return new Tally(0, 0, 0, 0, 0, new SearchTotals(), new SearchTotals(), 0,
+      return new Tally(0, 0, 0, 0, 0, new SearchTotals(), new SearchTotals(), 0, null,
               exception.getMessage());
     }
 
@@ -382,7 +382,8 @@ public class SelfPlayMatch {
 
   /**
    * Reports what the sequential test comes to after a pair and decides whether the games have
-   * settled it. A match holding no test is never settled this way and reports nothing.
+   * settled it, now or after an earlier pair. A match holding no test is never settled this way
+   * and reports nothing.
    *
    * @param test The hypotheses the games are weighed between, or null if the match holds no test.
    * @param accumulator What the pairs played so far have come to.
@@ -398,7 +399,7 @@ public class SelfPlayMatch {
     System.out.printf("  test    LLR %+.2f of %+.2f to %+.2f after %d games%n",
             statistics.logLikelihoodRatio(test), test.lowerBound(), test.upperBound(),
             statistics.games());
-    return statistics.conclude(test) != MatchStatistics.Conclusion.UNDECIDED;
+    return accumulator.settle(test);
   }
 
   /**
@@ -738,10 +739,11 @@ public class SelfPlayMatch {
   }
 
   /**
-   * Reports what the games of the match came to and the Elo difference they measure. The mean time
-   * a game took is reported alongside the number of pairs played at once, since a game played
-   * beside others shares the machine with them and is only comparable with a game timed the same
-   * way.
+   * Reports what the games of the match came to and the Elo difference they measure. A match the
+   * sequential test stopped reports the test as it stood when it settled, then the ratio over every
+   * game counted. The mean time a game took is reported alongside the number of pairs played at
+   * once, since a game played beside others shares the machine with them and is only comparable
+   * with a game timed the same way.
    *
    * @param tally What the games came to.
    * @param pairs The number of pairs the match was to hold.
@@ -767,8 +769,21 @@ public class SelfPlayMatch {
       printSearchTotals(tally, elapsedMillis, workers);
       final MatchStatistics statistics = new MatchStatistics(tally.engineAWins(),
               tally.engineBWins(), tally.draws());
-      final List<String> report = test == null ? statistics.report(ENGINE_A_NAME) :
-              statistics.report(ENGINE_A_NAME, test);
+      final MatchStatistics settlement = tally.settlement();
+      final List<String> report;
+      if (test == null) {
+        report = statistics.report(ENGINE_A_NAME);
+      } else if (settlement == null) {
+        report = statistics.report(ENGINE_A_NAME, test);
+      } else {
+        report = statistics.report(ENGINE_A_NAME);
+        report.addAll(settlement.testReport(test));
+        if (settlement.games() < statistics.games()) {
+          report.add(String.format("Over all %d games, including the pairs already being played " +
+                  "when the test settled, the LLR is %+.2f", statistics.games(),
+                  statistics.logLikelihoodRatio(test)));
+        }
+      }
       for (final String line : report) {
         System.out.println(line);
       }
@@ -986,11 +1001,13 @@ public class SelfPlayMatch {
    * @param engineATotals What the searches of the first engine came to.
    * @param engineBTotals What the searches of the second engine came to.
    * @param gameMillis The time the games that reached a result took, in milliseconds, summed.
+   * @param settlement What the games had come to when they first settled the sequential test, or
+   *                   null if they never settled it.
    * @param failure What stopped the match, or null if every game reached a result.
    */
   public record Tally(int engineAWins, int engineBWins, int draws, int played, int adjudicated,
                       SearchTotals engineATotals, SearchTotals engineBTotals, long gameMillis,
-                      String failure) {
+                      MatchStatistics settlement, String failure) {
   }
 
   /**
@@ -1110,6 +1127,9 @@ public class SelfPlayMatch {
     /** The time the games that reached a result took, in milliseconds, summed. */
     private long gameMillis;
 
+    /** What the games had come to when they first settled the sequential test, or null. */
+    private MatchStatistics settlement;
+
     /**
      * Folds the games of one pair into the running count.
      *
@@ -1127,6 +1147,24 @@ public class SelfPlayMatch {
     }
 
     /**
+     * Weighs the sequential test on the games counted so far, keeping what they came to the first
+     * time they settle it. Games counted after that do not change what is kept.
+     *
+     * @param test The hypotheses the games are weighed between.
+     * @return True if the games have settled the test, on this call or an earlier one.
+     */
+    private boolean settle(final MatchStatistics.SequentialTest test) {
+      if (this.settlement == null) {
+        final MatchStatistics statistics = new MatchStatistics(this.engineAWins,
+                this.engineBWins, this.draws);
+        if (statistics.conclude(test) != MatchStatistics.Conclusion.UNDECIDED) {
+          this.settlement = statistics;
+        }
+      }
+      return this.settlement != null;
+    }
+
+    /**
      * Names what the pairs played so far have come to.
      *
      * @param failure What stopped the match, or null if every game reached a result.
@@ -1134,7 +1172,8 @@ public class SelfPlayMatch {
      */
     private Tally tally(final String failure) {
       return new Tally(this.engineAWins, this.engineBWins, this.draws, this.played,
-              this.adjudicated, this.engineATotals, this.engineBTotals, this.gameMillis, failure);
+              this.adjudicated, this.engineATotals, this.engineBTotals, this.gameMillis,
+              this.settlement, failure);
     }
   }
 
@@ -1186,10 +1225,7 @@ public class SelfPlayMatch {
       this.results = results;
       this.accumulator = results.accumulator();
       this.finished = results.finished();
-      this.stopped = test != null && this.accumulator.played > 0 &&
-              new MatchStatistics(this.accumulator.engineAWins, this.accumulator.engineBWins,
-                      this.accumulator.draws).conclude(test) !=
-                      MatchStatistics.Conclusion.UNDECIDED;
+      this.stopped = this.accumulator.settlement != null;
     }
 
     /**
@@ -1312,7 +1348,8 @@ public class SelfPlayMatch {
     /**
      * Opens the results file a match records its pairs in. A fresh match renames any file already
      * at the path to its previous name and writes a new one. A resumed match reads the pairs the
-     * file records, reports what they came to, and appends to the file.
+     * file records, weighing the sequential test after each in the order the file records them,
+     * reports what they came to, and appends to the file.
      *
      * @param settings The settings the match is played under.
      * @param pairs The number of pairs the match holds.
@@ -1372,6 +1409,9 @@ public class SelfPlayMatch {
           continue;
         }
         accumulator.add(result);
+        if (settings.sequentialTest() != null) {
+          accumulator.settle(settings.sequentialTest());
+        }
         recordedPairs++;
       }
 
@@ -1457,6 +1497,10 @@ public class SelfPlayMatch {
         System.out.printf("  test    LLR %+.2f of %+.2f to %+.2f after %d games%n",
                 statistics.logLikelihoodRatio(test), test.lowerBound(), test.upperBound(),
                 statistics.games());
+      }
+      if (accumulator.settlement != null) {
+        System.out.println("The recorded games settled the sequential test after " +
+                accumulator.settlement.games() + " games, so no pair is played");
       }
       System.out.println();
     }
