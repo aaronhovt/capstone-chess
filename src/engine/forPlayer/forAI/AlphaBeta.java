@@ -105,6 +105,14 @@ public class AlphaBeta implements MoveStrategy {
           new short[MAX_SEARCH_DEPTH][MAX_TRACKED_QUIETS]);
 
   /**
+   * The static evaluation of the node at each ply from the point of view of its side to move, or
+   * NaN for a node in check. A ply's entry is meaningful only for the node on the current search
+   * path at that ply, which writes it before it searches any move.
+   */
+  private final ThreadLocal<double[]> staticEvals = ThreadLocal.withInitial(() ->
+          new double[MAX_SEARCH_DEPTH]);
+
+  /**
    * The arrays a quiescence node at each ply writes its moves, their static exchange scores and
    * their ordering keys into. A ply's entries are meaningful only while the node at that ply is
    * searching its moves.
@@ -960,6 +968,9 @@ public class AlphaBeta implements MoveStrategy {
       }
     }
 
+    staticEvals.get()[0] = board.currentPlayer().isInCheck() ? Double.NaN :
+            evaluateForSideToMove(board);
+
     int bestMove = MoveCode.NONE;
     double bestScore = alpha;
     boolean firstMove = true;
@@ -1191,6 +1202,26 @@ public class AlphaBeta implements MoveStrategy {
   }
 
   /**
+   * Returns whether the static evaluation of a node is higher than that of the last node before it
+   * on the search path with the same side to move and not in check, looking back two plies and
+   * then four. A node with no such earlier node counts as improving.
+   *
+   * @param evals The static evaluations of the nodes on the search path, indexed by ply, NaN for a
+   *              node in check.
+   * @param ply The ply of the node.
+   * @param staticEval The static evaluation of the node, not NaN.
+   * @return true if the node is improving.
+   */
+  private static boolean isImproving(final double[] evals, final int ply,
+                                     final double staticEval) {
+    double earlier = ply >= 2 ? evals[ply - 2] : Double.NaN;
+    if (Double.isNaN(earlier) && ply >= 4) {
+      earlier = evals[ply - 4];
+    }
+    return Double.isNaN(earlier) || staticEval > earlier;
+  }
+
+  /**
    * Stores an entry in the transposition table unless the search has been stopped. A score
    * produced after the stop flag is raised is not the result of a completed search.
    *
@@ -1272,25 +1303,28 @@ public class AlphaBeta implements MoveStrategy {
     }
 
     final boolean inCheckAtNode = board.currentPlayer().isInCheck();
+    final double staticEval = inCheckAtNode ? Double.NaN : evaluateForSideToMove(board);
+    final double[] evals = staticEvals.get();
+    evals[ply] = staticEval;
+    final boolean improving = !inCheckAtNode && isImproving(evals, ply, staticEval);
 
     // No static evaluation reaches a mate score, so razoring against a mate bound would send every
     // such node to quiescence, which cannot find a shorter mate that ends in a quiet move.
     if (depth == 1 && !inCheckAtNode && alpha < MATE_THRESHOLD) {
-      double eval = evaluateForSideToMove(board);
-      if (eval + RAZOR_MARGIN < alpha) {
+      if (staticEval + RAZOR_MARGIN < alpha) {
         return quiescenceSearch(board, alpha, beta, ply);
       }
     }
 
+    // An improving node is pruned with the margin of one ply less.
     if (depth <= FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
-      double eval = evaluateForSideToMove(board);
-      if (eval >= beta + depth * FUTILITY_MARGIN) {
-        return eval;
+      if (staticEval >= beta + (improving ? depth - 1 : depth) * FUTILITY_MARGIN) {
+        return staticEval;
       }
     }
 
     if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !openWindow && !inCheckAtNode
-            && beta < MATE_THRESHOLD && evaluateForSideToMove(board) >= beta
+            && beta < MATE_THRESHOLD && staticEval >= beta
             && hasNonPawnMaterial(board.currentPlayer())) {
       final int R = 3 + depth / 4;
       double nullMoveScore;
@@ -1329,8 +1363,6 @@ public class AlphaBeta implements MoveStrategy {
     final int[] generatedMoves = buffers.generated()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
     final int historySide = historySideOf(board);
-    final double nodeEval = depth <= QUIET_FUTILITY_DEPTH && !inCheckAtNode ?
-            evaluateForSideToMove(board) : Double.NaN;
 
     // The transposition table move is searched first and the other moves follow in ascending key
     // order. The keys are still in generation order here, so the move's index is its key's index.
@@ -1369,7 +1401,7 @@ public class AlphaBeta implements MoveStrategy {
       if (((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode)
               && alpha > -MATE_THRESHOLD)
               || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode,
-                      currentAlpha - nodeEval) && currentAlpha < MATE_THRESHOLD))
+                      currentAlpha - staticEval) && currentAlpha < MATE_THRESHOLD))
               && !AttackDetector.givesCheck(board, move)) {
         continue;
       }
