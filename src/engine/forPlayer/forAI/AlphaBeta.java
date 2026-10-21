@@ -222,6 +222,12 @@ public class AlphaBeta implements MoveStrategy {
    */
   private static final int INTERNAL_REDUCTION_DEPTH = 5;
 
+  /**
+   * Whether the search counts what it does into the {@link SearchStatistics} of its thread, read
+   * once from the system property {@value SearchStatistics#PROPERTY} when this class is loaded.
+   */
+  static final boolean COLLECT_STATISTICS = Boolean.getBoolean(SearchStatistics.PROPERTY);
+
   /** The width of a zero window, being the smallest score separation the search distinguishes. */
   private static final double ZERO_WINDOW = 0.1;
 
@@ -472,6 +478,42 @@ public class AlphaBeta implements MoveStrategy {
   }
 
   /**
+   * Returns the {@link SearchStatistics} cutoff class of the move a packed standard ordering key
+   * belongs to.
+   *
+   * @param orderKey The packed ordering key of the move.
+   * @param tableMove Whether the move is the transposition table move searched first.
+   * @return The cutoff class.
+   */
+  private static int cutClassOf(final long orderKey, final boolean tableMove) {
+    if (tableMove) {
+      return SearchStatistics.CUT_BY_TABLE_MOVE;
+    }
+    final long tier = orderKey >>> ORDER_TIER_SHIFT;
+    final long rank = tier >>> ORDER_RANK_SHIFT;
+    if (rank == GOOD_CAPTURE_RANK) {
+      return SearchStatistics.CUT_BY_GOOD_CAPTURE;
+    } else if (rank == BAD_CAPTURE_RANK) {
+      return SearchStatistics.CUT_BY_BAD_CAPTURE;
+    } else if ((tier & KILLER_TIER_BIT) == 0) {
+      return SearchStatistics.CUT_BY_KILLER;
+    } else if ((tier & COUNTER_TIER_BIT) == 0) {
+      return SearchStatistics.CUT_BY_COUNTERMOVE;
+    }
+    return SearchStatistics.CUT_BY_OTHER_QUIET;
+  }
+
+  /**
+   * Returns the search statistics of the calling thread. Called only when
+   * {@link #COLLECT_STATISTICS} is set.
+   *
+   * @return The calling thread's statistics.
+   */
+  private static SearchStatistics statistics() {
+    return SearchStatistics.current();
+  }
+
+  /**
    * Swaps the smallest of the keys from the given index up to the given count into the given
    * index.
    *
@@ -662,9 +704,18 @@ public class AlphaBeta implements MoveStrategy {
         stats.nodeLimit = currentDepth == 1 ? UNLIMITED_NODES : nodeLimit;
         stats.deadline = currentDepth == 1 ? NO_DEADLINE : deadline;
 
+        final long iterationStart = stats.boardsEvaluated;
         final RootResult result = currentDepth >= 4 ?
                 searchRootAspirationWindow(mainBoard, currentDepth, bestMove, bestScore) :
                 searchRoot(mainBoard, currentDepth, -Double.MAX_VALUE, Double.MAX_VALUE, bestMove);
+        if (COLLECT_STATISTICS) {
+          final long iterationNodes = stats.boardsEvaluated - iterationStart;
+          if (searchStopped) {
+            statistics().iterationStopped(iterationNodes);
+          } else {
+            statistics().iterationFinished(currentDepth, iterationNodes);
+          }
+        }
 
         if (result.move() == MoveCode.NONE) {
           break;
@@ -704,6 +755,11 @@ public class AlphaBeta implements MoveStrategy {
     // Adding zero turns the negative zero that negating a drawn score can produce into zero.
     this.lastScore = (mainBoard.currentPlayer().getAlliance().isWhite() ? bestScore : -bestScore) + 0.0;
     this.lastDepth = bestDepth;
+
+    if (COLLECT_STATISTICS) {
+      statistics().searchFinished(bestDepth, System.currentTimeMillis() - startTime,
+              stats.boardsEvaluated);
+    }
 
     return toMove(board, bestMove);
   }
@@ -917,8 +973,17 @@ public class AlphaBeta implements MoveStrategy {
     double alpha = previousScore - ASPIRATION_WINDOW;
     double beta = previousScore + ASPIRATION_WINDOW;
 
+    if (COLLECT_STATISTICS) {
+      statistics().aspirationStarted();
+    }
     for (int attempt = 0; attempt < 2; attempt++) {
+      final long attemptStart = COLLECT_STATISTICS ? threadStats.get().boardsEvaluated : 0;
       final RootResult result = searchRoot(board, depth, alpha, beta, previousBestMove);
+      if (COLLECT_STATISTICS) {
+        final boolean settled = this.searchStopped;
+        statistics().aspirationAttempt(threadStats.get().boardsEvaluated - attemptStart,
+                !settled && result.score() <= alpha, !settled && result.score() >= beta);
+      }
 
       if (this.searchStopped) {
         return result;
@@ -933,6 +998,14 @@ public class AlphaBeta implements MoveStrategy {
       }
     }
 
+    if (COLLECT_STATISTICS) {
+      statistics().aspirationFullWindow();
+      final long attemptStart = threadStats.get().boardsEvaluated;
+      final RootResult result =
+              searchRoot(board, depth, -Double.MAX_VALUE, Double.MAX_VALUE, previousBestMove);
+      statistics().aspirationAttempt(threadStats.get().boardsEvaluated - attemptStart, false, false);
+      return result;
+    }
     return searchRoot(board, depth, -Double.MAX_VALUE, Double.MAX_VALUE, previousBestMove);
   }
 
@@ -1273,6 +1346,9 @@ public class AlphaBeta implements MoveStrategy {
                          boolean nullMoveAllowed) {
     SearchStats stats = threadStats.get();
     stats.boardsEvaluated++;
+    if (COLLECT_STATISTICS) {
+      statistics().negamaxEntered(depth);
+    }
     if (limitReached(stats)) {
       this.searchStopped = true;
     }
@@ -1297,6 +1373,9 @@ public class AlphaBeta implements MoveStrategy {
     if (entry != null && entry.depth >= depth) {
       final double entryScore = scoreFromTable(entry.score, ply);
       if (entry.nodeType == TranspositionTable.EXACT) {
+        if (COLLECT_STATISTICS) {
+          statistics().tableCutoff();
+        }
         return entryScore;
       } else if (entry.nodeType == TranspositionTable.LOWERBOUND) {
         alpha = Math.max(alpha, entryScore);
@@ -1304,6 +1383,9 @@ public class AlphaBeta implements MoveStrategy {
         beta = Math.min(beta, entryScore);
       }
       if (alpha >= beta) {
+        if (COLLECT_STATISTICS) {
+          statistics().tableCutoff();
+        }
         return entryScore;
       }
     }
@@ -1318,6 +1400,9 @@ public class AlphaBeta implements MoveStrategy {
     // such node to quiescence, which cannot find a shorter mate that ends in a quiet move.
     if (depth == 1 && !inCheckAtNode && alpha < MATE_THRESHOLD) {
       if (staticEval + RAZOR_MARGIN < alpha) {
+        if (COLLECT_STATISTICS) {
+          statistics().razored();
+        }
         return quiescenceSearch(board, alpha, beta, ply);
       }
     }
@@ -1325,6 +1410,9 @@ public class AlphaBeta implements MoveStrategy {
     // An improving node is pruned with the margin of one ply less.
     if (depth <= FUTILITY_PRUNING_DEPTH && !openWindow && !inCheckAtNode) {
       if (staticEval >= beta + (improving ? depth - 1 : depth) * FUTILITY_MARGIN) {
+        if (COLLECT_STATISTICS) {
+          statistics().reverseFutility();
+        }
         return staticEval;
       }
     }
@@ -1334,24 +1422,41 @@ public class AlphaBeta implements MoveStrategy {
             && hasNonPawnMaterial(board.currentPlayer())) {
       final int R = 3 + depth / 4;
       double nullMoveScore;
+      if (COLLECT_STATISTICS) {
+        statistics().nullMoveTried();
+      }
       board.makeNullMove();
       try {
         nullMoveScore = -negamax(board, depth - 1 - R, -beta, -(beta - ZERO_WINDOW), ply + 1, false);
       } finally {
         board.unmakeNullMove();
       }
-      if (nullMoveScore >= beta
-              && (depth < NULL_MOVE_VERIFICATION_DEPTH
-                      || negamax(board, depth - R, beta - ZERO_WINDOW, beta, ply, false) >= beta)) {
-        return beta;
+      if (nullMoveScore >= beta) {
+        final boolean verified = depth < NULL_MOVE_VERIFICATION_DEPTH
+                || negamax(board, depth - R, beta - ZERO_WINDOW, beta, ply, false) >= beta;
+        if (COLLECT_STATISTICS && depth >= NULL_MOVE_VERIFICATION_DEPTH) {
+          statistics().verification(!verified);
+        }
+        if (verified) {
+          if (COLLECT_STATISTICS) {
+            statistics().nullMoveCutoff();
+          }
+          return beta;
+        }
       }
     }
 
     // An open-window node with no move to search first is searched one ply shallower.
     final short ttMoveCode = entry != null ? entry.moveCode : TranspositionTable.NO_MOVE;
+    if (COLLECT_STATISTICS) {
+      statistics().movesReached(depth, openWindow, ttMoveCode != TranspositionTable.NO_MOVE);
+    }
     if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= INTERNAL_REDUCTION_DEPTH
             && openWindow) {
       depth--;
+      if (COLLECT_STATISTICS) {
+        statistics().internalReduction();
+      }
     }
 
     double currentAlpha = alpha;
@@ -1396,6 +1501,9 @@ public class AlphaBeta implements MoveStrategy {
       final boolean capture = MoveCode.isCapture(move);
       if (capture && depth < 3 && movesSearched > 2 &&
               exchangeScoreOf(orderKey) < SEE_PRUNING_THRESHOLD) {
+        if (COLLECT_STATISTICS) {
+          statistics().exchangeSkip();
+        }
         continue;
       }
 
@@ -1407,11 +1515,22 @@ public class AlphaBeta implements MoveStrategy {
               || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode,
                       currentAlpha - staticEval) && currentAlpha < MATE_THRESHOLD))
               && !AttackDetector.givesCheck(board, move)) {
+        if (COLLECT_STATISTICS) {
+          if (isLateMovePrunable(move, depth, movesSearched, inCheckAtNode)
+                  && alpha > -MATE_THRESHOLD) {
+            statistics().lateMoveSkip();
+          } else {
+            statistics().futileMoveSkip();
+          }
+        }
         continue;
       }
 
       board.makeMove(move);
       if (board.currentPlayer().getOpponent().isInCheck()) {
+        if (COLLECT_STATISTICS) {
+          statistics().illegalMove();
+        }
         board.unmakeMove(move);
         continue;
       }
@@ -1444,6 +1563,9 @@ public class AlphaBeta implements MoveStrategy {
             }
           }
 
+          if (COLLECT_STATISTICS) {
+            statistics().zeroWindowSearch(reduction > 0);
+          }
           currentValue = -negamax(board, newDepth - reduction, -(currentAlpha + 0.1), -currentAlpha,
                   ply + 1, true);
 
@@ -1452,11 +1574,17 @@ public class AlphaBeta implements MoveStrategy {
           // allowed to raise alpha or cut this node off. Without this the node would store a
           // bound at its own depth on the strength of a search shallower than that depth.
           if (reduction > 0 && currentValue > currentAlpha) {
+            if (COLLECT_STATISTICS) {
+              statistics().reductionReSearch();
+            }
             currentValue = -negamax(board, newDepth, -(currentAlpha + 0.1), -currentAlpha,
                     ply + 1, true);
           }
 
           if (currentValue > currentAlpha && currentValue < beta) {
+            if (COLLECT_STATISTICS) {
+              statistics().windowReSearch();
+            }
             currentValue = -negamax(board, newDepth, -beta, -currentAlpha, ply + 1, true);
           }
         }
@@ -1469,6 +1597,10 @@ public class AlphaBeta implements MoveStrategy {
         bestFoundMove = move;
 
         if (currentAlpha >= beta) {
+          if (COLLECT_STATISTICS) {
+            statistics().failHigh(depth, movesSearched,
+                    cutClassOf(orderKey, moveIndex == 0 && ttMoveFirst));
+          }
           if (!capture) {
             final short code = MoveCode.tableCode(move);
             if (code != killers[0][ply]) {
@@ -1508,6 +1640,13 @@ public class AlphaBeta implements MoveStrategy {
     } else if (currentAlpha >= beta) {
       nodeType = TranspositionTable.LOWERBOUND;
     }
+    if (COLLECT_STATISTICS) {
+      if (nodeType == TranspositionTable.UPPERBOUND) {
+        statistics().failLow(movesSearched);
+      } else {
+        statistics().exact();
+      }
+    }
     storeIfSearching(zobristHash, scoreToTable(currentAlpha, ply), depth, nodeType,
             bestFoundMove == MoveCode.NONE ? TranspositionTable.NO_MOVE :
                     MoveCode.tableCode(bestFoundMove));
@@ -1535,6 +1674,9 @@ public class AlphaBeta implements MoveStrategy {
   private double quiescenceSearch(Board board, double alpha, double beta, int ply) {
     SearchStats stats = threadStats.get();
     stats.boardsEvaluated++;
+    if (COLLECT_STATISTICS) {
+      statistics().quiescenceEntered();
+    }
     if (limitReached(stats)) {
       this.searchStopped = true;
     }
@@ -1552,6 +1694,9 @@ public class AlphaBeta implements MoveStrategy {
     if (entry != null) {
       final double entryScore = scoreFromTable(entry.score, ply);
       if (entry.nodeType == TranspositionTable.EXACT) {
+        if (COLLECT_STATISTICS) {
+          statistics().quiescenceTableCutoff();
+        }
         return entryScore;
       } else if (entry.nodeType == TranspositionTable.LOWERBOUND) {
         alpha = Math.max(alpha, entryScore);
@@ -1559,6 +1704,9 @@ public class AlphaBeta implements MoveStrategy {
         beta = Math.min(beta, entryScore);
       }
       if (alpha >= beta) {
+        if (COLLECT_STATISTICS) {
+          statistics().quiescenceTableCutoff();
+        }
         return entryScore;
       }
     }
@@ -1567,6 +1715,9 @@ public class AlphaBeta implements MoveStrategy {
     // this node can reach and must not narrow the window or cut the node off. Evasions are searched
     // at the ply of this node rather than the next one, because no move was made on the way in.
     if (board.currentPlayer().isInCheck()) {
+      if (COLLECT_STATISTICS) {
+        statistics().quiescenceInCheck();
+      }
       return negamax(board, 1, alpha, beta, ply, true);
     }
 
@@ -1576,6 +1727,9 @@ public class AlphaBeta implements MoveStrategy {
     double standPat = evaluateForSideToMove(board);
 
     if (standPat >= beta) {
+      if (COLLECT_STATISTICS) {
+        statistics().standPatCutoff();
+      }
       transpositionTable.store(zobristHash, scoreToTable(beta, ply), 0,
               TranspositionTable.LOWERBOUND, TranspositionTable.NO_MOVE);
       return beta;
@@ -1624,8 +1778,20 @@ public class AlphaBeta implements MoveStrategy {
               standPat + seeScore + deltaMargin <= alpha;
 
       if (!legal || prunedByExchange || prunedByDelta) {
+        if (COLLECT_STATISTICS) {
+          if (!legal) {
+            statistics().captureIllegal();
+          } else if (prunedByExchange) {
+            statistics().captureExchangePruned();
+          } else {
+            statistics().captureDeltaPruned();
+          }
+        }
         board.unmakeMove(move);
         continue;
+      }
+      if (COLLECT_STATISTICS) {
+        statistics().captureSearched();
       }
 
       double score;
@@ -1638,6 +1804,9 @@ public class AlphaBeta implements MoveStrategy {
       if (score > alpha) alpha = score;
 
       if (alpha >= beta) {
+        if (COLLECT_STATISTICS) {
+          statistics().captureCutoff();
+        }
         storeIfSearching(zobristHash, scoreToTable(beta, ply), 0,
                 TranspositionTable.LOWERBOUND, TranspositionTable.NO_MOVE);
         return beta;
