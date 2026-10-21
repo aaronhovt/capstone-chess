@@ -216,6 +216,12 @@ public class AlphaBeta implements MoveStrategy {
   /** The least remaining depth at which a null move cutoff is verified before it is taken. */
   private static final int NULL_MOVE_VERIFICATION_DEPTH = 6;
 
+  /**
+   * The least remaining depth at which an open-window node with no transposition table move is
+   * searched one ply shallower.
+   */
+  private static final int INTERNAL_REDUCTION_DEPTH = 5;
+
   /** The width of a zero window, being the smallest score separation the search distinguishes. */
   private static final double ZERO_WINDOW = 0.1;
 
@@ -1341,13 +1347,11 @@ public class AlphaBeta implements MoveStrategy {
       }
     }
 
-    short ttMoveCode = entry != null ? entry.moveCode : TranspositionTable.NO_MOVE;
-    if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= 4 && openWindow) {
-      negamax(board, depth - 2, alpha, beta, ply, nullMoveAllowed);
-      entry = transpositionTable.get(zobristHash);
-      if (entry != null) {
-        ttMoveCode = entry.moveCode;
-      }
+    // An open-window node with no move to search first is searched one ply shallower.
+    final short ttMoveCode = entry != null ? entry.moveCode : TranspositionTable.NO_MOVE;
+    if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= INTERNAL_REDUCTION_DEPTH
+            && openWindow) {
+      depth--;
     }
 
     double currentAlpha = alpha;
