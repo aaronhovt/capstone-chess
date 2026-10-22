@@ -659,6 +659,25 @@ public class AlphaBeta implements MoveStrategy {
 
   /**
    * Executes the alpha-beta search algorithm with iterative deepening to find the best move for
+   * the current player, to the given depth, under one time limit that both stops the search and
+   * ends the iterations, as {@link #execute(Board, int, long, long, long)} does with both of its
+   * time limits equal.
+   *
+   * @param board The current chess board position.
+   * @param searchDepth The maximum depth for iterative deepening on this search.
+   * @param nodeLimit The number of positions to evaluate before the search is stopped, or
+   *                  UNLIMITED_NODES to run every iteration to its end.
+   * @param timeLimitMillis The milliseconds to search for before the search is stopped, or
+   *                        UNLIMITED_TIME to run every iteration to its end.
+   * @return The best move determined by the search algorithm.
+   */
+  public Move execute(final Board board, final int searchDepth, final long nodeLimit,
+                      final long timeLimitMillis) {
+    return execute(board, searchDepth, nodeLimit, timeLimitMillis, timeLimitMillis);
+  }
+
+  /**
+   * Executes the alpha-beta search algorithm with iterative deepening to find the best move for
    * the current player, to the given depth.
    * <p>
    * The calling thread is the main search thread and its result is the one returned. Every other
@@ -671,7 +690,8 @@ public class AlphaBeta implements MoveStrategy {
    * iteration it was in the middle of finished searching a root move whose score landed inside
    * that iteration's window, the move and score returned are that iteration's best so far;
    * otherwise they are those of the deepest iteration that finished. The first iteration is held
-   * to neither limit, so a finished iteration always exists.
+   * to neither limit, so a finished iteration always exists. Once a soft time limit shorter than
+   * the time limit has passed, no further iteration is started.
    * <p>
    * The clock is not read at every node, so a search under a time limit runs somewhat past its
    * deadline rather than stopping on it.
@@ -680,14 +700,19 @@ public class AlphaBeta implements MoveStrategy {
    * @param searchDepth The maximum depth for iterative deepening on this search.
    * @param nodeLimit The number of positions to evaluate before the search is stopped, or
    *                  UNLIMITED_NODES to run every iteration to its end.
+   * @param softTimeLimitMillis The milliseconds after which no further iteration is started, or
+   *                            UNLIMITED_TIME to start iterations until another limit ends the
+   *                            search.
    * @param timeLimitMillis The milliseconds to search for before the search is stopped, or
    *                        UNLIMITED_TIME to run every iteration to its end.
    * @return The best move determined by the search algorithm.
    */
   public Move execute(final Board board, final int searchDepth, final long nodeLimit,
-                      final long timeLimitMillis) {
+                      final long softTimeLimitMillis, final long timeLimitMillis) {
     final long startTime = System.currentTimeMillis();
     final long deadline = deadlineOf(timeLimitMillis);
+    final long softDeadline = softTimeLimitMillis < timeLimitMillis ?
+            deadlineOf(softTimeLimitMillis) : NO_DEADLINE;
     int bestMove = MoveCode.NONE;
     double bestScore = 0;
     int bestDepth = 0;
@@ -750,6 +775,10 @@ public class AlphaBeta implements MoveStrategy {
 
         System.out.println(report);
         this.reportListener.accept(report);
+
+        if (System.nanoTime() >= softDeadline) {
+          break;
+        }
       }
     } finally {
       stopHelperSearches(helpers);
