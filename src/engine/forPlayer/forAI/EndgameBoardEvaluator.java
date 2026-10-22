@@ -814,17 +814,16 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    */
   private double evaluateKingExposure(final Player player, final LegalMoveTally opponentTargets) {
     double exposureScore = 0;
-    final int[] destinationCount = opponentTargets.destinationCount();
     final King playerKing = player.getPlayerKing();
     final int kingPosition = playerKing.getPiecePosition();
     final int kingFile = kingPosition % 8;
     final int kingRank = kingPosition / 8;
 
-    exposureScore += destinationCount[kingPosition] * WEIGHTS.get(KING_SQUARE_MOVE);
+    exposureScore += opponentTargets.movesTo(kingPosition) * WEIGHTS.get(KING_SQUARE_MOVE);
 
     for (int rank = Math.max(kingRank - 1, 0); rank <= Math.min(kingRank + 1, 7); rank++) {
       for (int file = Math.max(kingFile - 1, 0); file <= Math.min(kingFile + 1, 7); file++) {
-        exposureScore += destinationCount[rank * 8 + file] * WEIGHTS.get(KING_ZONE_MOVE);
+        exposureScore += opponentTargets.movesTo(rank * 8 + file) * WEIGHTS.get(KING_ZONE_MOVE);
       }
     }
 
@@ -1883,7 +1882,6 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     }
 
     final Collection<Piece> playerPieces = player.getActivePieces();
-    final int[] attackCount = opponentTargets.destinationCount();
     final long pawnAttacks = opponentTargets.pawnDestinations();
 
     for (final Piece piece : playerPieces) {
@@ -1891,11 +1889,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
 
       final int position = piece.getPiecePosition();
       final int pieceValue = piece.getPieceValue();
+      final int attackCount = opponentTargets.movesTo(position);
 
       final boolean harriedByPawn = ((pawnAttacks >>> position) & 1L) != 0L
               && pieceValue > Piece.PieceType.PAWN.getPieceValue();
-      final boolean outnumbered = attackCount[position] > 0
-              && attackCount[position] > countDefenders(playerPieces, position, board);
+      final boolean outnumbered = attackCount > 0
+              && attackCount > countDefenders(playerPieces, position, board);
 
       if (outnumbered || harriedByPawn) {
         largestThreat = Math.max(largestThreat, pieceValue * threatFraction);

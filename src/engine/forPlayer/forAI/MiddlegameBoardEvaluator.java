@@ -533,7 +533,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * @param moveCount The number of legal moves the player has.
    * @param moveCountByPieceType The number of legal moves per moving piece type, indexed by
    *                             {@link Piece.PieceType#ordinal()}.
-   * @param destinationCount The number of legal moves landing on each tile, indexed by tile.
+   * @param tally The tally of the player's legal moves, which counts the moves landing on each
+   *              tile.
    * @param pawnDestinations The tiles on which at least one legal pawn move lands, as one bit
    *                         per tile.
    * @param spaceCount The space count accumulated over the move destinations, which counts a
@@ -547,7 +548,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    */
   private record MoveStatistics(int moveCount,
                                 int[] moveCountByPieceType,
-                                int[] destinationCount,
+                                LegalMoveTally tally,
                                 long pawnDestinations,
                                 int spaceCount,
                                 int nearKingSquareCount,
@@ -584,7 +585,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
       nearKingCountByPieceType[pieceType] += nearKingMoves;
     }
 
-    return new MoveStatistics(tally.moveCount(), moveCountByPieceType, tally.destinationCount(),
+    return new MoveStatistics(tally.moveCount(), moveCountByPieceType, tally,
             tally.pawnDestinations(), spaceCount, nearKingSquareCount, nearKingCountByPieceType);
   }
 
@@ -1638,7 +1639,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     double protectionScore = 0;
     double largestThreat = 0;
 
-    final int[] squareAttackCount = opponentStatistics.destinationCount();
+    final LegalMoveTally opponentTally = opponentStatistics.tally();
     final long pawnAttacks = opponentStatistics.pawnDestinations();
     final int[] defenderCount = new int[BoardUtils.NUM_TILES];
     final long playerOccupancy = board.getOccupancy(alliance);
@@ -1652,7 +1653,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
       final int position = piece.getPiecePosition();
       final int protectionCount = defenderCount[position];
-      final int attackCount = squareAttackCount[position];
+      final int attackCount = opponentTally.movesTo(position);
       final int pieceValue = piece.getPieceValue();
 
       final boolean outnumbered = attackCount > protectionCount;
@@ -1727,7 +1728,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   private double spaceControlEvaluation(final MoveStatistics playerStatistics,
                                         final MoveStatistics opponentStatistics) {
     double spaceScore = 0;
-    final int[] controlledSquares = playerStatistics.destinationCount();
+    final LegalMoveTally playerTally = playerStatistics.tally();
 
     spaceScore += playerStatistics.spaceCount() * WEIGHTS.get(SPACE);
     final int moveAdvantage = playerStatistics.moveCount() - opponentStatistics.moveCount();
@@ -1735,7 +1736,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
     final int[] keySquares = {27, 28, 35, 36};
     for (final int square : keySquares) {
-      spaceScore += controlledSquares[square] * WEIGHTS.get(CENTRAL_SQUARE_MOVE);
+      spaceScore += playerTally.movesTo(square) * WEIGHTS.get(CENTRAL_SQUARE_MOVE);
     }
 
     return spaceScore;

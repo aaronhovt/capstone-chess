@@ -13,8 +13,7 @@ import java.util.Collection;
 /**
  * The LegalMoveTally class counts one player's legal moves from each piece's destination squares,
  * without generating the player's legal move list. A pawn move onto the promotion rank counts once
- * per promotion piece, and the player's castling moves count as king moves. The arrays a tally
- * returns belong to it and must not be modified by a caller.
+ * per promotion piece, and the player's castling moves count as king moves.
  *
  * @author Aaron Ho
  */
@@ -38,8 +37,20 @@ final class LegalMoveTally {
   /** The number of legal moves. */
   private final int moveCount;
 
-  /** The number of legal moves ending on each tile, indexed by tile. */
-  private final int[] destinationCount;
+  /** The tiles on which the number of legal moves ending there has the bit of value 1 set. */
+  private final long countOnes;
+
+  /** The tiles on which the number of legal moves ending there has the bit of value 2 set. */
+  private final long countTwos;
+
+  /** The tiles on which the number of legal moves ending there has the bit of value 4 set. */
+  private final long countFours;
+
+  /** The tiles on which the number of legal moves ending there has the bit of value 8 set. */
+  private final long countEights;
+
+  /** The tiles on which the number of legal moves ending there has the bit of value 16 set. */
+  private final long countSixteens;
 
   /** The tiles on which at least one pawn move ends, as one bit per tile. */
   private final long pawnDestinations;
@@ -65,30 +76,51 @@ final class LegalMoveTally {
     final Collection<Piece> pieces = player.getActivePieces();
     this.pieceTypes = new Piece.PieceType[pieces.size()];
     this.pieceDestinations = new long[pieces.size()];
-    this.destinationCount = new int[BoardUtils.NUM_TILES];
     int moves = 0;
     long pawnTiles = 0L;
+    long ones = 0L;
+    long twos = 0L;
+    long fours = 0L;
+    long eights = 0L;
+    long sixteens = 0L;
 
     int index = 0;
     for (final Piece piece : pieces) {
       final Piece.PieceType pieceType = piece.getPieceType();
-      final boolean isPawn = pieceType == Piece.PieceType.PAWN;
 
       long destinations = piece.legalDestinations(board);
       if (pieceType == Piece.PieceType.KING) {
         destinations |= castleDestinations;
       }
-      if (isPawn) {
+
+      long single = destinations;
+      if (pieceType == Piece.PieceType.PAWN) {
         pawnTiles |= destinations;
-      }
+        final long promotions = destinations & this.promotionTiles;
+        if (promotions != 0L) {
+          single &= ~promotions;
+          moves += 4 * Long.bitCount(promotions);
 
-      for (long remaining = destinations; remaining != 0L; remaining &= remaining - 1) {
-        final int destination = Long.numberOfTrailingZeros(remaining);
-        final int count = isPawn && ((this.promotionTiles >>> destination) & 1L) != 0L ? 4 : 1;
-
-        moves += count;
-        this.destinationCount[destination] += count;
+          // Adds four on each promotion tile, starting from the bit of value 4.
+          final long foursCarry = fours & promotions;
+          fours ^= promotions;
+          final long eightsCarry = eights & foursCarry;
+          eights ^= foursCarry;
+          sixteens ^= eightsCarry;
+        }
       }
+      moves += Long.bitCount(single);
+
+      // Adds one on each destination tile, carrying through the higher bits.
+      long carry = ones & single;
+      ones ^= single;
+      long nextCarry = twos & carry;
+      twos ^= carry;
+      carry = fours & nextCarry;
+      fours ^= nextCarry;
+      nextCarry = eights & carry;
+      eights ^= carry;
+      sixteens ^= nextCarry;
 
       this.pieceTypes[index] = pieceType;
       this.pieceDestinations[index] = destinations;
@@ -97,6 +129,11 @@ final class LegalMoveTally {
 
     this.moveCount = moves;
     this.pawnDestinations = pawnTiles;
+    this.countOnes = ones;
+    this.countTwos = twos;
+    this.countFours = fours;
+    this.countEights = eights;
+    this.countSixteens = sixteens;
   }
 
   /**
@@ -156,12 +193,17 @@ final class LegalMoveTally {
   }
 
   /**
-   * Returns the number of legal moves ending on each tile.
+   * Returns the number of legal moves ending on the given tile.
    *
-   * @return The counts, indexed by tile.
+   * @param tile The tile.
+   * @return The number of moves ending there.
    */
-  int[] destinationCount() {
-    return this.destinationCount;
+  int movesTo(final int tile) {
+    return (int) ((this.countOnes >>> tile) & 1L)
+            | (int) ((this.countTwos >>> tile) & 1L) << 1
+            | (int) ((this.countFours >>> tile) & 1L) << 2
+            | (int) ((this.countEights >>> tile) & 1L) << 3
+            | (int) ((this.countSixteens >>> tile) & 1L) << 4;
   }
 
   /**
