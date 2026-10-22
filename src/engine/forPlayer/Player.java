@@ -89,6 +89,15 @@ public abstract class Player {
   }
 
   /**
+   * Records that this player is not in check, so that {@link #isInCheck()} answers false without
+   * testing until this player is next reset. The caller must know that this player is not in
+   * check.
+   */
+  public void recordNotInCheck() {
+    this.inCheck = Boolean.FALSE;
+  }
+
+  /**
    * Determines whether this player is in checkmate.
    * A player is in checkmate if they are in check and have no legal escape moves.
    *

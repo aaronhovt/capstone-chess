@@ -7,6 +7,7 @@ import engine.forBoard.Move;
 import engine.forBoard.MoveCode;
 import engine.forBoard.MoveGenerator;
 import engine.forPiece.Piece;
+import engine.forPlayer.Player;
 
 import java.util.*;
 import java.util.concurrent.ExecutionException;
@@ -1325,6 +1326,44 @@ public class AlphaBeta implements MoveStrategy {
   }
 
   /**
+   * Returns the origins from which a move of the side to move can leave that side's own king in
+   * check: every square when that side is in check, and otherwise the king's square and the
+   * squares of the side's pinned pieces. An en passant capture can as well, from any origin.
+   *
+   * @param board The board in the position before the move.
+   * @param inCheck Whether the side to move is in check.
+   * @return The origins, as one bit per tile.
+   */
+  private static long testedOrigins(final Board board, final boolean inCheck) {
+    if (inCheck) {
+      return -1L;
+    }
+    final Alliance side = board.currentPlayer().getAlliance();
+    return AttackDetector.pinnedPieces(board, side) |
+            board.getPieces(side, Piece.PieceType.KING);
+  }
+
+  /**
+   * Determines whether the move just made left the side that made it in check. A move that is not
+   * an en passant capture and whose origin is not among the given origins cannot, so it is recorded
+   * as legal without testing.
+   *
+   * @param board The board in the position after the move.
+   * @param move The packed move just made.
+   * @param testedOrigins The origins {@link #testedOrigins} returned before the move.
+   * @return True if the side that made the move is in check, false otherwise.
+   */
+  private static boolean moverInCheck(final Board board, final int move,
+                                      final long testedOrigins) {
+    final Player mover = board.currentPlayer().getOpponent();
+    if (((testedOrigins >>> MoveCode.origin(move)) & 1L) == 0L && !MoveCode.isEnPassant(move)) {
+      mover.recordNotInCheck();
+      return false;
+    }
+    return mover.isInCheck();
+  }
+
+  /**
    * Returns the static evaluation of a position from the point of view of the side to move.
    *
    * @param board The board position to evaluate.
@@ -1478,6 +1517,7 @@ public class AlphaBeta implements MoveStrategy {
     final int[] generatedMoves = buffers.generated()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
     final int historySide = historySideOf(board);
+    final long testedOrigins = testedOrigins(board, inCheckAtNode);
 
     // The transposition table move is searched first and the other moves follow in ascending key
     // order. The keys are still in generation order here, so the move's index is its key's index.
@@ -1533,7 +1573,7 @@ public class AlphaBeta implements MoveStrategy {
       }
 
       board.makeMove(move);
-      if (board.currentPlayer().getOpponent().isInCheck()) {
+      if (moverInCheck(board, move, testedOrigins)) {
         if (COLLECT_STATISTICS) {
           statistics().illegalMove();
         }
@@ -1748,6 +1788,7 @@ public class AlphaBeta implements MoveStrategy {
     final long[] orderKeys = buffers.orderKeys()[ply];
     final int captureCount = MoveGenerator.generateQuiescence(board,
             board.currentPlayer().getAlliance(), captures);
+    final long testedOrigins = captureCount == 0 ? 0L : testedOrigins(board, false);
 
     // The static exchange score is resolved once per capture here. Each evaluator call walks every
     // piece on the board, so reading it from inside a comparator costs O(n log n) board scans per
@@ -1777,7 +1818,7 @@ public class AlphaBeta implements MoveStrategy {
 
       board.makeMove(move);
 
-      final boolean legal = !board.currentPlayer().getOpponent().isInCheck();
+      final boolean legal = !moverInCheck(board, move, testedOrigins);
       final boolean givesCheck = legal && board.currentPlayer().isInCheck();
       final boolean prunedByExchange = seeScore < SEE_PRUNING_THRESHOLD && !givesCheck;
       final boolean prunedByDelta = !givesCheck && !promotion &&

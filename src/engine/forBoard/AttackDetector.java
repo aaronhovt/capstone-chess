@@ -190,6 +190,30 @@ public final class AttackDetector {
   }
 
   /**
+   * Returns the pieces of the given side that each stand alone between that side's king and an
+   * opposing bishop, rook or queen bearing along the line through them, so that moving the piece
+   * off that line would leave the king attacked.
+   *
+   * @param board The current board.
+   * @param side The side whose pinned pieces are returned.
+   * @return The squares of the pinned pieces, as one bit per tile.
+   */
+  public static long pinnedPieces(final Board board, final Alliance side) {
+    final Alliance opponent = side.isWhite() ? Alliance.BLACK : Alliance.WHITE;
+    final int kingSquare =
+            Long.numberOfTrailingZeros(board.getPieces(side, Piece.PieceType.KING));
+    final long queens = board.getPieces(opponent, Piece.PieceType.QUEEN);
+    final long diagonalSliders = board.getPieces(opponent, Piece.PieceType.BISHOP) | queens;
+    final long orthogonalSliders = board.getPieces(opponent, Piece.PieceType.ROOK) | queens;
+    final long occupancy = board.getOccupancy();
+    final long own = board.getOccupancy(side);
+    return pinnedAlong(DIAGONAL_RAYS, DIAGONAL_LINES, kingSquare, occupancy, own,
+            diagonalSliders) |
+            pinnedAlong(ORTHOGONAL_RAYS, ORTHOGONAL_LINES, kingSquare, occupancy, own,
+                    orthogonalSliders);
+  }
+
+  /**
    * Returns every piece of either alliance that bears on the given square on the given board.
    * Whatever occupies the square is disregarded. A slider is included only when nothing stands
    * between it and the square.
@@ -378,6 +402,48 @@ public final class AttackDetector {
       }
     }
     return false;
+  }
+
+  /**
+   * Returns the given own pieces that stand nearest the given square on one of the given rays out
+   * of it, with one of the given sliders the next occupied square beyond them on that ray.
+   *
+   * @param rays The rays out of each square, indexed by square and then by direction.
+   * @param lines Every square on those rays out of each square, indexed by square.
+   * @param square The square the rays lead out of.
+   * @param occupancy The occupied squares, as one bit per tile.
+   * @param own The squares of the pieces that can be pinned, as one bit per tile.
+   * @param sliders The squares of the sliders that pin, as one bit per tile.
+   * @return The squares of the pinned pieces, as one bit per tile.
+   */
+  private static long pinnedAlong(final long[][] rays, final long[] lines, final int square,
+                                  final long occupancy, final long own, final long sliders) {
+    if ((lines[square] & sliders) == 0L) {
+      return 0L;
+    }
+    long pinned = 0L;
+    final long[] squareRays = rays[square];
+    for (int direction = 0; direction < squareRays.length; direction++) {
+      final long blockers = squareRays[direction] & occupancy;
+      if (blockers == 0L) {
+        continue;
+      }
+      final int nearest = direction < DECREASING_DIRECTIONS ?
+              63 - Long.numberOfLeadingZeros(blockers) : Long.numberOfTrailingZeros(blockers);
+      if ((own & (1L << nearest)) == 0L) {
+        continue;
+      }
+      final long beyond = rays[nearest][direction] & occupancy;
+      if (beyond == 0L) {
+        continue;
+      }
+      final int pinner = direction < DECREASING_DIRECTIONS ?
+              63 - Long.numberOfLeadingZeros(beyond) : Long.numberOfTrailingZeros(beyond);
+      if ((sliders & (1L << pinner)) != 0L) {
+        pinned |= 1L << nearest;
+      }
+    }
+    return pinned;
   }
 
   /**
