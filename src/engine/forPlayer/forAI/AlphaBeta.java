@@ -223,6 +223,12 @@ public class AlphaBeta implements MoveStrategy {
   private static final int INTERNAL_REDUCTION_DEPTH = 5;
 
   /**
+   * The least remaining depth at which a zero-window node with no transposition table move is
+   * searched one ply shallower.
+   */
+  private static final int ZERO_WINDOW_INTERNAL_REDUCTION_DEPTH = 6;
+
+  /**
    * Whether the search counts what it does into the {@link SearchStatistics} of its thread, read
    * once from the system property {@value SearchStatistics#PROPERTY} when this class is loaded.
    */
@@ -1446,13 +1452,13 @@ public class AlphaBeta implements MoveStrategy {
       }
     }
 
-    // An open-window node with no move to search first is searched one ply shallower.
+    // A node with no move to search first is searched one ply shallower.
     final short ttMoveCode = entry != null ? entry.moveCode : TranspositionTable.NO_MOVE;
     if (COLLECT_STATISTICS) {
       statistics().movesReached(depth, openWindow, ttMoveCode != TranspositionTable.NO_MOVE);
     }
-    if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= INTERNAL_REDUCTION_DEPTH
-            && openWindow) {
+    if (ttMoveCode == TranspositionTable.NO_MOVE && depth >= (openWindow
+            ? INTERNAL_REDUCTION_DEPTH : ZERO_WINDOW_INTERNAL_REDUCTION_DEPTH)) {
       depth--;
       if (COLLECT_STATISTICS) {
         statistics().internalReduction();
