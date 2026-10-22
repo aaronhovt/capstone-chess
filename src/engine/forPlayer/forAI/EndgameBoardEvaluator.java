@@ -6,8 +6,6 @@ import engine.forBoard.BoardUtils;
 import engine.forPiece.*;
 import engine.forPlayer.Player;
 
-import java.util.*;
-
 /**
  * The EndgameBoardEvaluator class provides specialized evaluation functions for chess endgame positions.
  * This evaluator focuses on endgame-specific factors such as king activity, passed pawns, pawn structure,
@@ -301,10 +299,7 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final PawnLists pawns = new PawnLists(whitePawns, blackPawns, whitePawnOccupancy,
             blackPawnOccupancy, passedPawns(whitePawns, blackPawnOccupancy, Alliance.WHITE),
             passedPawns(blackPawns, whitePawnOccupancy, Alliance.BLACK));
-    final Collection<Piece> whitePieces = board.whitePlayer().getActivePieces();
-    final Collection<Piece> blackPieces = board.blackPlayer().getActivePieces();
-    final Material material = new Material(countPieceTypes(whitePieces),
-            countPieceTypes(blackPieces), hasOppositeColoredBishops(whitePieces, blackPieces));
+    final Material material = material(board);
 
     if (isDrawnByMaterial(material)) {
       return 0;
@@ -361,10 +356,21 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * @return True if the material on the board is drawn, false otherwise.
    */
   boolean isDrawnByMaterial(final Board board) {
-    final Collection<Piece> whitePieces = board.whitePlayer().getActivePieces();
-    final Collection<Piece> blackPieces = board.blackPlayer().getActivePieces();
-    return isDrawnByMaterial(new Material(countPieceTypes(whitePieces),
-            countPieceTypes(blackPieces), hasOppositeColoredBishops(whitePieces, blackPieces)));
+    return isDrawnByMaterial(material(board));
+  }
+
+  /**
+   * Counts the material of both players on the given board.
+   *
+   * @param board The current state of the chess board.
+   * @return The piece counts of both players and whether they hold opposite-colored bishops.
+   */
+  private Material material(final Board board) {
+    final long whiteBishops = board.getPieces(Alliance.WHITE, Piece.PieceType.BISHOP);
+    final long blackBishops = board.getPieces(Alliance.BLACK, Piece.PieceType.BISHOP);
+    return new Material(countPieceTypes(board, Alliance.WHITE),
+            countPieceTypes(board, Alliance.BLACK),
+            hasOppositeColoredBishops(whiteBishops, blackBishops));
   }
 
   /**
@@ -580,16 +586,17 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Counts the number of each piece type in the given collection of pieces.
+   * Counts the number of each piece type the given alliance holds on the given board.
    *
-   * @param pieces The collection of pieces to count.
+   * @param board The current state of the chess board.
+   * @param alliance The alliance whose pieces are counted.
    * @return The counts of each piece type.
    */
-  private PieceCounts countPieceTypes(final Collection<Piece> pieces) {
+  private PieceCounts countPieceTypes(final Board board, final Alliance alliance) {
     final int[] byType = new int[PIECE_TYPE_COUNT];
 
-    for (final Piece piece : pieces) {
-      byType[piece.getPieceType().ordinal()]++;
+    for (final Piece.PieceType type : Piece.PieceType.values()) {
+      byType[type.ordinal()] = Long.bitCount(board.getPieces(alliance, type));
     }
 
     return new PieceCounts(byType);
@@ -643,46 +650,20 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * drawish tendencies in the endgame. The check requires each side to hold exactly one bishop,
    * and reports false for any other bishop count.
    *
-   * @param playerPieces The player's pieces.
-   * @param opponentPieces The opponent's pieces.
+   * @param playerBishops The squares of the player's bishops, as one bit per tile.
+   * @param opponentBishops The squares of the opponent's bishops, as one bit per tile.
    * @return True if opposite-colored bishops exist, false otherwise.
    */
-  private boolean hasOppositeColoredBishops(final Collection<Piece> playerPieces,
-                                            final Collection<Piece> opponentPieces) {
-    final Bishop playerBishop = onlyBishop(playerPieces);
-    final Bishop opponentBishop = onlyBishop(opponentPieces);
-
-    if (playerBishop == null || opponentBishop == null) {
+  private boolean hasOppositeColoredBishops(final long playerBishops,
+                                            final long opponentBishops) {
+    if (Long.bitCount(playerBishops) != 1 || Long.bitCount(opponentBishops) != 1) {
       return false;
     }
 
-    final int playerSquareColor = squareColor(playerBishop.getPiecePosition());
-    final int opponentSquareColor = squareColor(opponentBishop.getPiecePosition());
+    final int playerSquareColor = squareColor(Long.numberOfTrailingZeros(playerBishops));
+    final int opponentSquareColor = squareColor(Long.numberOfTrailingZeros(opponentBishops));
 
     return playerSquareColor != opponentSquareColor;
-  }
-
-  /**
-   * Returns the single bishop held by a side.
-   *
-   * @param pieces The pieces of one side.
-   * @return The only bishop among the pieces, or null when the side holds no bishop or more
-   *         than one.
-   */
-  private static Bishop onlyBishop(final Collection<Piece> pieces) {
-    Bishop found = null;
-
-    for (final Piece piece : pieces) {
-      if (piece.getPieceType() == Piece.PieceType.BISHOP) {
-        if (found != null) {
-          return null;
-        }
-
-        found = (Bishop) piece;
-      }
-    }
-
-    return found;
   }
 
   /**
@@ -1337,10 +1318,12 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   private double pieceCoordinationEvaluation(final Player player, final Board board,
                                              final PawnLists pawns, final Material material) {
     double coordinationScore = 0;
-    final Collection<Piece> playerPieces = player.getActivePieces();
+    final Alliance alliance = player.getAlliance();
+    final long minorPieces = board.getPieces(alliance, Piece.PieceType.BISHOP)
+            | board.getPieces(alliance, Piece.PieceType.KNIGHT);
 
     coordinationScore += evaluateMinorPieceCoordination(material.of(player), pawns);
-    coordinationScore += evaluatePiecePlacement(playerPieces, pawns.of(player));
+    coordinationScore += evaluatePiecePlacement(board, minorPieces, pawns.of(player));
     coordinationScore += evaluatePiecesSupportingPassedPawns(player, board, pawns);
 
     return coordinationScore;
@@ -1370,15 +1353,17 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * Evaluates piece placement relative to pawns, particularly the positioning
    * of bishops and knights in relation to the pawn structure.
    *
-   * @param playerPieces The player's pieces.
+   * @param board The current chess board state.
+   * @param minorPieces The squares of the player's bishops and knights, as one bit per tile.
    * @param playerPawns The player's pawns.
    * @return The piece placement evaluation score.
    */
-  private double evaluatePiecePlacement(final Collection<Piece> playerPieces,
+  private double evaluatePiecePlacement(final Board board, final long minorPieces,
                                         final int[] playerPawns) {
     double placementScore = 0;
 
-    for (final Piece piece : playerPieces) {
+    for (long remaining = minorPieces; remaining != 0L; remaining &= remaining - 1) {
+      final Piece piece = board.getPiece(Long.numberOfTrailingZeros(remaining));
       if (piece.getPieceType() == Piece.PieceType.BISHOP) {
         placementScore += evaluateBishopPlacement((Bishop) piece, playerPawns);
       } else if (piece.getPieceType() == Piece.PieceType.KNIGHT) {
@@ -1466,7 +1451,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final int[] playerPawns = pawns.of(player);
     final long passedPawns = pawns.passedOf(player);
     final Alliance alliance = player.getAlliance();
-    final Collection<Piece> playerPieces = player.getActivePieces();
+    final long supportingPieces = board.getOccupancy(alliance)
+            & ~board.getPieces(alliance, Piece.PieceType.PAWN)
+            & ~board.getPieces(alliance, Piece.PieceType.KING);
 
     for (final int pawnPosition : playerPawns) {
       if (isPawnAtPosition(passedPawns, pawnPosition)) {
@@ -1474,22 +1461,19 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
                 (pawnPosition % 8) :
                 ((7 * 8) + (pawnPosition % 8));
 
-        for (final Piece piece : playerPieces) {
-          if (piece.getPieceType() != Piece.PieceType.PAWN &&
-                  piece.getPieceType() != Piece.PieceType.KING) {
+        for (long remaining = supportingPieces; remaining != 0L; remaining &= remaining - 1) {
+          final Piece piece = board.getPiece(Long.numberOfTrailingZeros(remaining));
+          final int piecePosition = piece.getPiecePosition();
+          final int distance = calculateChebyshevDistance(piecePosition, pawnPosition);
 
-            final int piecePosition = piece.getPiecePosition();
-            final int distance = calculateChebyshevDistance(piecePosition, pawnPosition);
+          if (distance <= 1) {
+            supportScore += WEIGHTS.get(PASSED_PAWN_ESCORT);
+          } else if (distance == 2) {
+            supportScore += WEIGHTS.get(PASSED_PAWN_NEAR_ESCORT);
+          }
 
-            if (distance <= 1) {
-              supportScore += WEIGHTS.get(PASSED_PAWN_ESCORT);
-            } else if (distance == 2) {
-              supportScore += WEIGHTS.get(PASSED_PAWN_NEAR_ESCORT);
-            }
-
-            if (((piece.legalDestinations(board) >>> promotionSquare) & 1L) != 0L) {
-              supportScore += WEIGHTS.get(PROMOTION_SQUARE_CONTROL);
-            }
+          if (((piece.legalDestinations(board) >>> promotionSquare) & 1L) != 0L) {
+            supportScore += WEIGHTS.get(PROMOTION_SQUARE_CONTROL);
           }
         }
       }
@@ -1510,9 +1494,9 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   private double rookEndgameEvaluation(final Player player, final Board board,
                                        final PawnLists pawns) {
     double rookScore = 0;
-    final List<Piece> playerRooks = piecesOfType(player, Piece.PieceType.ROOK);
+    final long playerRooks = board.getPieces(player.getAlliance(), Piece.PieceType.ROOK);
 
-    if (playerRooks.isEmpty()) {
+    if (playerRooks == 0L) {
       return 0;
     }
 
@@ -1522,14 +1506,15 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final long opponentPassedPawns = pawns.passedOf(player.getOpponent());
     final Alliance alliance = player.getAlliance();
 
-    for (final Piece rook : playerRooks) {
+    for (long remaining = playerRooks; remaining != 0L; remaining &= remaining - 1) {
+      final Piece rook = board.getPiece(Long.numberOfTrailingZeros(remaining));
       rookScore += evaluateRookOnOpenFile(rook, board);
       rookScore += evaluateRookBehindPassedPawn(rook, playerPawns, opponentPawns,
               playerPassedPawns, opponentPassedPawns, alliance);
       rookScore += evaluateRookOn7thRank(rook, opponentPawns, alliance);
     }
 
-    if (playerRooks.size() >= 2) {
+    if (Long.bitCount(playerRooks) >= 2) {
       rookScore += evaluateConnectedRooks(playerRooks);
     }
 
@@ -1653,16 +1638,16 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * Evaluates connected rooks that protect each other on the same rank or file.
    * Connected rooks can provide mutual support and control important squares.
    *
-   * @param playerRooks The player's rooks.
+   * @param playerRooks The squares of the player's rooks, as one bit per tile.
    * @return The connected rooks evaluation score.
    */
-  private double evaluateConnectedRooks(final List<Piece> playerRooks) {
+  private double evaluateConnectedRooks(final long playerRooks) {
     double connectedScore = 0;
 
-    for (int i = 0; i < playerRooks.size() - 1; i++) {
-      for (int j = i + 1; j < playerRooks.size(); j++) {
-        final int rookPos1 = playerRooks.get(i).getPiecePosition();
-        final int rookPos2 = playerRooks.get(j).getPiecePosition();
+    for (long first = playerRooks; first != 0L; first &= first - 1) {
+      final int rookPos1 = Long.numberOfTrailingZeros(first);
+      for (long second = first & (first - 1); second != 0L; second &= second - 1) {
+        final int rookPos2 = Long.numberOfTrailingZeros(second);
 
         if (rookPos1 / 8 == rookPos2 / 8) {
           connectedScore += WEIGHTS.get(ROOKS_SHARING_RANK);
@@ -1690,22 +1675,23 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   private double bishopEndgameEvaluation(final Player player, final Board board,
                                          final PawnLists pawns, final Material material) {
     double bishopScore = 0;
-    final List<Piece> playerBishops = piecesOfType(player, Piece.PieceType.BISHOP);
+    final long playerBishops = board.getPieces(player.getAlliance(), Piece.PieceType.BISHOP);
 
-    if (playerBishops.isEmpty()) {
+    if (playerBishops == 0L) {
       return 0;
     }
 
     bishopScore += evaluateColorComplexControl(playerBishops, pawns);
 
-    for (final Piece bishop : playerBishops) {
+    for (long remaining = playerBishops; remaining != 0L; remaining &= remaining - 1) {
+      final Piece bishop = board.getPiece(Long.numberOfTrailingZeros(remaining));
       bishopScore += Long.bitCount(bishop.legalDestinations(board)) * WEIGHTS.get(BISHOP_MOBILITY);
     }
 
     final int playerKnightCount = material.of(player).of(Piece.PieceType.KNIGHT);
     final int opponentKnightCount = material.of(player.getOpponent()).of(Piece.PieceType.KNIGHT);
 
-    if (!playerBishops.isEmpty() && opponentKnightCount > 0 && playerKnightCount == 0) {
+    if (playerBishops != 0L && opponentKnightCount > 0 && playerKnightCount == 0) {
       bishopScore += evaluateBishopVsKnight(pawns);
     }
 
@@ -1717,18 +1703,18 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
    * Bishops on both colours earn the bishop pair bonus. Otherwise, bishops that control squares
    * of the opposite color from most pawns are generally more effective.
    *
-   * @param playerBishops The player's bishops.
+   * @param playerBishops The squares of the player's bishops, as one bit per tile.
    * @param pawns The pawns of both players.
    * @return The color complex control evaluation score.
    */
-  private double evaluateColorComplexControl(final List<Piece> playerBishops,
+  private double evaluateColorComplexControl(final long playerBishops,
                                              final PawnLists pawns) {
     double colorScore = 0;
     boolean hasLightSquareBishop = false;
     boolean hasDarkSquareBishop = false;
 
-    for (final Piece bishop : playerBishops) {
-      final int position = bishop.getPiecePosition();
+    for (long remaining = playerBishops; remaining != 0L; remaining &= remaining - 1) {
+      final int position = Long.numberOfTrailingZeros(remaining);
       final boolean isLightSquare = ((position / 8) + (position % 8)) % 2 == 0;
 
       if (isLightSquare) {
@@ -1881,10 +1867,11 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
       return -largestThreat;
     }
 
-    final Collection<Piece> playerPieces = player.getActivePieces();
+    final long playerPieces = board.getOccupancy(player.getAlliance());
     final long pawnAttacks = opponentTargets.pawnDestinations();
 
-    for (final Piece piece : playerPieces) {
+    for (long remaining = playerPieces; remaining != 0L; remaining &= remaining - 1) {
+      final Piece piece = board.getPiece(Long.numberOfTrailingZeros(remaining));
       if (piece.getPieceType() == Piece.PieceType.KING) continue;
 
       final int position = piece.getPiecePosition();
@@ -1905,22 +1892,24 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Counts the pieces in the given collection that defend the given square. The piece standing on
+   * Counts the pieces on the given squares that defend the given square. The piece standing on
    * the square is not counted, and a piece whose line to the square is blocked by another piece
    * does not count.
    *
-   * @param playerPieces The pieces to test.
+   * @param playerPieces The squares of the pieces to test, as one bit per tile.
    * @param square The square to test.
    * @param board The current chess board state.
-   * @return The number of pieces in the collection that defend the square.
+   * @return The number of those pieces that defend the square.
    */
-  private static int countDefenders(final Collection<Piece> playerPieces,
+  private static int countDefenders(final long playerPieces,
                                     final int square,
                                     final Board board) {
     int defenders = 0;
 
-    for (final Piece piece : playerPieces) {
-      if (piece.getPiecePosition() != square && piece.defendsSquare(square, board)) {
+    for (long remaining = playerPieces & ~(1L << square); remaining != 0L;
+         remaining &= remaining - 1) {
+      final Piece piece = board.getPiece(Long.numberOfTrailingZeros(remaining));
+      if (piece.defendsSquare(square, board)) {
         defenders++;
       }
     }
@@ -1953,25 +1942,5 @@ public class EndgameBoardEvaluator implements BoardEvaluator {
     final int rank2 = position2 / 8;
 
     return Math.max(Math.abs(file1 - file2), Math.abs(rank1 - rank2));
-  }
-
-  /**
-   * Returns the given player's pieces of the given type, in the order the player lists its
-   * pieces.
-   *
-   * @param player The player whose pieces are requested.
-   * @param type The piece type to keep.
-   * @return A new list of the player's pieces of that type.
-   */
-  private static List<Piece> piecesOfType(final Player player, final Piece.PieceType type) {
-    final List<Piece> pieces = new ArrayList<>();
-
-    for (final Piece piece : player.getActivePieces()) {
-      if (piece.getPieceType() == type) {
-        pieces.add(piece);
-      }
-    }
-
-    return pieces;
   }
 }

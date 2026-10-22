@@ -4,8 +4,6 @@ import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forPiece.Piece;
 
-import java.util.Collection;
-
 /**
  * The TaperedEvaluator class scores a position as a blend of the middlegame and endgame
  * evaluators, weighted by the game phase of that position. The phase counts each knight and
@@ -50,7 +48,7 @@ public final class TaperedEvaluator implements BoardEvaluator {
    */
   @Override
   public double evaluate(final Board board) {
-    final int phase = phase(board.getWhitePieces()) + phase(board.getBlackPieces());
+    final int phase = phase(board, Alliance.WHITE) + phase(board, Alliance.BLACK);
 
     if (phase >= FULL_PHASE) {
       return MiddlegameBoardEvaluator.get().evaluate(board);
@@ -73,24 +71,17 @@ public final class TaperedEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Returns the phase contributed by the given pieces: one for each knight and bishop, two for
-   * each rook and four for each queen.
+   * Returns the phase contributed by the given alliance's pieces: one for each knight and bishop,
+   * two for each rook and four for each queen.
    *
-   * @param pieces The pieces of one player.
+   * @param board The current state of the chess board.
+   * @param alliance The alliance whose pieces are counted.
    * @return The phase those pieces contribute.
    */
-  private static int phase(final Collection<Piece> pieces) {
-    int phase = 0;
-
-    for (final Piece piece : pieces) {
-      phase += switch (piece.getPieceType()) {
-        case KNIGHT, BISHOP -> 1;
-        case ROOK -> 2;
-        case QUEEN -> 4;
-        case PAWN, KING -> 0;
-      };
-    }
-
-    return phase;
+  private static int phase(final Board board, final Alliance alliance) {
+    return Long.bitCount(board.getPieces(alliance, Piece.PieceType.KNIGHT)
+            | board.getPieces(alliance, Piece.PieceType.BISHOP))
+            + 2 * Long.bitCount(board.getPieces(alliance, Piece.PieceType.ROOK))
+            + 4 * Long.bitCount(board.getPieces(alliance, Piece.PieceType.QUEEN));
   }
 }

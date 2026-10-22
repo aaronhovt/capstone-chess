@@ -1,12 +1,12 @@
 package engine.forPlayer.forAI;
 
+import engine.Alliance;
 import engine.forBoard.AttackDetector;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
 import engine.forBoard.MoveCode;
 import engine.forBoard.MoveGenerator;
 import engine.forPiece.Piece;
-import engine.forPlayer.Player;
 
 import java.util.*;
 import java.util.concurrent.ExecutionException;
@@ -1425,7 +1425,7 @@ public class AlphaBeta implements MoveStrategy {
 
     if (depth >= NULL_MOVE_DEPTH && nullMoveAllowed && !openWindow && !inCheckAtNode
             && beta < MATE_THRESHOLD && staticEval >= beta
-            && hasNonPawnMaterial(board.currentPlayer())) {
+            && hasNonPawnMaterial(board, board.currentPlayer().getAlliance())) {
       final int R = 3 + depth / 4;
       double nullMoveScore;
       if (COLLECT_STATISTICS) {
@@ -1851,17 +1851,13 @@ public class AlphaBeta implements MoveStrategy {
    * Checks whether a player has non-pawn material remaining on the board.
    * Used to determine if null move pruning is safe to apply.
    *
-   * @param player The player to check for non-pawn material.
+   * @param board The current board.
+   * @param alliance The alliance of the player to check for non-pawn material.
    * @return True if the player has pieces other than pawns and king, false otherwise.
    */
-  private boolean hasNonPawnMaterial(Player player) {
-    for (Piece piece : player.getActivePieces()) {
-      if (piece.getPieceType() != Piece.PieceType.PAWN &&
-              piece.getPieceType() != Piece.PieceType.KING) {
-        return true;
-      }
-    }
-    return false;
+  private boolean hasNonPawnMaterial(final Board board, final Alliance alliance) {
+    return (board.getOccupancy(alliance) & ~board.getPieces(alliance, Piece.PieceType.PAWN)
+            & ~board.getPieces(alliance, Piece.PieceType.KING)) != 0L;
   }
 
   /**

@@ -6,8 +6,6 @@ import engine.forBoard.BoardUtils;
 import engine.forPiece.*;
 import engine.forPlayer.Player;
 
-import java.util.*;
-
 /**
  * The MiddlegameBoardEvaluator class provides comprehensive position evaluation specifically
  * tuned for middlegame positions in chess. This evaluator implements modern chess engine
@@ -486,8 +484,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final MoveStatistics blackStatistics = moveStatistics(board.blackPlayer(), blackTally);
     final PawnStructure whitePawns = pawnStructure(board.whitePlayer(), whitePlacement);
     final PawnStructure blackPawns = pawnStructure(board.blackPlayer(), blackPlacement);
-    final PieceLayout whiteLayout = pieceLayout(board.whitePlayer());
-    final PieceLayout blackLayout = pieceLayout(board.blackPlayer());
+    final PieceLayout whiteLayout = pieceLayout(board, board.whitePlayer());
+    final PieceLayout blackLayout = pieceLayout(board, board.blackPlayer());
     final PawnStructureCache.Entry pawnStructureScores =
             pawnStructureScores(whitePawns, blackPawns);
     final double kingWeight = kingTermWeight(whiteLayout, blackLayout);
@@ -697,12 +695,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
   }
 
   /**
-   * Walks the given player's active pieces once and returns the placement facts of those pieces.
+   * Walks the given player's pieces once, in ascending order of square, and returns the placement
+   * facts of those pieces.
    *
+   * @param board The current state of the chess board.
    * @param player The player whose pieces are being read.
    * @return The layout of that player's pieces.
    */
-  private PieceLayout pieceLayout(final Player player) {
+  private PieceLayout pieceLayout(final Board board, final Player player) {
     final int opposingKingPosition = player.getOpponent().getPlayerKing().getPiecePosition();
 
     double material = 0;
@@ -714,7 +714,9 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     int heavyPieceFiles = 0;
     double kingTropism = 0;
 
-    for (final Piece piece : player.getActivePieces()) {
+    for (long remaining = board.getOccupancy(player.getAlliance()); remaining != 0L;
+         remaining &= remaining - 1) {
+      final Piece piece = board.getPiece(Long.numberOfTrailingZeros(remaining));
       if (piece.getPieceType() == Piece.PieceType.KING) {
         material += piece.getPieceValue();
         continue;
@@ -1052,7 +1054,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
                                          final PawnStructureCache.Entry pawnStructureScores) {
     return pawnStructureScores.scoreOf(player.getAlliance()) +
             evaluateUncontrolledStopSquares(playerPawns, opponentPawns,
-                    player.getOpponent().getActivePieces(), player.getAlliance(), board);
+                    board.getOccupancy(player.getOpponent().getAlliance()), player.getAlliance(),
+                    board);
   }
 
   /**
@@ -1144,14 +1147,14 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    *
    * @param playerPawns The structure of the player's pawns.
    * @param opponentPawns The structure of the opponent's pawns.
-   * @param opponentPieces The opponent's pieces.
+   * @param opponentPieces The squares of the opponent's pieces, as one bit per tile.
    * @param alliance The alliance of the player.
    * @param board The current state of the chess board.
    * @return The uncontrolled stop square evaluation score.
    */
   private double evaluateUncontrolledStopSquares(final PawnStructure playerPawns,
                                                  final PawnStructure opponentPawns,
-                                                 final Collection<Piece> opponentPieces,
+                                                 final long opponentPieces,
                                                  final Alliance alliance,
                                                  final Board board) {
     double stopSquareScore = 0;
@@ -1212,13 +1215,13 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    *
    * @param pawnPosition The tile holding the pawn to check.
    * @param alliance The alliance of the pawn.
-   * @param opponentPieces The opponent's pieces.
+   * @param opponentPieces The squares of the opponent's pieces, as one bit per tile.
    * @param board The current state of the chess board.
    * @return True if an opponent piece controls the stop square, false otherwise.
    */
   private boolean opponentControlsStopSquare(final int pawnPosition,
                                              final Alliance alliance,
-                                             final Collection<Piece> opponentPieces,
+                                             final long opponentPieces,
                                              final Board board) {
     final int pawnRank = pawnPosition / 8;
 
@@ -1231,7 +1234,8 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
     final int stopSquare = (frontRank * 8) + (pawnPosition % 8);
 
-    for (final Piece opponentPiece : opponentPieces) {
+    for (long remaining = opponentPieces; remaining != 0L; remaining &= remaining - 1) {
+      final Piece opponentPiece = board.getPiece(Long.numberOfTrailingZeros(remaining));
       if (opponentPiece.defendsSquare(stopSquare, board)) {
         return true;
       }
@@ -1504,8 +1508,7 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
 
     coordinationScore += evaluateBishopPair(playerLayout.bishops());
     coordinationScore += evaluateRookCoordination(playerLayout.rooks(), playerPawns, opponentPawns);
-    coordinationScore += evaluatePieceProtection(player.getActivePieces(), player.getAlliance(),
-            board, opponentStatistics);
+    coordinationScore += evaluatePieceProtection(player.getAlliance(), board, opponentStatistics);
     coordinationScore += evaluatePieceActivity(playerLayout);
 
     return coordinationScore;
@@ -1626,14 +1629,12 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
    * {@link #THREAT_FRACTION} of the threatened piece's value, so the penalty this term can produce
    * is bounded by that fraction of a queen.
    *
-   * @param playerPieces The player's pieces.
    * @param alliance The player's alliance.
    * @param board The current chess board state.
    * @param opponentStatistics The statistics of the opposing player's legal move list.
    * @return The piece protection evaluation score.
    */
-  private double evaluatePieceProtection(final Collection<Piece> playerPieces,
-                                         final Alliance alliance,
+  private double evaluatePieceProtection(final Alliance alliance,
                                          final Board board,
                                          final MoveStatistics opponentStatistics) {
     double protectionScore = 0;
@@ -1644,11 +1645,13 @@ public class MiddlegameBoardEvaluator implements BoardEvaluator {
     final int[] defenderCount = new int[BoardUtils.NUM_TILES];
     final long playerOccupancy = board.getOccupancy(alliance);
 
-    for (final Piece piece : playerPieces) {
-      piece.addDefendedSquares(board, playerOccupancy, defenderCount);
+    for (long remaining = playerOccupancy; remaining != 0L; remaining &= remaining - 1) {
+      board.getPiece(Long.numberOfTrailingZeros(remaining))
+              .addDefendedSquares(board, playerOccupancy, defenderCount);
     }
 
-    for (final Piece piece : playerPieces) {
+    for (long remaining = playerOccupancy; remaining != 0L; remaining &= remaining - 1) {
+      final Piece piece = board.getPiece(Long.numberOfTrailingZeros(remaining));
       if (piece.getPieceType() == Piece.PieceType.KING) continue;
 
       final int position = piece.getPiecePosition();

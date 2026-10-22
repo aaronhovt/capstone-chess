@@ -8,8 +8,6 @@ import engine.forBoard.MoveGenerator;
 import engine.forPiece.Piece;
 import engine.forPlayer.Player;
 
-import java.util.Collection;
-
 /**
  * The LegalMoveTally class counts one player's legal moves from each piece's destination squares,
  * without generating the player's legal move list. A pawn move onto the promotion rank counts once
@@ -25,7 +23,7 @@ final class LegalMoveTally {
   /** The tiles on which a black pawn promotes, as one bit per tile. */
   private static final long BLACK_PROMOTION_TILES = computePromotionTiles(Alliance.BLACK);
 
-  /** The type of each of the player's pieces, in the order the player lists its pieces. */
+  /** The type of each of the player's pieces, in ascending order of square. */
   private final Piece.PieceType[] pieceTypes;
 
   /** The destination tiles of each piece's legal moves, as one bit per tile, in the same order. */
@@ -73,9 +71,9 @@ final class LegalMoveTally {
       castleDestinations |= 1L << MoveCode.destination(castles[castle]);
     }
 
-    final Collection<Piece> pieces = player.getActivePieces();
-    this.pieceTypes = new Piece.PieceType[pieces.size()];
-    this.pieceDestinations = new long[pieces.size()];
+    final long occupancy = board.getOccupancy(player.getAlliance());
+    this.pieceTypes = new Piece.PieceType[Long.bitCount(occupancy)];
+    this.pieceDestinations = new long[this.pieceTypes.length];
     int moves = 0;
     long pawnTiles = 0L;
     long ones = 0L;
@@ -85,7 +83,8 @@ final class LegalMoveTally {
     long sixteens = 0L;
 
     int index = 0;
-    for (final Piece piece : pieces) {
+    for (long remaining = occupancy; remaining != 0L; remaining &= remaining - 1) {
+      final Piece piece = board.getPiece(Long.numberOfTrailingZeros(remaining));
       final Piece.PieceType pieceType = piece.getPieceType();
 
       long destinations = piece.legalDestinations(board);
