@@ -171,8 +171,38 @@ public class EngineProcess implements AutoCloseable {
    * @throws Fault If the engine does not report a move before the timeout.
    */
   public Reply go(final Limit limit) {
+    return search("go" + limit.fields());
+  }
+
+  /**
+   * Searches the current position under a game clock and reads the reply, as
+   * {@link #go(Limit)} does. Both sides are given the same increment.
+   *
+   * @param whiteMillis The milliseconds left on White's clock.
+   * @param blackMillis The milliseconds left on Black's clock.
+   * @param incrementMillis The milliseconds added to a clock after each move.
+   * @return The move the engine chose, the depth and score it reported, and the time the search
+   *         took, measured from sending the command to reading the move.
+   * @throws Fault If the engine does not report a move before the timeout.
+   */
+  public Reply go(final long whiteMillis, final long blackMillis, final long incrementMillis) {
+    return search("go wtime " + whiteMillis + " btime " + blackMillis + " winc " +
+            incrementMillis + " binc " + incrementMillis);
+  }
+
+  /**
+   * Sends a search command and reads the reply. Every information line the engine writes before
+   * its move is read, and the fields of the last one reporting a depth or a score are the ones the
+   * reply holds. Fields this class does not know are passed over.
+   *
+   * @param command The search command.
+   * @return The move the engine chose, the depth and score it reported, and the time the search
+   *         took.
+   * @throws Fault If the engine does not report a move before the timeout.
+   */
+  private Reply search(final String command) {
     final long start = System.nanoTime();
-    send("go" + limit.fields());
+    send(command);
     Integer depth = null;
     Integer score = null;
     Integer mateIn = null;

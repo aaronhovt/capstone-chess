@@ -5,6 +5,7 @@ import engine.forBoard.Move;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -38,8 +39,14 @@ import java.util.concurrent.Executors;
  * history a game actually has, which its own draw detection depends on.
  * <p>
  * Each engine searches under its own limit, a node count or a move time, which the command line
- * sets for both engines at once or for one engine at a time. A match is played under one kind of
- * limit throughout, since a node count and a move time do not measure the same thing.
+ * sets for both engines at once or for one engine at a time, or both engines play on a game clock
+ * under one time control. A match is played under one kind of limit throughout, since a node
+ * count, a move time and a clock do not measure the same thing.
+ * <p>
+ * Under a time control the arbiter keeps both clocks. The time a search takes, from sending the
+ * search command to reading the move, is taken off the clock of the side that moved, and the
+ * increment is added once the move is made. A side whose search takes longer than its clock held
+ * loses the game on time.
  * <p>
  * Search threads are fixed at one for both engines. A node limit is only a meaningful measure of
  * equal effort while one thread is searching, since helper threads contribute nodes that the limit
@@ -126,7 +133,13 @@ public class SelfPlayMatch {
   private static final String RESULTS_PAIR_WORD = "pair";
 
   /** The number of fields on a pair line of a results file, the leading word included. */
-  private static final int RESULTS_PAIR_FIELDS = 14;
+  private static final int RESULTS_PAIR_FIELDS = 16;
+
+  /**
+   * The number of fields on a pair line written before time losses were recorded, which is read
+   * as a pair with no time losses.
+   */
+  private static final int RESULTS_PAIR_FIELDS_WITHOUT_TIME_LOSSES = 14;
 
   /** The number of openings played when no other number is given. */
   private static final int DEFAULT_PAIRS = 1;
@@ -252,7 +265,7 @@ public class SelfPlayMatch {
       commandA = EngineProcess.tokenize(settings.engineACommand());
       commandB = EngineProcess.tokenize(settings.engineBCommand());
     } catch (final IllegalArgumentException exception) {
-      return new Tally(0, 0, 0, 0, 0, new SearchTotals(), new SearchTotals(), 0, null,
+      return new Tally(0, 0, 0, 0, 0, 0, 0, new SearchTotals(), new SearchTotals(), 0, null,
               exception.getMessage());
     }
 
@@ -344,6 +357,8 @@ public class SelfPlayMatch {
     int draws = 0;
     int played = 0;
     int adjudicated = 0;
+    int engineATimeLosses = 0;
+    int engineBTimeLosses = 0;
     long gameMillis = 0;
 
     for (int game = 0; game < GAMES_PER_PAIR; game++) {
@@ -360,8 +375,9 @@ public class SelfPlayMatch {
       final long elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
       reportGame(report, game + 1, engineAIsWhite, result, elapsedMillis, settings.verbose());
       if (result.outcome() == Outcome.FAILURE) {
-        return new PairResult(engineAWins, engineBWins, draws, played, adjudicated, totalsA,
-                totalsB, gameMillis, result.reason(), report);
+        return new PairResult(engineAWins, engineBWins, draws, played, adjudicated,
+                engineATimeLosses, engineBTimeLosses, totalsA, totalsB, gameMillis,
+                result.reason(), report);
       }
       played++;
       gameMillis += elapsedMillis;
@@ -372,12 +388,18 @@ public class SelfPlayMatch {
         draws++;
       } else if ((result.outcome() == Outcome.WHITE_WINS) == engineAIsWhite) {
         engineAWins++;
+        if (result.lostOnTime()) {
+          engineBTimeLosses++;
+        }
       } else {
         engineBWins++;
+        if (result.lostOnTime()) {
+          engineATimeLosses++;
+        }
       }
     }
-    return new PairResult(engineAWins, engineBWins, draws, played, adjudicated, totalsA, totalsB,
-            gameMillis, null, report);
+    return new PairResult(engineAWins, engineBWins, draws, played, adjudicated,
+            engineATimeLosses, engineBTimeLosses, totalsA, totalsB, gameMillis, null, report);
   }
 
   /**
@@ -410,8 +432,8 @@ public class SelfPlayMatch {
    *                position.
    * @param white The engine playing White.
    * @param black The engine playing Black.
-   * @param whiteLimit What stops a search by White.
-   * @param blackLimit What stops a search by Black.
+   * @param whiteLimit What stops a search by White, or null if the settings hold a time control.
+   * @param blackLimit What stops a search by Black, or null if the settings hold a time control.
    * @param whiteTotals The totals the searches White carries out are folded into.
    * @param blackTotals The totals the searches Black carries out are folded into.
    * @param report The lines reporting the pair, which this method appends to when the match is
@@ -454,15 +476,16 @@ public class SelfPlayMatch {
   }
 
   /**
-   * Plays moves until the game reaches a result or fails.
+   * Plays moves until the game reaches a result or fails. Under a time control both clocks start
+   * at the base time when this method is called.
    *
    * @param settings The settings the game is played under.
    * @param board The position the game is played on, which this method advances.
    * @param moves The moves played so far, which this method appends to.
    * @param white The engine playing White.
    * @param black The engine playing Black.
-   * @param whiteLimit What stops a search by White.
-   * @param blackLimit What stops a search by Black.
+   * @param whiteLimit What stops a search by White, or null if the settings hold a time control.
+   * @param blackLimit What stops a search by Black, or null if the settings hold a time control.
    * @param whiteTotals The totals the searches White carries out are folded into.
    * @param blackTotals The totals the searches Black carries out are folded into.
    * @param report The lines reporting the pair, which this method appends to when the match is
@@ -481,6 +504,9 @@ public class SelfPlayMatch {
             settings.resignScore(), settings.resignPlies(), settings.drawScore(),
             settings.drawPlies(), settings.drawAfter());
     Adjudicator.Verdict verdict = Adjudicator.Verdict.NONE;
+    final TimeControl timeControl = settings.timeControl();
+    long whiteClock = timeControl == null ? 0 : timeControl.baseMillis();
+    long blackClock = whiteClock;
 
     while (true) {
       final Result terminal = terminalResult(board, moves);
@@ -500,7 +526,22 @@ public class SelfPlayMatch {
       final String moverName = "the " + mover.getName() + " engine, playing " +
               (whiteToMove ? "White" : "Black") + ",";
       mover.setPosition(moves);
-      final EngineProcess.Reply reply = mover.go(whiteToMove ? whiteLimit : blackLimit);
+      final EngineProcess.Reply reply = timeControl == null ?
+              mover.go(whiteToMove ? whiteLimit : blackLimit) :
+              mover.go(whiteClock, blackClock, timeControl.incrementMillis());
+      if (timeControl != null) {
+        final long left = (whiteToMove ? whiteClock : blackClock) - reply.elapsedMillis();
+        if (left < 0) {
+          return new Result(whiteToMove ? Outcome.BLACK_WINS : Outcome.WHITE_WINS,
+                  moverName + " lost on time, " + -left + " ms past its clock", moves, false,
+                  true);
+        }
+        if (whiteToMove) {
+          whiteClock = left + timeControl.incrementMillis();
+        } else {
+          blackClock = left + timeControl.incrementMillis();
+        }
+      }
       if (NULL_MOVE_NOTATION.equals(reply.move())) {
         return new Result(Outcome.FAILURE, moverName + " reported no move in a position the " +
                 "arbiter did not find terminal", moves);
@@ -625,11 +666,16 @@ public class SelfPlayMatch {
   private static void printHeader(final Settings settings, final List<BookLine> lines) {
     System.out.println("Engine A: " + settings.engineACommand());
     System.out.println("Engine B: " + settings.engineBCommand());
-    final String limit = settings.limitA().equals(settings.limitB()) ?
-            settings.limitA().description() :
-            settings.limitA().description() + " for " + ENGINE_A_NAME + " and " +
-                    settings.limitB().description() + " for " + ENGINE_B_NAME;
-    System.out.println("Limit: " + limit + " per move, hash " + settings.tableSizeMB() + " MB, " +
+    final String limit;
+    if (settings.timeControl() != null) {
+      limit = settings.timeControl().description() + " per game";
+    } else if (settings.limitA().equals(settings.limitB())) {
+      limit = settings.limitA().description() + " per move";
+    } else {
+      limit = settings.limitA().description() + " for " + ENGINE_A_NAME + " and " +
+              settings.limitB().description() + " for " + ENGINE_B_NAME + " per move";
+    }
+    System.out.println("Limit: " + limit + ", hash " + settings.tableSizeMB() + " MB, " +
             SEARCH_THREADS + " search thread");
     if (!settings.useBook()) {
       System.out.println("Openings: the standard starting position");
@@ -763,6 +809,10 @@ public class SelfPlayMatch {
       System.out.println("Adjudicated: " + tally.adjudicated() + " of " + tally.played() +
               " games");
     }
+    if (tally.engineATimeLosses() + tally.engineBTimeLosses() > 0) {
+      System.out.println("Lost on time: " + ENGINE_A_NAME + " " + tally.engineATimeLosses() +
+              ", " + ENGINE_B_NAME + " " + tally.engineBTimeLosses());
+    }
     if (tally.played() > 0) {
       System.out.printf("Score for A: %.1f of %d, %.2f percent%n", points, tally.played(),
               100.0 * points / tally.played());
@@ -880,6 +930,8 @@ public class SelfPlayMatch {
             "overriding --movetime");
     System.out.println("  --movetime-b <ms>    milliseconds per move for the second engine, " +
             "overriding --movetime");
+    System.out.println("  --tc <base>[+<inc>]  a game clock for both engines, the base and " +
+            "increment in seconds, such as 10+0.1, in place of --nodes");
     System.out.println("  --hash <megabytes>   transposition table size, " + DEFAULT_TABLE_SIZE_MB +
             " by default");
     System.out.println("  --book <path>        the opening book, " + OpeningBook.DEFAULT_BOOK_PATH +
@@ -921,11 +973,15 @@ public class SelfPlayMatch {
     System.out.println("holds fewer pairs than --pairs asked for. The value of --pairs is the");
     System.out.println("budget the test is given rather than the number of pairs it will use.");
     System.out.println();
-    System.out.println("A match is played under node limits or under move times, but not both. A");
-    System.out.println("move time is what an engine spends rather than what it searches, so a");
-    System.out.println("match under one is only as repeatable as the load on the machine is, and");
-    System.out.println("playing more pairs at once than the machine has cores leaves every engine");
-    System.out.println("searching less than its move time suggests.");
+    System.out.println("A match is played under node limits, move times or a time control, and");
+    System.out.println("only one of them. A move time or a clock is what an engine spends rather");
+    System.out.println("than what it searches, so a match under one is only as repeatable as the");
+    System.out.println("load on the machine is, and playing more pairs at once than the machine");
+    System.out.println("has cores leaves every engine searching less than its time suggests.");
+    System.out.println();
+    System.out.println("Under a time control the arbiter keeps the clocks, and a side whose search");
+    System.out.println("takes longer than its clock held loses on time. The value of --timeout");
+    System.out.println("must be longer than the base time.");
     System.out.println();
     System.out.println("A pair already being played when the match stops is played to the end and");
     System.out.println("counted, so a match on several workers may hold more pairs than the same");
@@ -968,14 +1024,29 @@ public class SelfPlayMatch {
    * @param reason Why the game ended.
    * @param moves The moves the game held, including the moves of the opening.
    * @param adjudicated True if the game ended on the reported scores rather than on the board.
+   * @param lostOnTime True if the side that lost ran out of time on its clock.
    */
-  public record Result(Outcome outcome, String reason, List<String> moves, boolean adjudicated) {
+  public record Result(Outcome outcome, String reason, List<String> moves, boolean adjudicated,
+                       boolean lostOnTime) {
 
     /**
      * Constructs a result holding a copy of the moves given.
      */
     public Result {
       moves = List.copyOf(moves);
+    }
+
+    /**
+     * Constructs a result for a game that was not lost on time.
+     *
+     * @param outcome How the game ended from White's point of view.
+     * @param reason Why the game ended.
+     * @param moves The moves the game held, including the moves of the opening.
+     * @param adjudicated True if the game ended on the reported scores rather than on the board.
+     */
+    public Result(final Outcome outcome, final String reason, final List<String> moves,
+                  final boolean adjudicated) {
+      this(outcome, reason, moves, adjudicated, false);
     }
 
     /**
@@ -998,6 +1069,8 @@ public class SelfPlayMatch {
    * @param draws The games neither engine won.
    * @param played The games that reached a result.
    * @param adjudicated The games that ended on the reported scores rather than on the board.
+   * @param engineATimeLosses The games engine A lost on time.
+   * @param engineBTimeLosses The games engine B lost on time.
    * @param engineATotals What the searches of the first engine came to.
    * @param engineBTotals What the searches of the second engine came to.
    * @param gameMillis The time the games that reached a result took, in milliseconds, summed.
@@ -1006,8 +1079,9 @@ public class SelfPlayMatch {
    * @param failure What stopped the match, or null if every game reached a result.
    */
   public record Tally(int engineAWins, int engineBWins, int draws, int played, int adjudicated,
-                      SearchTotals engineATotals, SearchTotals engineBTotals, long gameMillis,
-                      MatchStatistics settlement, String failure) {
+                      int engineATimeLosses, int engineBTimeLosses, SearchTotals engineATotals,
+                      SearchTotals engineBTotals, long gameMillis, MatchStatistics settlement,
+                      String failure) {
   }
 
   /**
@@ -1018,6 +1092,8 @@ public class SelfPlayMatch {
    * @param draws The games neither engine won.
    * @param played The games that reached a result.
    * @param adjudicated The games that ended on the reported scores rather than on the board.
+   * @param engineATimeLosses The games engine A lost on time.
+   * @param engineBTimeLosses The games engine B lost on time.
    * @param engineATotals What the searches of the first engine came to.
    * @param engineBTotals What the searches of the second engine came to.
    * @param gameMillis The time the games that reached a result took, in milliseconds, summed.
@@ -1025,9 +1101,9 @@ public class SelfPlayMatch {
    * @param report The lines reporting the pair, in the order they are written out.
    */
   private record PairResult(int engineAWins, int engineBWins, int draws, int played,
-                            int adjudicated, SearchTotals engineATotals,
-                            SearchTotals engineBTotals, long gameMillis, String failure,
-                            List<String> report) {
+                            int adjudicated, int engineATimeLosses, int engineBTimeLosses,
+                            SearchTotals engineATotals, SearchTotals engineBTotals,
+                            long gameMillis, String failure, List<String> report) {
   }
 
   /**
@@ -1118,6 +1194,12 @@ public class SelfPlayMatch {
     /** The games that ended on the reported scores rather than on the board. */
     private int adjudicated;
 
+    /** The games engine A has lost on time. */
+    private int engineATimeLosses;
+
+    /** The games engine B has lost on time. */
+    private int engineBTimeLosses;
+
     /** What the searches of the first engine have come to. */
     private final SearchTotals engineATotals = new SearchTotals();
 
@@ -1141,6 +1223,8 @@ public class SelfPlayMatch {
       this.draws += result.draws();
       this.played += result.played();
       this.adjudicated += result.adjudicated();
+      this.engineATimeLosses += result.engineATimeLosses();
+      this.engineBTimeLosses += result.engineBTimeLosses();
       this.engineATotals.add(result.engineATotals());
       this.engineBTotals.add(result.engineBTotals());
       this.gameMillis += result.gameMillis();
@@ -1172,8 +1256,8 @@ public class SelfPlayMatch {
      */
     private Tally tally(final String failure) {
       return new Tally(this.engineAWins, this.engineBWins, this.draws, this.played,
-              this.adjudicated, this.engineATotals, this.engineBTotals, this.gameMillis,
-              this.settlement, failure);
+              this.adjudicated, this.engineATimeLosses, this.engineBTimeLosses,
+              this.engineATotals, this.engineBTotals, this.gameMillis, this.settlement, failure);
     }
   }
 
@@ -1438,7 +1522,8 @@ public class SelfPlayMatch {
     private static PairResult parsePair(final String line, final int pairs,
                                         final boolean[] finished) {
       final String[] fields = line.trim().split(" ");
-      if (fields.length != RESULTS_PAIR_FIELDS) {
+      if (fields.length != RESULTS_PAIR_FIELDS &&
+              fields.length != RESULTS_PAIR_FIELDS_WITHOUT_TIME_LOSSES) {
         return null;
       }
       try {
@@ -1446,9 +1531,12 @@ public class SelfPlayMatch {
         if (pair < 0 || pair >= pairs || finished[pair]) {
           return null;
         }
+        final boolean timeLossesRecorded = fields.length == RESULTS_PAIR_FIELDS;
         final PairResult result = new PairResult(Integer.parseInt(fields[2]),
                 Integer.parseInt(fields[3]), Integer.parseInt(fields[4]),
                 Integer.parseInt(fields[5]), Integer.parseInt(fields[6]),
+                timeLossesRecorded ? Integer.parseInt(fields[14]) : 0,
+                timeLossesRecorded ? Integer.parseInt(fields[15]) : 0,
                 parseTotals(fields, 8), parseTotals(fields, 11), Long.parseLong(fields[7]), null,
                 List.of());
         finished[pair] = true;
@@ -1515,10 +1603,11 @@ public class SelfPlayMatch {
     private void record(final int pair, final PairResult result) throws IOException {
       final SearchTotals a = result.engineATotals();
       final SearchTotals b = result.engineBTotals();
-      this.writer.write(String.format("%s %d %d %d %d %d %d %d %d %d %d %d %d %d",
+      this.writer.write(String.format("%s %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
               RESULTS_PAIR_WORD, pair, result.engineAWins(), result.engineBWins(), result.draws(),
               result.played(), result.adjudicated(), result.gameMillis(), a.searches,
-              a.depthSearches, a.depth, b.searches, b.depthSearches, b.depth));
+              a.depthSearches, a.depth, b.searches, b.depthSearches, b.depth,
+              result.engineATimeLosses(), result.engineBTimeLosses()));
       this.writer.newLine();
       this.writer.flush();
     }
@@ -1561,11 +1650,14 @@ public class SelfPlayMatch {
      */
     private static String fingerprint(final Settings settings) {
       final MatchStatistics.SequentialTest test = settings.sequentialTest();
+      final String limits = settings.timeControl() != null ?
+              "time-control " + settings.timeControl().description() :
+              "limit-a " + settings.limitA().description() + " | " +
+                      "limit-b " + settings.limitB().description();
       return String.join(" | ",
               "engine-a " + settings.engineACommand(),
               "engine-b " + settings.engineBCommand(),
-              "limit-a " + settings.limitA().description(),
-              "limit-b " + settings.limitB().description(),
+              limits,
               "hash " + settings.tableSizeMB(),
               "book " + (settings.useBook() ? settings.bookPath() : "off"),
               "pairs " + settings.pairs(),
@@ -1609,12 +1701,75 @@ public class SelfPlayMatch {
   }
 
   /**
+   * The TimeControl record holds the game clock both engines play on: a base time each side
+   * starts with and an increment added to a side's clock after each of its moves.
+   *
+   * @param baseMillis The time each side starts the game with, in milliseconds.
+   * @param incrementMillis The time added to a side's clock after each of its moves, in
+   *                        milliseconds.
+   */
+  public record TimeControl(long baseMillis, long incrementMillis) {
+
+    /**
+     * Reads a time control written as a base time in seconds, optionally followed by a plus sign
+     * and an increment in seconds, such as 10+0.1. Times are rounded to the millisecond.
+     *
+     * @param value The time control as written on the command line.
+     * @param argument The argument the value follows, used in the fault message.
+     * @return The time control the value states.
+     * @throws IllegalArgumentException If the value is not written that way, the base time is not
+     *                                  at least one millisecond, or the increment is negative.
+     */
+    private static TimeControl parse(final String value, final String argument) {
+      final int plus = value.indexOf('+');
+      final String base = plus < 0 ? value : value.substring(0, plus);
+      final String increment = plus < 0 ? "0" : value.substring(plus + 1);
+      final long baseMillis;
+      final long incrementMillis;
+      try {
+        baseMillis = Math.round(Double.parseDouble(base) * 1000);
+        incrementMillis = Math.round(Double.parseDouble(increment) * 1000);
+      } catch (final NumberFormatException exception) {
+        throw new IllegalArgumentException("The value of " + argument + " is not a time " +
+                "control such as 10+0.1: " + value);
+      }
+      if (baseMillis < 1 || incrementMillis < 0) {
+        throw new IllegalArgumentException("The value of " + argument + " must hold a base " +
+                "time of at least one millisecond and an increment that is not negative: " +
+                value);
+      }
+      return new TimeControl(baseMillis, incrementMillis);
+    }
+
+    /**
+     * Describes this time control as it is reported to a reader, in seconds.
+     *
+     * @return The base time and the increment, joined by a plus sign and followed by s.
+     */
+    public String description() {
+      return seconds(this.baseMillis) + "+" + seconds(this.incrementMillis) + " s";
+    }
+
+    /**
+     * Writes a number of milliseconds as seconds with no trailing zeros.
+     *
+     * @param millis The time in milliseconds.
+     * @return The time in seconds.
+     */
+    private static String seconds(final long millis) {
+      return BigDecimal.valueOf(millis, 3).stripTrailingZeros().toPlainString();
+    }
+  }
+
+  /**
    * The Settings record holds what a match is played under.
    *
    * @param engineACommand The command line starting the first engine.
    * @param engineBCommand The command line starting the second engine.
-   * @param limitA What stops a search by the first engine.
-   * @param limitB What stops a search by the second engine.
+   * @param limitA What stops a search by the first engine, or null under a time control.
+   * @param limitB What stops a search by the second engine, or null under a time control.
+   * @param timeControl The game clock both engines play on, or null if each search is held to a
+   *                    limit instead.
    * @param tableSizeMB The transposition table size in megabytes given to each engine.
    * @param bookPath The path of the opening book.
    * @param pairs The number of openings played, each of them played twice.
@@ -1638,7 +1793,8 @@ public class SelfPlayMatch {
    * @param verbose True to report every move and the moves of every game.
    */
   public record Settings(String engineACommand, String engineBCommand, EngineProcess.Limit limitA,
-                         EngineProcess.Limit limitB, int tableSizeMB, String bookPath, int pairs,
+                         EngineProcess.Limit limitB, TimeControl timeControl, int tableSizeMB,
+                         String bookPath, int pairs,
                          long seed, int openingIndex, boolean useBook, int plyCap,
                          boolean adjudicate, int resignScore, int resignPlies, int drawScore,
                          int drawPlies, int drawAfter,
@@ -1650,9 +1806,9 @@ public class SelfPlayMatch {
      * Reads settings from command line arguments. The argument --nodes sets the node limit of both
      * engines, and --nodes-a and --nodes-b each set the limit of one engine and override --nodes
      * whatever order they are given in. The argument --movetime and its two counterparts state a
-     * move time the same way, in place of a node limit rather than alongside one. Adjudication is
-     * on unless --no-adjudication is given, and the sequential test is off unless --sprt is
-     * given.
+     * move time the same way, in place of a node limit rather than alongside one, and --tc states
+     * a time control for both engines in place of either. Adjudication is on unless
+     * --no-adjudication is given, and the sequential test is off unless --sprt is given.
      *
      * @param args The command line arguments, as described by the usage text.
      * @return The settings the arguments describe, or null if they asked for the usage text.
@@ -1664,10 +1820,11 @@ public class SelfPlayMatch {
      *                                  value is given with --no-adjudication, if fewer than one
      *                                  pair is played at once, if a sequential
      *                                  test value is given without --sprt, if the sequential
-     *                                  test values do not state a test, if node limits and move
-     *                                  times are given together, if a move time is given for one
-     *                                  engine alone, or if a move time is not shorter than the
-     *                                  timeout.
+     *                                  test values do not state a test, if more than one of node
+     *                                  limits, move times and a time control are given, if a move
+     *                                  time is given for one engine alone, if a time control is
+     *                                  not written as one, or if a move time or the base time of
+     *                                  a time control is not shorter than the timeout.
      */
     public static Settings read(final String[] args) {
       String engineACommand = null;
@@ -1680,6 +1837,7 @@ public class SelfPlayMatch {
       Long moveTimeA = null;
       Long moveTimeB = null;
       String moveTimeArgument = null;
+      TimeControl timeControl = null;
       int tableSizeMB = DEFAULT_TABLE_SIZE_MB;
       String bookPath = OpeningBook.DEFAULT_BOOK_PATH;
       int pairs = DEFAULT_PAIRS;
@@ -1761,6 +1919,7 @@ public class SelfPlayMatch {
             moveTimeB = number(value, argument);
             moveTimeArgument = argument;
           }
+          case "--tc" -> timeControl = TimeControl.parse(value, argument);
           case "--hash" -> tableSizeMB = (int) number(value, argument);
           case "--book" -> bookPath = value;
           case "--pairs" -> {
@@ -1857,6 +2016,11 @@ public class SelfPlayMatch {
                 moveTimeArgument + " measure effort differently, so they cannot be given " +
                 "together");
       }
+      if (timeControl != null && (nodeArgument != null || moveTimeArgument != null)) {
+        throw new IllegalArgumentException("The arguments --tc and " +
+                (nodeArgument != null ? nodeArgument : moveTimeArgument) + " measure effort " +
+                "differently, so they cannot be given together");
+      }
       if (moveTimeArgument != null && moveTimeBoth == null &&
               (moveTimeA == null || moveTimeB == null)) {
         throw new IllegalArgumentException("The arguments --movetime-a and --movetime-b each set " +
@@ -1867,7 +2031,14 @@ public class SelfPlayMatch {
                       falseNegativeRate) : null;
       final EngineProcess.Limit limitA;
       final EngineProcess.Limit limitB;
-      if (moveTimeArgument == null) {
+      if (timeControl != null) {
+        limitA = null;
+        limitB = null;
+        if (timeControl.baseMillis() >= timeoutSeconds * 1000) {
+          throw new IllegalArgumentException("The base time of --tc must be shorter than the " +
+                  "value of --timeout, which is " + timeoutSeconds + " seconds");
+        }
+      } else if (moveTimeArgument == null) {
         final long shared = nodeLimitBoth == null ? DEFAULT_NODE_LIMIT : nodeLimitBoth;
         limitA = EngineProcess.Limit.ofNodes(nodeLimitA == null ? shared : nodeLimitA);
         limitB = EngineProcess.Limit.ofNodes(nodeLimitB == null ? shared : nodeLimitB);
@@ -1885,8 +2056,8 @@ public class SelfPlayMatch {
       if (resultsPath == null) {
         resultsPath = Path.of(logDirectory, DEFAULT_RESULTS_FILE_NAME).toString();
       }
-      return new Settings(engineACommand, engineBCommand, limitA, limitB, tableSizeMB, bookPath,
-              pairs, seed, openingIndex, useBook, plyCap, adjudicate, resignScore, resignPlies,
+      return new Settings(engineACommand, engineBCommand, limitA, limitB, timeControl,
+              tableSizeMB, bookPath, pairs, seed, openingIndex, useBook, plyCap, adjudicate, resignScore, resignPlies,
               drawScore, drawPlies, drawAfter, sequentialTest, concurrency, timeoutSeconds,
               logDirectory, resultsPath, resume, verbose);
     }
