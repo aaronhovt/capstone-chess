@@ -187,6 +187,13 @@ public class AlphaBeta implements MoveStrategy {
   /** The mask a node count is tested against to decide whether the clock is read. */
   private static final long TIME_CHECK_MASK = 1023;
 
+  /**
+   * The factors a soft time limit is multiplied by, indexed by the number of finished iterations
+   * in a row that returned the same best move as the iteration before them. The last factor holds
+   * for any longer run.
+   */
+  private static final double[] SOFT_TIME_SCALES = {1.5, 1.2, 1.0, 0.85, 0.75};
+
   /** Maximum search depth supported by data structures. */
   private static final int MAX_SEARCH_DEPTH = 100;
 
@@ -690,8 +697,11 @@ public class AlphaBeta implements MoveStrategy {
    * iteration it was in the middle of finished searching a root move whose score landed inside
    * that iteration's window, the move and score returned are that iteration's best so far;
    * otherwise they are those of the deepest iteration that finished. The first iteration is held
-   * to neither limit, so a finished iteration always exists. Once a soft time limit shorter than
-   * the time limit has passed, no further iteration is started.
+   * to neither limit, so a finished iteration always exists. When the soft time limit is shorter
+   * than the time limit, no further iteration is started once the soft time limit, multiplied by a
+   * factor from {@link #SOFT_TIME_SCALES}, has passed. The factor shrinks as more finished
+   * iterations in a row return the same best move, so the search starts fewer iterations when the
+   * move is settled and more when it has just changed.
    * <p>
    * The clock is not read at every node, so a search under a time limit runs somewhat past its
    * deadline rather than stopping on it.
@@ -700,7 +710,8 @@ public class AlphaBeta implements MoveStrategy {
    * @param searchDepth The maximum depth for iterative deepening on this search.
    * @param nodeLimit The number of positions to evaluate before the search is stopped, or
    *                  UNLIMITED_NODES to run every iteration to its end.
-   * @param softTimeLimitMillis The milliseconds after which no further iteration is started, or
+   * @param softTimeLimitMillis The milliseconds after which no further iteration is started,
+   *                            before it is scaled by the stability of the best move, or
    *                            UNLIMITED_TIME to start iterations until another limit ends the
    *                            search.
    * @param timeLimitMillis The milliseconds to search for before the search is stopped, or
@@ -710,12 +721,13 @@ public class AlphaBeta implements MoveStrategy {
   public Move execute(final Board board, final int searchDepth, final long nodeLimit,
                       final long softTimeLimitMillis, final long timeLimitMillis) {
     final long startTime = System.currentTimeMillis();
+    final long searchStart = System.nanoTime();
     final long deadline = deadlineOf(timeLimitMillis);
-    final long softDeadline = softTimeLimitMillis < timeLimitMillis ?
-            deadlineOf(softTimeLimitMillis) : NO_DEADLINE;
+    final boolean softLimited = softTimeLimitMillis < timeLimitMillis;
     int bestMove = MoveCode.NONE;
     double bestScore = 0;
     int bestDepth = 0;
+    int stableIterations = 0;
 
     this.searchStopped = false;
     this.boardsEvaluated.set(0);
@@ -753,6 +765,7 @@ public class AlphaBeta implements MoveStrategy {
           break;
         }
 
+        final boolean sameMove = result.move() == bestMove;
         bestMove = result.move();
         bestScore = result.score();
 
@@ -761,6 +774,7 @@ public class AlphaBeta implements MoveStrategy {
         }
 
         bestDepth = currentDepth;
+        stableIterations = sameMove ? stableIterations + 1 : 0;
 
         recordHistory(mainBoard, bestMove, currentDepth);
 
@@ -776,8 +790,13 @@ public class AlphaBeta implements MoveStrategy {
         System.out.println(report);
         this.reportListener.accept(report);
 
-        if (System.nanoTime() >= softDeadline) {
-          break;
+        if (softLimited) {
+          final double scale =
+                  SOFT_TIME_SCALES[Math.min(stableIterations, SOFT_TIME_SCALES.length - 1)];
+          final long softLimitNanos = (long) (softTimeLimitMillis * 1_000_000L * scale);
+          if (System.nanoTime() - searchStart >= softLimitNanos) {
+            break;
+          }
         }
       }
     } finally {

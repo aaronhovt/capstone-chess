@@ -252,8 +252,9 @@ public class UciEngine {
    * nodes bounds the positions evaluated, movetime bounds the milliseconds spent, and depth bounds
    * the iterations. The clock of the side to move, wtime or btime, gives the search two limits,
    * using that side's increment, winc or binc, and movestogo when the command names them: no
-   * iteration is started once the share {@link #clockAllocation(long, long, int)} gives has passed,
-   * and the search is stopped where it stands at {@link #clockMaximum(long, long)}. The other side's
+   * iteration is started once the share {@link #clockAllocation(long, long, int)} gives, scaled by
+   * how settled the best move is, has passed, and the search is stopped where it stands at
+   * {@link #clockMaximum(long, long)}. The other side's
    * clock is ignored. A command naming no limit searches under the default node limit. A search that
    * returns no move is reported as the null move with no depth or score, which is what a terminal
    * position produces. A score holding a checkmate is reported as a distance to mate rather than in
