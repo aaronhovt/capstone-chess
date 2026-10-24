@@ -224,6 +224,78 @@ public class Perft {
   }
 
   /**
+   * Walks the legal move tree and returns a description of the first position whose
+   * Forsyth-Edwards Notation, written by {@link FenWriter} and read back by {@link FenParser}, gives
+   * a board with a different Zobrist hash, halfmove clock or number of legal moves, or a board that
+   * {@link FenWriter} writes differently.
+   *
+   * @param board The position from which to begin the walk. Mutated during the walk and restored
+   *              before this method returns.
+   * @param depth The number of plies to walk.
+   * @return A description of the first fault found, or null if every position checks out.
+   */
+  public static String findFenDivergence(final Board board, final int depth) {
+    final String fenFault = describeFenFault(board);
+    if (fenFault != null) {
+      return fenFault + System.lineSeparator() + board;
+    }
+    if (depth <= 0) {
+      return null;
+    }
+    for (final Move move : board.currentPlayer().getLegalMoves()) {
+      board.makeMove(move);
+      try {
+        if (board.currentPlayer().getOpponent().isInCheck()) {
+          continue;
+        }
+        final String fault = findFenDivergence(board, depth - 1);
+        if (fault != null) {
+          return fault;
+        }
+      } finally {
+        board.unmakeMove();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Checks that the given board survives a round trip through {@link FenWriter} and
+   * {@link FenParser}.
+   *
+   * @param board The board to check. Mutated while its legal moves are counted and restored before
+   *              this method returns.
+   * @return A description of the first difference found, or null if the round trip is exact.
+   */
+  private static String describeFenFault(final Board board) {
+    final String fen = FenWriter.write(board);
+    final Board parsed;
+    try {
+      parsed = FenParser.parse(fen);
+    } catch (final IllegalArgumentException exception) {
+      return "The written FEN " + fen + " could not be parsed: " + exception.getMessage();
+    }
+    if (parsed.getZobristHash() != board.getZobristHash()) {
+      return "The written FEN " + fen + " parses to a board with a different Zobrist hash";
+    }
+    if (parsed.getHalfMoveClock() != board.getHalfMoveClock()) {
+      return "The written FEN " + fen + " parses to a board with halfmove clock " +
+              parsed.getHalfMoveClock() + " rather than " + board.getHalfMoveClock();
+    }
+    final int legalMoves = countLegalMoves(board);
+    final int parsedLegalMoves = countLegalMoves(parsed);
+    if (parsedLegalMoves != legalMoves) {
+      return "The written FEN " + fen + " parses to a board with " + parsedLegalMoves +
+              " legal moves rather than " + legalMoves;
+    }
+    final String rewritten = FenWriter.write(parsed);
+    if (!rewritten.equals(fen)) {
+      return "The written FEN " + fen + " parses to a board written as " + rewritten;
+    }
+    return null;
+  }
+
+  /**
    * Walks the legal move tree and returns a description of the first position at which either
    * {@link Board#copy()} or a {@link Board#makeNullMove()} and {@link Board#unmakeNullMove()}
    * round trip fails to reproduce the position it was given, or at which the board's bitboards or

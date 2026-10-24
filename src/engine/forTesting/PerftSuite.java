@@ -20,7 +20,8 @@ import java.util.Map;
  * The suite can also verify that the incrementally updated Zobrist hash carried by each board agrees
  * with a hash recalculated from scratch, since a hash that drifts corrupts transposition table
  * lookups without changing any node count. Alongside that it can verify the board copy and null move
- * round trips, which likewise change no node count and so would otherwise go unchecked by a perft.
+ * round trips, which likewise change no node count and so would otherwise go unchecked by a perft,
+ * and the round trip of every position through {@link FenWriter} and {@link FenParser}.
  * This class is designed to be run from the command line and its entry point returns a non-zero exit
  * status when any check fails.
  *
@@ -38,11 +39,17 @@ public class PerftSuite {
   /** The depth the mutation round trip walk is limited to, since it copies a board at every node. */
   private static final int MUTATION_VERIFICATION_DEPTH = 3;
 
+  /** The depth the FEN round trip walk is limited to, since it parses a board at every node. */
+  private static final int FEN_VERIFICATION_DEPTH = 3;
+
   /** The command line flag requesting a Zobrist consistency walk alongside the node counts. */
   private static final String VERIFY_HASH_FLAG = "--verify-hash";
 
   /** The command line flag requesting a copy and null move round trip walk alongside the node counts. */
   private static final String VERIFY_MUTATION_FLAG = "--verify-mutation";
+
+  /** The command line flag requesting a FEN writer and parser round trip walk alongside the node counts. */
+  private static final String VERIFY_FEN_FLAG = "--verify-fen";
 
   /** The command line flag requesting that the node counts be taken with packed int moves. */
   private static final String INT_MOVES_FLAG = "--int-moves";
@@ -93,8 +100,8 @@ public class PerftSuite {
   /**
    * Runs the suite from the command line. With no arguments every position is tested to the default
    * depth. A single numeric argument raises or lowers that depth, the verify hash flag adds a Zobrist
-   * consistency walk, the verify mutation flag adds a copy and null move round trip walk, and the
-   * divide keyword breaks a single position down by root move instead of running the suite.
+   * consistency walk, the verify mutation flag adds a copy and null move round trip walk, the verify
+   * FEN flag adds a FEN writer and parser round trip walk, and the divide keyword breaks a single position down by root move instead of running the suite.
    *
    * @param args The command line arguments, as described by the usage text.
    */
@@ -106,12 +113,15 @@ public class PerftSuite {
     int maxDepth = DEFAULT_MAX_DEPTH;
     boolean verifyHashes = false;
     boolean verifyMutation = false;
+    boolean verifyFen = false;
     boolean intMoves = false;
     for (final String argument : args) {
       if (VERIFY_HASH_FLAG.equals(argument)) {
         verifyHashes = true;
       } else if (VERIFY_MUTATION_FLAG.equals(argument)) {
         verifyMutation = true;
+      } else if (VERIFY_FEN_FLAG.equals(argument)) {
+        verifyFen = true;
       } else if (INT_MOVES_FLAG.equals(argument)) {
         intMoves = true;
       } else if (HELP_FLAG.equals(argument)) {
@@ -132,7 +142,7 @@ public class PerftSuite {
       printUsage();
       return;
     }
-    System.exit(run(maxDepth, verifyHashes, verifyMutation, intMoves) ? 0 : 1);
+    System.exit(run(maxDepth, verifyHashes, verifyMutation, verifyFen, intMoves) ? 0 : 1);
   }
 
   /**
@@ -173,6 +183,24 @@ public class PerftSuite {
    */
   public static boolean run(final int maxDepth, final boolean verifyHashes,
                             final boolean verifyMutation, final boolean intMoves) {
+    return run(maxDepth, verifyHashes, verifyMutation, false, intMoves);
+  }
+
+  /**
+   * Tests every reference position up to the requested depth, taking the node counts either with
+   * {@link engine.forBoard.Move} objects or with packed int moves, and optionally walking each
+   * position checking the FEN writer and parser round trip.
+   *
+   * @param maxDepth The deepest depth to test each position to.
+   * @param verifyHashes Whether to walk each position checking incremental hashes.
+   * @param verifyMutation Whether to walk each position checking the copy and null move round trips.
+   * @param verifyFen Whether to walk each position checking the FEN writer and parser round trip.
+   * @param intMoves Whether to count with {@link Perft#perftInt} rather than {@link Perft#perft}.
+   * @return True if every check passed, false otherwise.
+   */
+  public static boolean run(final int maxDepth, final boolean verifyHashes,
+                            final boolean verifyMutation, final boolean verifyFen,
+                            final boolean intMoves) {
     System.out.printf("Perft suite: %d positions, maximum depth %d%n%n",
             STANDARD_POSITIONS.size(), maxDepth);
     int checksRun = 0;
@@ -180,7 +208,7 @@ public class PerftSuite {
     int positionsFailed = 0;
     for (final PerftPosition position : STANDARD_POSITIONS) {
       final PositionOutcome outcome =
-              runPosition(position, maxDepth, verifyHashes, verifyMutation, intMoves);
+              runPosition(position, maxDepth, verifyHashes, verifyMutation, verifyFen, intMoves);
       checksRun += outcome.checksRun();
       failures += outcome.failures();
       if (outcome.failures() > 0) {
@@ -197,14 +225,15 @@ public class PerftSuite {
    * Each depth reports the expected count, the count this engine produced, the elapsed time, and
    * the resulting node rate, which doubles as a rough measure of move generation throughput.
    * <p>
-   * A failing mutation round trip is counted as a failure but does not abandon the position, since
-   * it says nothing about whether the node counts are right and both answers are worth having in
-   * one report.
+   * A failing mutation or FEN round trip is counted as a failure but does not abandon the position,
+   * since it says nothing about whether the node counts are right and both answers are worth having
+   * in one report.
    *
    * @param position The reference position to test.
    * @param maxDepth The greatest depth to test, limited by the depths with known counts.
    * @param verifyHashes Whether to walk the position checking Zobrist hash consistency.
    * @param verifyMutation Whether to walk the position checking the copy and null move round trips.
+   * @param verifyFen Whether to walk the position checking the FEN writer and parser round trip.
    * @param intMoves Whether to count with {@link Perft#perftInt} rather than {@link Perft#perft}.
    * @return The number of checks run for this position and the number of them that failed.
    */
@@ -212,6 +241,7 @@ public class PerftSuite {
                                              final int maxDepth,
                                              final boolean verifyHashes,
                                              final boolean verifyMutation,
+                                             final boolean verifyFen,
                                              final boolean intMoves) {
     System.out.println(position.name());
     System.out.println("  " + position.fen());
@@ -231,6 +261,12 @@ public class PerftSuite {
     if (verifyMutation) {
       checksRun++;
       if (!reportMutationConsistency(board)) {
+        failures++;
+      }
+    }
+    if (verifyFen) {
+      checksRun++;
+      if (!reportFenConsistency(board)) {
         failures++;
       }
     }
@@ -290,6 +326,24 @@ public class PerftSuite {
       return true;
     }
     System.out.println("  FAIL  mutation round trip diverged:");
+    System.out.println("  " + fault);
+    return false;
+  }
+
+  /**
+   * Walks the given position checking that every reachable board survives a round trip through
+   * {@link FenWriter} and {@link FenParser}, and reports the first position where it does not.
+   *
+   * @param board The position from which to begin the walk.
+   * @return True if every position checked out, false otherwise.
+   */
+  private static boolean reportFenConsistency(final Board board) {
+    final String fault = Perft.findFenDivergence(board, FEN_VERIFICATION_DEPTH);
+    if (fault == null) {
+      System.out.printf("  FEN round trips are exact to depth %d%n", FEN_VERIFICATION_DEPTH);
+      return true;
+    }
+    System.out.println("  FAIL  FEN round trip diverged:");
     System.out.println("  " + fault);
     return false;
   }
@@ -379,7 +433,7 @@ public class PerftSuite {
   private static void printUsage() {
     System.out.println("""
             Usage:
-              PerftSuite [maxDepth] [--verify-hash] [--verify-mutation] [--int-moves]
+              PerftSuite [maxDepth] [--verify-hash] [--verify-mutation] [--verify-fen] [--int-moves]
                                                       run every reference position, default depth 4,
                                                       counting with packed int moves if asked
               PerftSuite divide <depth> <fen>         break one position down by root move
