@@ -57,6 +57,7 @@ if /i "%TARGET%"=="bench" goto :benchTarget
 if /i "%TARGET%"=="book" goto :bookTarget
 if /i "%TARGET%"=="match" goto :matchTarget
 if /i "%TARGET%"=="stats" goto :statsTarget
+if /i "%TARGET%"=="datagen" goto :datagenTarget
 if /i "%TARGET%"=="compare" goto :compareTarget
 if /i "%TARGET%"=="clean" goto :cleanTarget
 echo Unknown target: %TARGET%
@@ -72,6 +73,7 @@ call :buildSuite "bench" "engine.forTesting.EvaluationBench" "src\engine\forTest
 call :buildSuite "book" "engine.forTesting.OpeningBook" "src\engine\forTesting\OpeningBook.java" || exit /b 1
 call :buildSuite "match" "%MATCH_MAIN%" "src\engine\forTesting\SelfPlayMatch.java" || exit /b 1
 call :buildSuite "stats" "engine.forTesting.SearchStatisticsRun" "src\engine\forTesting\SearchStatisticsRun.java" || exit /b 1
+call :buildSuite "datagen" "engine.forTesting.TrainingDataRun" "src\engine\forTesting\TrainingDataRun.java" || exit /b 1
 goto :done
 
 :uciTarget
@@ -110,6 +112,10 @@ goto :done
 call :buildSuite "stats" "engine.forTesting.SearchStatisticsRun" "src\engine\forTesting\SearchStatisticsRun.java" || exit /b 1
 goto :done
 
+:datagenTarget
+call :buildSuite "datagen" "engine.forTesting.TrainingDataRun" "src\engine\forTesting\TrainingDataRun.java" || exit /b 1
+goto :done
+
 :cleanTarget
 if exist "%OUT%" rmdir /s /q "%OUT%"
 if exist "%UCI_JAR%" del /q "%UCI_JAR%"
@@ -133,6 +139,7 @@ echo   bench      compile EvaluationBench
 echo   book       compile OpeningBook
 echo   match      compile SelfPlayMatch
 echo   stats      compile SearchStatisticsRun
+echo   datagen    compile TrainingDataRun
 echo   compare    play one revision against another, see "build compare" for its arguments
 echo   all        every target above except compare, which is the default
 echo   clean      remove %OUT% and both jars, leaving %JAR_CACHE%
