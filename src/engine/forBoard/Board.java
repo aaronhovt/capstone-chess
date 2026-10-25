@@ -1,6 +1,7 @@
 package engine.forBoard;
 
 import engine.Alliance;
+import engine.forNetwork.Network;
 import engine.forPiece.*;
 import engine.forPlayer.BlackPlayer;
 import engine.forPlayer.Player;
@@ -19,6 +20,10 @@ import java.util.*;
  * through {@link #makeMove(Move)} and {@link #unmakeMove()}, their packed forms, and the null
  * move, which relocate pieces and update state in place and record what is needed to reverse the
  * change exactly.
+ * <p>
+ * The board also keeps the accumulators of the evaluation {@link Network}, one pair for each move
+ * applied and not yet unmade, updated from the pieces each move moves. A null move leaves them as
+ * they are.
  *
  * @author Aaron Ho
  * @author dareTo81
@@ -221,6 +226,28 @@ public final class Board {
   /** The number of entries of {@link #positionHistory} in use. */
   private int positionHistorySize;
 
+  /** The evaluation network whose accumulators the board keeps. */
+  private static final Network NETWORK = Network.get();
+
+  /** The size of one side's accumulator. */
+  private static final int HIDDEN = NETWORK.hidden();
+
+  /** The number of values in one accumulator pair: White's accumulator followed by Black's. */
+  private static final int ACCUMULATOR_PAIR = 2 * HIDDEN;
+
+  /** The initial number of accumulator pairs {@link #networkAccumulators} holds. */
+  private static final int NETWORK_SLOT_CAPACITY = 8;
+
+  /**
+   * The network accumulator pairs, one for the position the board was built in and one for each
+   * move applied since and not yet unmade, the pair of the current position at index
+   * {@link #networkDepth} * {@link #ACCUMULATOR_PAIR}. Grown by replacement when full.
+   */
+  private short[] networkAccumulators = new short[NETWORK_SLOT_CAPACITY * ACCUMULATOR_PAIR];
+
+  /** The number of moves applied to this board and not yet unmade, not counting null moves. */
+  private int networkDepth;
+
   /** The piece types of the back rank in the starting position, from the a-file to the h-file. */
   private static final Piece.PieceType[] BACK_RANK = {
           Piece.PieceType.ROOK, Piece.PieceType.KNIGHT, Piece.PieceType.BISHOP,
@@ -263,6 +290,7 @@ public final class Board {
     this.positionHistory = new long[POSITION_HISTORY_CAPACITY];
     this.positionHistory[0] = this.zobristHash;
     this.positionHistorySize = 1;
+    computeNetworkAccumulators(this.networkAccumulators, 0);
   }
 
   /**
@@ -313,6 +341,7 @@ public final class Board {
     this.positionHistory = source.positionHistory.clone();
     this.positionHistorySize = source.positionHistorySize;
     refreshPlayers(source.currentPlayer.getAlliance());
+    computeNetworkAccumulators(this.networkAccumulators, 0);
   }
 
   /**
@@ -744,8 +773,8 @@ public final class Board {
 
   /**
    * Applies the given packed move to this board in place: relocates the pieces and updates the
-   * bitboards, Zobrist hash, en passant pawn, halfmove clock, players, repetition history and ply
-   * count. The move is reversed by
+   * bitboards, Zobrist hash, en passant pawn, halfmove clock, players, repetition history, ply
+   * count and network accumulators. The move is reversed by
    * {@link #unmakeMove(int)}, and moves and null moves applied by any of the board's methods must
    * be reversed in the opposite order to the one they were applied in. After this move
    * {@link #getTransitionMove()} returns null and {@link #getTransitionCode()} returns the move.
@@ -777,6 +806,7 @@ public final class Board {
       this.halfMoveClock = moved.getPieceType() == Piece.PieceType.PAWN ||
               this.capturedPieces[depth] != null ? 0 : this.halfMoveClock + 1;
     }
+    updateNetworkAccumulators(move, moved, this.capturedPieces[depth]);
     movePieces(move, moved, this.capturedPieces[depth]);
 
     this.enPassantPawn = MoveCode.isPawnJump(move) ? (Pawn) this.boardConfig[destination] : null;
@@ -806,6 +836,7 @@ public final class Board {
       this.positionHistorySize--;
     }
     this.mutationDepth--;
+    this.networkDepth--;
     final int depth = this.mutationDepth;
     final Piece moved = this.priorMovedPieces[depth];
     restorePieces(move, moved, this.capturedPieces[depth], this.priorCastleRooks[depth]);
@@ -1025,6 +1056,108 @@ public final class Board {
       }
     }
     return hash;
+  }
+
+  /**
+   * Returns the evaluation network's score of the current position.
+   *
+   * @return The evaluation in centipawns from the side to move's point of view.
+   */
+  public int evaluateNetwork() {
+    final int white = this.networkDepth * ACCUMULATOR_PAIR;
+    final int black = white + HIDDEN;
+    return this.currentPlayer.getAlliance().isWhite() ?
+            NETWORK.evaluate(this.networkAccumulators, white, black) :
+            NETWORK.evaluate(this.networkAccumulators, black, white);
+  }
+
+  /**
+   * Returns a copy of the network accumulators of the current position as the board keeps them,
+   * White's accumulator followed by Black's.
+   *
+   * @return The accumulator pair.
+   */
+  public short[] getNetworkAccumulators() {
+    final int start = this.networkDepth * ACCUMULATOR_PAIR;
+    return Arrays.copyOfRange(this.networkAccumulators, start, start + ACCUMULATOR_PAIR);
+  }
+
+  /**
+   * Returns the network accumulators of the current position computed from its pieces, White's
+   * accumulator followed by Black's, which {@link #getNetworkAccumulators()} must equal.
+   *
+   * @return The accumulator pair.
+   */
+  public short[] computeNetworkAccumulators() {
+    final short[] accumulators = new short[ACCUMULATOR_PAIR];
+    computeNetworkAccumulators(accumulators, 0);
+    return accumulators;
+  }
+
+  /**
+   * Writes the network accumulators of the current position, computed from its pieces, into the
+   * given array.
+   *
+   * @param accumulators The array to write into.
+   * @param offset The index of White's first value; Black's accumulator follows it.
+   */
+  private void computeNetworkAccumulators(final short[] accumulators, final int offset) {
+    NETWORK.reset(accumulators, offset);
+    NETWORK.reset(accumulators, offset + HIDDEN);
+    for (final Piece piece : this.boardConfig) {
+      if (piece != null) {
+        final boolean white = piece.getPieceAllegiance().isWhite();
+        final int type = piece.getPieceType().ordinal();
+        final int square = piece.getPiecePosition();
+        NETWORK.add(accumulators, offset, Network.featureIndex(true, white, type, square));
+        NETWORK.add(accumulators, offset + HIDDEN, Network.featureIndex(false, white, type, square));
+      }
+    }
+  }
+
+  /**
+   * Writes the network accumulators of the position the given move leads to into the next slot,
+   * from those of the current position and the pieces the move moves, and advances
+   * {@link #networkDepth} to it. Called before the move's pieces are moved.
+   *
+   * @param move The move being applied.
+   * @param moved The piece on the move's origin square.
+   * @param captured The piece the move captures, or null.
+   */
+  private void updateNetworkAccumulators(final int move, final Piece moved, final Piece captured) {
+    final int from = this.networkDepth * ACCUMULATOR_PAIR;
+    final int to = from + ACCUMULATOR_PAIR;
+    if (to + ACCUMULATOR_PAIR > this.networkAccumulators.length) {
+      this.networkAccumulators = Arrays.copyOf(this.networkAccumulators,
+              this.networkAccumulators.length * 2);
+    }
+    final int origin = MoveCode.origin(move);
+    final int destination = MoveCode.destination(move);
+    final boolean white = moved.getPieceAllegiance().isWhite();
+    final int movedType = moved.getPieceType().ordinal();
+    final Piece.PieceType promotionType = MoveCode.promotionType(move);
+    final int placedType = promotionType != null ? promotionType.ordinal() : movedType;
+    for (int side = 0; side < 2; side++) {
+      final boolean perspectiveWhite = side == 0;
+      final int offset = side * HIDDEN;
+      final int removed = Network.featureIndex(perspectiveWhite, white, movedType, origin);
+      final int added = Network.featureIndex(perspectiveWhite, white, placedType, destination);
+      if (MoveCode.isCastle(move)) {
+        final int rookType = Piece.PieceType.ROOK.ordinal();
+        NETWORK.castle(this.networkAccumulators, from + offset, to + offset, removed,
+                Network.featureIndex(perspectiveWhite, white, rookType,
+                        castleRookOrigin(origin, destination)), added,
+                Network.featureIndex(perspectiveWhite, white, rookType,
+                        castleRookDestination(origin, destination)));
+      } else if (captured != null) {
+        NETWORK.capture(this.networkAccumulators, from + offset, to + offset, removed,
+                Network.featureIndex(perspectiveWhite, !white, captured.getPieceType().ordinal(),
+                        captured.getPiecePosition()), added);
+      } else {
+        NETWORK.move(this.networkAccumulators, from + offset, to + offset, removed, added);
+      }
+    }
+    this.networkDepth++;
   }
 
   /**

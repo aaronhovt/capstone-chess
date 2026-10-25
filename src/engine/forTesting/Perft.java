@@ -14,6 +14,7 @@ import engine.forPiece.Piece;
 import engine.forPlayer.Player;
 import engine.forPlayer.forAI.StaticExchangeEvaluator;
 
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.TreeMap;
@@ -255,6 +256,56 @@ public class Perft {
       } finally {
         board.unmakeMove();
       }
+    }
+    return null;
+  }
+
+  /**
+   * Walks the legal move tree and returns a description of the first position whose network
+   * accumulators, as the board keeps them from move to move, differ from those computed from its
+   * pieces. Each position is checked on arriving at it, after a null move from it when the side to
+   * move is not in check, and again after its moves have been unmade.
+   *
+   * @param board The position from which to begin the walk. Mutated during the walk and restored
+   *              before this method returns.
+   * @param depth The number of plies to walk.
+   * @return A description of the first fault found, or null if every position checks out.
+   */
+  public static String findNetworkDivergence(final Board board, final int depth) {
+    if (!Arrays.equals(board.getNetworkAccumulators(), board.computeNetworkAccumulators())) {
+      return "The kept network accumulators differ from those computed from the pieces" +
+              System.lineSeparator() + board;
+    }
+    if (!board.currentPlayer().isInCheck()) {
+      board.makeNullMove();
+      final boolean equal =
+              Arrays.equals(board.getNetworkAccumulators(), board.computeNetworkAccumulators());
+      board.unmakeNullMove();
+      if (!equal) {
+        return "After a null move, the kept network accumulators differ from those computed " +
+                "from the pieces" + System.lineSeparator() + board;
+      }
+    }
+    if (depth <= 0) {
+      return null;
+    }
+    for (final Move move : board.currentPlayer().getLegalMoves()) {
+      board.makeMove(move);
+      try {
+        if (board.currentPlayer().getOpponent().isInCheck()) {
+          continue;
+        }
+        final String fault = findNetworkDivergence(board, depth - 1);
+        if (fault != null) {
+          return fault;
+        }
+      } finally {
+        board.unmakeMove();
+      }
+    }
+    if (!Arrays.equals(board.getNetworkAccumulators(), board.computeNetworkAccumulators())) {
+      return "After unmaking every move, the kept network accumulators differ from those " +
+              "computed from the pieces" + System.lineSeparator() + board;
     }
     return null;
   }

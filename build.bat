@@ -295,6 +295,13 @@ if errorlevel 1 (
 )
 exit /b 0
 
+:copyNetwork
+rem %1 is the output subdirectory. Copies the evaluation network into it, where the engine reads
+rem it as the classpath resource nets/default.nnue.
+if not exist "%OUT%\%~1\nets" mkdir "%OUT%\%~1\nets"
+copy /y nets\default.nnue "%OUT%\%~1\nets\default.nnue" >nul || exit /b 1
+exit /b 0
+
 :copyLegalNotices
 rem %1 is the output subdirectory. Copies LICENSE and NOTICE into its META-INF, so the jar packaged
 rem from it carries them.
@@ -307,6 +314,7 @@ exit /b 0
 echo [uci] compiling
 call :compile "uci" "src\engine\forUCI\UciEngine.java" || exit /b 1
 call :copyLegalNotices "uci" || exit /b 1
+call :copyNetwork "uci" || exit /b 1
 echo [uci] packaging %UCI_JAR%
 "%JDK_BIN%jar" cfe "%UCI_JAR%" %UCI_MAIN% -C "%OUT%\uci" .
 if errorlevel 1 exit /b 1
@@ -316,6 +324,7 @@ exit /b 0
 echo [gui] compiling
 call :compile "gui" "src\engine\engineDriver.java" || exit /b 1
 call :copyLegalNotices "gui" || exit /b 1
+call :copyNetwork "gui" || exit /b 1
 echo [gui] writing the manifest
 set "MANIFEST=%OUT%\manifest-gui.txt"
 > "%MANIFEST%" echo Main-Class: %GUI_MAIN%
@@ -343,5 +352,6 @@ exit /b 0
 rem %1 is the output subdirectory, %2 is the main class, %3 is the entry point source file.
 echo [%~1] compiling
 call :compile "%~1" "%~3" || exit /b 1
+call :copyNetwork "%~1" || exit /b 1
 echo [%~1] run from this directory with: java -cp "%OUT%\%~1" %~2
 exit /b 0
