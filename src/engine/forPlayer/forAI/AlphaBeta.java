@@ -35,8 +35,11 @@ import java.util.function.Consumer;
  */
 public class AlphaBeta implements MoveStrategy {
 
-  /** The evaluator used to assess board positions. */
-  private final BoardEvaluator evaluator = TaperedEvaluator.get();
+  /**
+   * The squares of one colour, a8 among them, as one bit per tile. Two bishops stand on squares of
+   * the same colour when both or neither are in it.
+   */
+  private static final long A8_COLOURED_SQUARES = 0xAA55AA55AA55AA55L;
 
   /** The depth used by {@link #execute(Board)} when a caller supplies no depth of its own. */
   private final int maxDepth;
@@ -987,10 +990,12 @@ public class AlphaBeta implements MoveStrategy {
   }
 
   /**
-   * Retrieves a cached board evaluation or computes a new evaluation if not found in cache.
+   * Retrieves a cached board evaluation or computes a new evaluation if not found in cache. A
+   * position {@link #isDrawnByMaterial} is scored zero; any other is scored by the evaluation
+   * network.
    *
    * @param board The board position to evaluate.
-   * @return The evaluation score for the board position.
+   * @return The evaluation score for the board position, from White's point of view.
    */
   private double getCachedEvaluation(Board board) {
     final long zobristHash = board.getZobristHash();
@@ -999,9 +1004,47 @@ public class AlphaBeta implements MoveStrategy {
       return cachedScore;
     }
 
-    double score = this.evaluator.evaluate(board);
+    double score = 0;
+    if (!isDrawnByMaterial(board)) {
+      final int networkScore = board.evaluateNetwork();
+      score = board.currentPlayer().getAlliance().isWhite() ? networkScore : -networkScore;
+    }
     this.evaluationCache.store(zobristHash, score);
     return score;
+  }
+
+  /**
+   * Returns whether neither side has the material to win: no pawns, rooks or queens remain, and
+   * either at most one minor piece is left, each side has one bishop and the two stand on squares
+   * of the same colour, or the only minor pieces are two knights of one side.
+   *
+   * @param board The board position to judge.
+   * @return True if the position is scored as a draw on material.
+   */
+  private static boolean isDrawnByMaterial(final Board board) {
+    if ((board.getPieces(Alliance.WHITE, Piece.PieceType.PAWN)
+            | board.getPieces(Alliance.BLACK, Piece.PieceType.PAWN)
+            | board.getPieces(Alliance.WHITE, Piece.PieceType.ROOK)
+            | board.getPieces(Alliance.BLACK, Piece.PieceType.ROOK)
+            | board.getPieces(Alliance.WHITE, Piece.PieceType.QUEEN)
+            | board.getPieces(Alliance.BLACK, Piece.PieceType.QUEEN)) != 0L) {
+      return false;
+    }
+    final long whiteKnights = board.getPieces(Alliance.WHITE, Piece.PieceType.KNIGHT);
+    final long blackKnights = board.getPieces(Alliance.BLACK, Piece.PieceType.KNIGHT);
+    final long whiteBishops = board.getPieces(Alliance.WHITE, Piece.PieceType.BISHOP);
+    final long blackBishops = board.getPieces(Alliance.BLACK, Piece.PieceType.BISHOP);
+    final int knights = Long.bitCount(whiteKnights) + Long.bitCount(blackKnights);
+    final int bishops = Long.bitCount(whiteBishops) + Long.bitCount(blackBishops);
+    if (knights + bishops <= 1) {
+      return true;
+    }
+    if (knights == 0 && Long.bitCount(whiteBishops) == 1 && Long.bitCount(blackBishops) == 1) {
+      return ((whiteBishops & A8_COLOURED_SQUARES) == 0L) ==
+              ((blackBishops & A8_COLOURED_SQUARES) == 0L);
+    }
+    return bishops == 0 && knights == 2 &&
+            (Long.bitCount(whiteKnights) == 2 || Long.bitCount(blackKnights) == 2);
   }
 
   /**
