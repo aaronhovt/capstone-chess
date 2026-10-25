@@ -5,3 +5,4 @@ jars/
 CapstoneChess.jar
 capstone-chess-uci.jar
 data/
+__pycache__/

@@ -1,0 +1,6 @@
+# Install into the repo-root virtual environment:
+#   python -m venv .venv
+#   .venv\Scripts\python -m pip install -r trainer\requirements.txt --index-url https://download.pytorch.org/whl/cu130 --extra-index-url https://pypi.org/simple
+# The CUDA index must carry the pinned torch version, or pip falls back to the CPU build from PyPI.
+torch==2.14.1+cu130
+numpy==2.5.4
