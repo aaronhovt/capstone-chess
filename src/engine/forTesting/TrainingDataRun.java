@@ -33,7 +33,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * that game. A game whose first search scores either side further ahead than
  * {@link #OPENING_SCORE_LIMIT} is discarded, as is one the random moves end. Games end on
  * checkmate, stalemate, insufficient material, the fifty move rule, threefold repetition, the ply
- * cap, or adjudication on score with a match's default thresholds.
+ * cap, or adjudication on score. A game is adjudicated as won once the given number of consecutive
+ * plies have scored one side ahead by at least the resign score, by default a match's thresholds,
+ * and as drawn with a match's draw thresholds.
  * <p>
  * A searched position is written unless the side to move is in check, the move chosen is a
  * capture or a promotion, or the score is a mate score. Each position is one line,
@@ -45,7 +47,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * while games are played. Progress is reported to standard error.
  * <p>
  * Usage: {@code TrainingDataRun [--games n] [--workers n] [--nodes n] [--seed n]
- * [--random-plies n] [--book path] [--hash megabytes] [--out path]}
+ * [--random-plies n] [--resign-score centipawns] [--resign-plies n] [--book path]
+ * [--hash megabytes] [--out path]}
  */
 public final class TrainingDataRun {
 
@@ -80,11 +83,14 @@ public final class TrainingDataRun {
   /** The largest number of plies a game may reach. */
   private static final int PLY_CAP = 300;
 
-  /** The score in centipawns a side must be ahead by for a ply to count towards a win. */
-  private static final int RESIGN_SCORE = 800;
+  /**
+   * The score in centipawns a side must be ahead by for a ply to count towards a win when none is
+   * given.
+   */
+  private static final int DEFAULT_RESIGN_SCORE = 800;
 
-  /** The number of consecutive plies at the resign score that end a game as a win. */
-  private static final int RESIGN_PLIES = 8;
+  /** The number of consecutive plies at the resign score that end a game as a win when none is given. */
+  private static final int DEFAULT_RESIGN_PLIES = 8;
 
   /** The score in centipawns a position must be within for a ply to count towards a draw. */
   private static final int DRAW_SCORE = 10;
@@ -120,6 +126,8 @@ public final class TrainingDataRun {
     long nodes = DEFAULT_NODES;
     long seed = DEFAULT_SEED;
     int randomPlies = DEFAULT_RANDOM_PLIES;
+    int resignScore = DEFAULT_RESIGN_SCORE;
+    int resignPlies = DEFAULT_RESIGN_PLIES;
     int tableSizeMB = DEFAULT_TABLE_SIZE_MB;
     Path book = Path.of(OpeningBook.DEFAULT_BOOK_PATH);
     Path out = Path.of(DEFAULT_OUT);
@@ -134,6 +142,8 @@ public final class TrainingDataRun {
         case "--nodes" -> nodes = Long.parseLong(value);
         case "--seed" -> seed = Long.parseLong(value);
         case "--random-plies" -> randomPlies = Integer.parseInt(value);
+        case "--resign-score" -> resignScore = Integer.parseInt(value);
+        case "--resign-plies" -> resignPlies = Integer.parseInt(value);
         case "--hash" -> tableSizeMB = Integer.parseInt(value);
         case "--book" -> book = Path.of(value);
         case "--out" -> out = Path.of(value);
@@ -148,8 +158,9 @@ public final class TrainingDataRun {
     }
 
     System.err.printf("Training data: %d games from %s (seed %d), %d random plies, %d nodes per " +
-                    "move, %d MB hash, %d games at once, appending to %s%n", games,
-            book.getFileName(), seed, randomPlies, nodes, tableSizeMB, workers, out);
+                    "move, resign at %d for %d plies, %d MB hash, %d games at once, appending to %s%n",
+            games, book.getFileName(), seed, randomPlies, nodes, resignScore, resignPlies,
+            tableSizeMB, workers, out);
 
     final PrintStream console = System.out;
     System.setOut(new PrintStream(OutputStream.nullOutputStream()));
@@ -161,6 +172,8 @@ public final class TrainingDataRun {
     final long nodeLimit = nodes;
     final long runSeed = seed;
     final int randomMoves = randomPlies;
+    final int resignAt = resignScore;
+    final int resignAfter = resignPlies;
     final int tableSize = tableSizeMB;
     final long start = System.currentTimeMillis();
     final ExecutorService pool = Executors.newFixedThreadPool(workers);
@@ -171,7 +184,8 @@ public final class TrainingDataRun {
         final OpeningBook.Opening opening = openings.get(game % openings.size());
         final Random random = new Random(runSeed + game * GAME_SEED_STRIDE);
         results.add(pool.submit(() -> {
-          final List<String> lines = playGame(opening, random, randomMoves, nodeLimit, tableSize);
+          final List<String> lines = playGame(opening, random, randomMoves, nodeLimit, resignAt,
+                  resignAfter, tableSize);
           if (lines == null) {
             discarded.incrementAndGet();
           } else {
@@ -210,11 +224,16 @@ public final class TrainingDataRun {
    * @param random The generator the random moves after the opening are drawn from.
    * @param randomPlies The number of random moves played after the opening.
    * @param nodeLimit The node limit of each search.
+   * @param resignScore The score in centipawns a side must be ahead by for a ply to count
+   *                    towards a win.
+   * @param resignPlies The number of consecutive plies at the resign score that end the game as a
+   *                    win.
    * @param tableSizeMB The transposition table size of each engine in megabytes.
    * @return The lines of the game's recorded positions, or null if the game was discarded.
    */
   private static List<String> playGame(final OpeningBook.Opening opening, final Random random,
                                        final int randomPlies, final long nodeLimit,
+                                       final int resignScore, final int resignPlies,
                                        final int tableSizeMB) {
     final Board board = OpeningBook.play(opening);
     int plies = opening.moves().size();
@@ -236,7 +255,7 @@ public final class TrainingDataRun {
     final List<Integer> scores = new ArrayList<>();
     final AlphaBeta white = new AlphaBeta(LIMIT_DEPTH, tableSizeMB, 1);
     final AlphaBeta black = new AlphaBeta(LIMIT_DEPTH, tableSizeMB, 1);
-    final Adjudicator adjudicator = new Adjudicator(true, RESIGN_SCORE, RESIGN_PLIES, DRAW_SCORE,
+    final Adjudicator adjudicator = new Adjudicator(true, resignScore, resignPlies, DRAW_SCORE,
             DRAW_PLIES, DRAW_AFTER);
     String result;
     try {
@@ -333,7 +352,8 @@ public final class TrainingDataRun {
   private static void usage(final String problem) {
     System.err.println(problem);
     System.err.println("Usage: TrainingDataRun [--games n] [--workers n] [--nodes n] [--seed n] " +
-            "[--random-plies n] [--book path] [--hash megabytes] [--out path]");
+            "[--random-plies n] [--resign-score centipawns] [--resign-plies n] [--book path] " +
+            "[--hash megabytes] [--out path]");
     System.exit(1);
   }
 }
