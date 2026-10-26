@@ -66,13 +66,13 @@ public final class Network {
   private final int hidden;
 
   /** The feature weights, {@link #INPUTS} rows of {@link #hidden} values, row = feature index. */
-  private final short[] featureWeights;
+  private final int[] featureWeights;
 
   /** The feature biases, {@link #hidden} values. */
-  private final short[] featureBias;
+  private final int[] featureBias;
 
   /** The output weights, the side to move's {@link #hidden} values followed by the other side's. */
-  private final short[] outputWeights;
+  private final int[] outputWeights;
 
   /** The output bias, in units of QA * QB. */
   private final int outputBias;
@@ -104,16 +104,25 @@ public final class Network {
       throw new IllegalArgumentException("A network of hidden size " + this.hidden + " is " +
               expected + " bytes, found " + data.length + ".");
     }
-    this.featureWeights = new short[INPUTS * this.hidden];
-    buffer.asShortBuffer().get(this.featureWeights);
-    buffer.position(buffer.position() + 2 * this.featureWeights.length);
-    this.featureBias = new short[this.hidden];
-    buffer.asShortBuffer().get(this.featureBias);
-    buffer.position(buffer.position() + 2 * this.hidden);
-    this.outputWeights = new short[2 * this.hidden];
-    buffer.asShortBuffer().get(this.outputWeights);
-    buffer.position(buffer.position() + 4 * this.hidden);
+    this.featureWeights = readShorts(buffer, INPUTS * this.hidden);
+    this.featureBias = readShorts(buffer, this.hidden);
+    this.outputWeights = readShorts(buffer, 2 * this.hidden);
     this.outputBias = buffer.getInt();
+  }
+
+  /**
+   * Reads the next values of a buffer as 16-bit integers, advancing its position past them.
+   *
+   * @param buffer The buffer to read, in little-endian order.
+   * @param count The number of values to read.
+   * @return The values, widened to ints.
+   */
+  private static int[] readShorts(final ByteBuffer buffer, final int count) {
+    final int[] values = new int[count];
+    for (int i = 0; i < count; i++) {
+      values[i] = buffer.getShort();
+    }
+    return values;
   }
 
   /**
@@ -186,7 +195,7 @@ public final class Network {
    * @param accumulators The array holding the accumulator.
    * @param offset The index of the accumulator's first value.
    */
-  public void reset(final short[] accumulators, final int offset) {
+  public void reset(final int[] accumulators, final int offset) {
     System.arraycopy(this.featureBias, 0, accumulators, offset, this.hidden);
   }
 
@@ -197,7 +206,7 @@ public final class Network {
    * @param offset The index of the accumulator's first value.
    * @param feature The feature index.
    */
-  public void add(final short[] accumulators, final int offset, final int feature) {
+  public void add(final int[] accumulators, final int offset, final int feature) {
     final int row = feature * this.hidden;
     for (int i = 0; i < this.hidden; i++) {
       accumulators[offset + i] += this.featureWeights[row + i];
@@ -213,13 +222,13 @@ public final class Network {
    * @param removed The feature index removed.
    * @param added The feature index added.
    */
-  public void move(final short[] accumulators, final int from, final int to, final int removed,
+  public void move(final int[] accumulators, final int from, final int to, final int removed,
                    final int added) {
     final int removedRow = removed * this.hidden;
     final int addedRow = added * this.hidden;
     for (int i = 0; i < this.hidden; i++) {
-      accumulators[to + i] = (short) (accumulators[from + i] - this.featureWeights[removedRow + i]
-              + this.featureWeights[addedRow + i]);
+      accumulators[to + i] = accumulators[from + i] - this.featureWeights[removedRow + i]
+              + this.featureWeights[addedRow + i];
     }
   }
 
@@ -233,14 +242,14 @@ public final class Network {
    * @param alsoRemoved The second feature index removed.
    * @param added The feature index added.
    */
-  public void capture(final short[] accumulators, final int from, final int to, final int removed,
+  public void capture(final int[] accumulators, final int from, final int to, final int removed,
                       final int alsoRemoved, final int added) {
     final int removedRow = removed * this.hidden;
     final int alsoRemovedRow = alsoRemoved * this.hidden;
     final int addedRow = added * this.hidden;
     for (int i = 0; i < this.hidden; i++) {
-      accumulators[to + i] = (short) (accumulators[from + i] - this.featureWeights[removedRow + i]
-              - this.featureWeights[alsoRemovedRow + i] + this.featureWeights[addedRow + i]);
+      accumulators[to + i] = accumulators[from + i] - this.featureWeights[removedRow + i]
+              - this.featureWeights[alsoRemovedRow + i] + this.featureWeights[addedRow + i];
     }
   }
 
@@ -255,16 +264,16 @@ public final class Network {
    * @param added The first feature index added.
    * @param alsoAdded The second feature index added.
    */
-  public void castle(final short[] accumulators, final int from, final int to, final int removed,
+  public void castle(final int[] accumulators, final int from, final int to, final int removed,
                      final int alsoRemoved, final int added, final int alsoAdded) {
     final int removedRow = removed * this.hidden;
     final int alsoRemovedRow = alsoRemoved * this.hidden;
     final int addedRow = added * this.hidden;
     final int alsoAddedRow = alsoAdded * this.hidden;
     for (int i = 0; i < this.hidden; i++) {
-      accumulators[to + i] = (short) (accumulators[from + i] - this.featureWeights[removedRow + i]
+      accumulators[to + i] = accumulators[from + i] - this.featureWeights[removedRow + i]
               - this.featureWeights[alsoRemovedRow + i] + this.featureWeights[addedRow + i]
-              + this.featureWeights[alsoAddedRow + i]);
+              + this.featureWeights[alsoAddedRow + i];
     }
   }
 
@@ -276,14 +285,14 @@ public final class Network {
    * @param other The index of the first value of the other side's accumulator.
    * @return The evaluation in centipawns from the side to move's point of view.
    */
-  public int evaluate(final short[] accumulators, final int mover, final int other) {
+  public int evaluate(final int[] accumulators, final int mover, final int other) {
     long sum = 0;
     for (int i = 0; i < this.hidden; i++) {
-      final int value = Math.clamp(accumulators[mover + i], 0, QA);
+      final int value = Math.min(Math.max(accumulators[mover + i], 0), QA);
       sum += value * value * this.outputWeights[i];
     }
     for (int i = 0; i < this.hidden; i++) {
-      final int value = Math.clamp(accumulators[other + i], 0, QA);
+      final int value = Math.min(Math.max(accumulators[other + i], 0), QA);
       sum += value * value * this.outputWeights[this.hidden + i];
     }
     return (int) ((sum / QA + this.outputBias) * SCALE / ((long) QA * QB));

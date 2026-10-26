@@ -243,7 +243,7 @@ public final class Board {
    * move applied since and not yet unmade, the pair of the current position at index
    * {@link #networkDepth} * {@link #ACCUMULATOR_PAIR}. Grown by replacement when full.
    */
-  private short[] networkAccumulators = new short[NETWORK_SLOT_CAPACITY * ACCUMULATOR_PAIR];
+  private int[] networkAccumulators = new int[NETWORK_SLOT_CAPACITY * ACCUMULATOR_PAIR];
 
   /** The number of moves applied to this board and not yet unmade, not counting null moves. */
   private int networkDepth;
@@ -1077,7 +1077,7 @@ public final class Board {
    *
    * @return The accumulator pair.
    */
-  public short[] getNetworkAccumulators() {
+  public int[] getNetworkAccumulators() {
     final int start = this.networkDepth * ACCUMULATOR_PAIR;
     return Arrays.copyOfRange(this.networkAccumulators, start, start + ACCUMULATOR_PAIR);
   }
@@ -1088,8 +1088,8 @@ public final class Board {
    *
    * @return The accumulator pair.
    */
-  public short[] computeNetworkAccumulators() {
-    final short[] accumulators = new short[ACCUMULATOR_PAIR];
+  public int[] computeNetworkAccumulators() {
+    final int[] accumulators = new int[ACCUMULATOR_PAIR];
     computeNetworkAccumulators(accumulators, 0);
     return accumulators;
   }
@@ -1101,7 +1101,7 @@ public final class Board {
    * @param accumulators The array to write into.
    * @param offset The index of White's first value; Black's accumulator follows it.
    */
-  private void computeNetworkAccumulators(final short[] accumulators, final int offset) {
+  private void computeNetworkAccumulators(final int[] accumulators, final int offset) {
     NETWORK.reset(accumulators, offset);
     NETWORK.reset(accumulators, offset + HIDDEN);
     for (final Piece piece : this.boardConfig) {
