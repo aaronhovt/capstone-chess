@@ -9,8 +9,8 @@ out and its loss reported after every epoch.
 Training uses Adam with a learning rate that falls along a cosine from --lr to --lr * --final-lr
 over the whole run, and clips the weights to their quantised range after every step. The rate is
 computed from the step number and --epochs, so a run resumed with more epochs follows the longer
-schedule from where it stands. The data is
-kept on the GPU when it takes less than half the GPU's memory.
+schedule from where it stands. The data is kept on the GPU when it and the training index arrays
+fit in the GPU's free memory with GPU_HEADROOM to spare, and in main memory otherwise.
 
 The output directory receives log.txt (one line per epoch), checkpoint.pt (the latest epoch, from
 which --resume continues), and epoch-<n>.nnue (the quantised network, see nnue.py) every
@@ -37,6 +37,9 @@ CHECK_POSITIONS = [
     "4k3/8/8/8/8/8/8/R3K3 w - - 0 1",
 ]
 
+# GPU memory left free for the network, its optimiser and the tensors of one batch.
+GPU_HEADROOM = 1 << 30
+
 
 def load_data(directory, device):
     """Loads the arrays prepare.py wrote as tensors on the given device."""
@@ -46,13 +49,16 @@ def load_data(directory, device):
 
 
 def choose_device(directory):
-    """Returns the device the data is kept on: the GPU if it holds the data in half its memory."""
+    """Returns the device the data is kept on: the GPU if its free memory holds the data and two
+    int32 index arrays of one entry per position with GPU_HEADROOM to spare."""
     if not torch.cuda.is_available():
         return torch.device("cpu")
     size = sum(os.path.getsize(os.path.join(directory, name + ".npy"))
                for name in ("features", "stm", "score", "result"))
-    total = torch.cuda.get_device_properties(0).total_memory
-    return torch.device("cuda") if size < total / 2 else torch.device("cpu")
+    positions = os.path.getsize(os.path.join(directory, "stm.npy"))
+    free, _ = torch.cuda.mem_get_info()
+    needed = size + 2 * 4 * positions + GPU_HEADROOM
+    return torch.device("cuda") if needed < free else torch.device("cpu")
 
 
 def batch_loss(network, data, indices, wdl, device):
@@ -123,7 +129,8 @@ def main():
     data = load_data(arguments.data, storage)
     count = data["features"].shape[0]
 
-    split = torch.randperm(count, generator=torch.Generator().manual_seed(arguments.seed))
+    split = torch.randperm(count, generator=torch.Generator().manual_seed(arguments.seed),
+                           dtype=torch.int32)
     held_out = max(1, int(count * arguments.validation))
     validation_indices = split[:held_out].to(storage)
     training_indices = split[held_out:].to(storage)
@@ -149,13 +156,13 @@ def main():
     with open(os.path.join(arguments.out, "log.txt"), "a") as log:
         for epoch in range(first_epoch, arguments.epochs + 1):
             start = time.time()
-            order = training_indices[torch.randperm(len(training_indices), device=storage)]
+            order = torch.randperm(len(training_indices), device=storage, dtype=torch.int32)
             total = 0.0
             for step in range(steps_per_epoch):
                 rate = learning_rate(step_number, total_steps, arguments.lr, arguments.final_lr)
                 for group in optimizer.param_groups:
                     group["lr"] = rate
-                batch = order[step * arguments.batch:(step + 1) * arguments.batch]
+                batch = training_indices[order[step * arguments.batch:(step + 1) * arguments.batch]]
                 loss = batch_loss(network, data, batch, arguments.wdl, compute)
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
