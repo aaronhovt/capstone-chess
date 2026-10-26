@@ -41,6 +41,21 @@ public class AlphaBeta implements MoveStrategy {
    */
   private static final long A8_COLOURED_SQUARES = 0xAA55AA55AA55AA55L;
 
+  /** The score of a position won against a bare king, before material and king placement. */
+  private static final double BARE_KING_WIN = 3000;
+
+  /** The score per step the bare king stands from the centre, or towards the mating corner. */
+  private static final int MOP_UP_EDGE_WEIGHT = 20;
+
+  /** The score per step the two kings stand closer than the greatest distance of seven. */
+  private static final int MOP_UP_KING_WEIGHT = 10;
+
+  /** The material the stronger side's pieces count for against a bare king, by piece type. */
+  private static final int[] MOP_UP_PIECE_VALUES = {100, 320, 330, 500, 900, 0};
+
+  /** The squares of a corner of each colour: a8 and h1, then h8 and a1. */
+  private static final int[][] CORNERS_BY_COLOUR = {{0, 63}, {7, 56}};
+
   /** The depth used by {@link #execute(Board)} when a caller supplies no depth of its own. */
   private final int maxDepth;
 
@@ -1006,11 +1021,88 @@ public class AlphaBeta implements MoveStrategy {
 
     double score = 0;
     if (!isDrawnByMaterial(board)) {
-      final int networkScore = board.evaluateNetwork();
-      score = board.currentPlayer().getAlliance().isWhite() ? networkScore : -networkScore;
+      score = mopUpScore(board);
+      if (Double.isNaN(score)) {
+        final int networkScore = board.evaluateNetwork();
+        score = board.currentPlayer().getAlliance().isWhite() ? networkScore : -networkScore;
+      }
     }
     this.evaluationCache.store(zobristHash, score);
     return score;
+  }
+
+  /**
+   * Returns the score of a position in which one side has only its king and the other side has
+   * the material to force mate: a queen, a rook, a bishop and a knight, or bishops on squares of
+   * both colours. The score is {@link #BARE_KING_WIN} plus the stronger side's material, plus
+   * {@link #MOP_UP_EDGE_WEIGHT} for each step the bare king stands from the centre, plus
+   * {@link #MOP_UP_KING_WEIGHT} for each step the kings stand closer than seven apart. When the
+   * mating material is a bishop and a knight alone, the bare king is scored by how near it stands
+   * to a corner of the bishop's colour instead of by its distance from the centre.
+   *
+   * @param board The board position to score.
+   * @return The score from White's point of view, or NaN if the position is not such an ending.
+   */
+  private static double mopUpScore(final Board board) {
+    final boolean whiteBare = board.getOccupancy(Alliance.WHITE) ==
+            board.getPieces(Alliance.WHITE, Piece.PieceType.KING);
+    final boolean blackBare = board.getOccupancy(Alliance.BLACK) ==
+            board.getPieces(Alliance.BLACK, Piece.PieceType.KING);
+    if (whiteBare == blackBare) {
+      return Double.NaN;
+    }
+    final Alliance strong = whiteBare ? Alliance.BLACK : Alliance.WHITE;
+    final Alliance weak = whiteBare ? Alliance.WHITE : Alliance.BLACK;
+    final long heavy = board.getPieces(strong, Piece.PieceType.QUEEN)
+            | board.getPieces(strong, Piece.PieceType.ROOK);
+    final long bishops = board.getPieces(strong, Piece.PieceType.BISHOP);
+    final long knights = board.getPieces(strong, Piece.PieceType.KNIGHT);
+    final boolean bothBishopColours = (bishops & A8_COLOURED_SQUARES) != 0L
+            && (bishops & ~A8_COLOURED_SQUARES) != 0L;
+    if (heavy == 0L && !bothBishopColours && (bishops == 0L || knights == 0L)) {
+      return Double.NaN;
+    }
+
+    double score = BARE_KING_WIN;
+    for (final Piece.PieceType type : Piece.PieceType.values()) {
+      score += MOP_UP_PIECE_VALUES[type.ordinal()] * Long.bitCount(board.getPieces(strong, type));
+    }
+    final int weakKing = Long.numberOfTrailingZeros(board.getPieces(weak, Piece.PieceType.KING));
+    final int strongKing = Long.numberOfTrailingZeros(board.getPieces(strong, Piece.PieceType.KING));
+    if (heavy == 0L && !bothBishopColours) {
+      final int[] corners = CORNERS_BY_COLOUR[(bishops & A8_COLOURED_SQUARES) != 0L ? 0 : 1];
+      final int nearest = Math.min(manhattanDistance(weakKing, corners[0]),
+              manhattanDistance(weakKing, corners[1]));
+      score += MOP_UP_EDGE_WEIGHT * (14 - nearest) / 2.0;
+    } else {
+      score += MOP_UP_EDGE_WEIGHT * centreDistance(weakKing);
+    }
+    score += MOP_UP_KING_WEIGHT * (7 - Math.max(Math.abs(weakKing / 8 - strongKing / 8),
+            Math.abs(weakKing % 8 - strongKing % 8)));
+    return strong.isWhite() ? score : -score;
+  }
+
+  /**
+   * Returns how many steps a square stands from the four centre squares, counting files and ranks.
+   *
+   * @param square The square.
+   * @return The distance, from 0 on a centre square to 6 in a corner.
+   */
+  private static int centreDistance(final int square) {
+    final int file = square % 8;
+    final int rank = square / 8;
+    return Math.max(3 - file, file - 4) + Math.max(3 - rank, rank - 4);
+  }
+
+  /**
+   * Returns the number of file and rank steps between two squares.
+   *
+   * @param from The first square.
+   * @param to The second square.
+   * @return The sum of the file distance and the rank distance.
+   */
+  private static int manhattanDistance(final int from, final int to) {
+    return Math.abs(from % 8 - to % 8) + Math.abs(from / 8 - to / 8);
   }
 
   /**
