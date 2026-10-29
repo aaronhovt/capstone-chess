@@ -65,14 +65,17 @@ public final class Network {
   /** The size of each side's accumulator. */
   private final int hidden;
 
-  /** The feature weights, {@link #INPUTS} rows of {@link #hidden} values, row = feature index. */
-  private final int[] featureWeights;
+  /** The feature weights, {@link #INPUTS} rows of {@link #hidden} values, indexed by feature. */
+  private final int[][] featureWeights;
 
   /** The feature biases, {@link #hidden} values. */
   private final int[] featureBias;
 
-  /** The output weights, the side to move's {@link #hidden} values followed by the other side's. */
-  private final int[] outputWeights;
+  /** The output weights applied to the side to move's accumulator, {@link #hidden} values. */
+  private final int[] moverWeights;
+
+  /** The output weights applied to the other side's accumulator, {@link #hidden} values. */
+  private final int[] otherWeights;
 
   /** The output bias, in units of QA * QB. */
   private final int outputBias;
@@ -104,9 +107,13 @@ public final class Network {
       throw new IllegalArgumentException("A network of hidden size " + this.hidden + " is " +
               expected + " bytes, found " + data.length + ".");
     }
-    this.featureWeights = readShorts(buffer, INPUTS * this.hidden);
+    this.featureWeights = new int[INPUTS][];
+    for (int feature = 0; feature < INPUTS; feature++) {
+      this.featureWeights[feature] = readShorts(buffer, this.hidden);
+    }
     this.featureBias = readShorts(buffer, this.hidden);
-    this.outputWeights = readShorts(buffer, 2 * this.hidden);
+    this.moverWeights = readShorts(buffer, this.hidden);
+    this.otherWeights = readShorts(buffer, this.hidden);
     this.outputBias = buffer.getInt();
   }
 
@@ -192,108 +199,104 @@ public final class Network {
   /**
    * Sets an accumulator to the feature biases.
    *
-   * @param accumulators The array holding the accumulator.
-   * @param offset The index of the accumulator's first value.
+   * @param accumulator The accumulator, {@link #hidden()} values.
    */
-  public void reset(final int[] accumulators, final int offset) {
-    System.arraycopy(this.featureBias, 0, accumulators, offset, this.hidden);
+  public void reset(final int[] accumulator) {
+    System.arraycopy(this.featureBias, 0, accumulator, 0, this.hidden);
   }
 
   /**
    * Adds a feature's weight row to an accumulator.
    *
-   * @param accumulators The array holding the accumulator.
-   * @param offset The index of the accumulator's first value.
+   * @param accumulator The accumulator, {@link #hidden()} values.
    * @param feature The feature index.
    */
-  public void add(final int[] accumulators, final int offset, final int feature) {
-    final int row = feature * this.hidden;
-    for (int i = 0; i < this.hidden; i++) {
-      accumulators[offset + i] += this.featureWeights[row + i];
+  public void add(final int[] accumulator, final int feature) {
+    final int[] row = this.featureWeights[feature];
+    final int size = this.hidden;
+    for (int i = 0; i < size; i++) {
+      accumulator[i] += row[i];
     }
   }
 
   /**
    * Writes into one accumulator another accumulator with one feature removed and one added.
    *
-   * @param accumulators The array holding both accumulators.
-   * @param from The index of the source accumulator's first value.
-   * @param to The index of the destination accumulator's first value.
+   * @param source The accumulator read, {@link #hidden()} values.
+   * @param destination The accumulator written, {@link #hidden()} values.
    * @param removed The feature index removed.
    * @param added The feature index added.
    */
-  public void move(final int[] accumulators, final int from, final int to, final int removed,
+  public void move(final int[] source, final int[] destination, final int removed,
                    final int added) {
-    final int removedRow = removed * this.hidden;
-    final int addedRow = added * this.hidden;
-    for (int i = 0; i < this.hidden; i++) {
-      accumulators[to + i] = accumulators[from + i] - this.featureWeights[removedRow + i]
-              + this.featureWeights[addedRow + i];
+    final int[] removedRow = this.featureWeights[removed];
+    final int[] addedRow = this.featureWeights[added];
+    final int size = this.hidden;
+    for (int i = 0; i < size; i++) {
+      destination[i] = source[i] - removedRow[i] + addedRow[i];
     }
   }
 
   /**
    * Writes into one accumulator another accumulator with two features removed and one added.
    *
-   * @param accumulators The array holding both accumulators.
-   * @param from The index of the source accumulator's first value.
-   * @param to The index of the destination accumulator's first value.
+   * @param source The accumulator read, {@link #hidden()} values.
+   * @param destination The accumulator written, {@link #hidden()} values.
    * @param removed The first feature index removed.
    * @param alsoRemoved The second feature index removed.
    * @param added The feature index added.
    */
-  public void capture(final int[] accumulators, final int from, final int to, final int removed,
+  public void capture(final int[] source, final int[] destination, final int removed,
                       final int alsoRemoved, final int added) {
-    final int removedRow = removed * this.hidden;
-    final int alsoRemovedRow = alsoRemoved * this.hidden;
-    final int addedRow = added * this.hidden;
-    for (int i = 0; i < this.hidden; i++) {
-      accumulators[to + i] = accumulators[from + i] - this.featureWeights[removedRow + i]
-              - this.featureWeights[alsoRemovedRow + i] + this.featureWeights[addedRow + i];
+    final int[] removedRow = this.featureWeights[removed];
+    final int[] alsoRemovedRow = this.featureWeights[alsoRemoved];
+    final int[] addedRow = this.featureWeights[added];
+    final int size = this.hidden;
+    for (int i = 0; i < size; i++) {
+      destination[i] = source[i] - removedRow[i] - alsoRemovedRow[i] + addedRow[i];
     }
   }
 
   /**
    * Writes into one accumulator another accumulator with two features removed and two added.
    *
-   * @param accumulators The array holding both accumulators.
-   * @param from The index of the source accumulator's first value.
-   * @param to The index of the destination accumulator's first value.
+   * @param source The accumulator read, {@link #hidden()} values.
+   * @param destination The accumulator written, {@link #hidden()} values.
    * @param removed The first feature index removed.
    * @param alsoRemoved The second feature index removed.
    * @param added The first feature index added.
    * @param alsoAdded The second feature index added.
    */
-  public void castle(final int[] accumulators, final int from, final int to, final int removed,
+  public void castle(final int[] source, final int[] destination, final int removed,
                      final int alsoRemoved, final int added, final int alsoAdded) {
-    final int removedRow = removed * this.hidden;
-    final int alsoRemovedRow = alsoRemoved * this.hidden;
-    final int addedRow = added * this.hidden;
-    final int alsoAddedRow = alsoAdded * this.hidden;
-    for (int i = 0; i < this.hidden; i++) {
-      accumulators[to + i] = accumulators[from + i] - this.featureWeights[removedRow + i]
-              - this.featureWeights[alsoRemovedRow + i] + this.featureWeights[addedRow + i]
-              + this.featureWeights[alsoAddedRow + i];
+    final int[] removedRow = this.featureWeights[removed];
+    final int[] alsoRemovedRow = this.featureWeights[alsoRemoved];
+    final int[] addedRow = this.featureWeights[added];
+    final int[] alsoAddedRow = this.featureWeights[alsoAdded];
+    final int size = this.hidden;
+    for (int i = 0; i < size; i++) {
+      destination[i] = source[i] - removedRow[i] - alsoRemovedRow[i] + addedRow[i]
+              + alsoAddedRow[i];
     }
   }
 
   /**
    * Returns the evaluation of a position from its two accumulators.
    *
-   * @param accumulators The array holding both accumulators.
-   * @param mover The index of the first value of the side to move's accumulator.
-   * @param other The index of the first value of the other side's accumulator.
+   * @param mover The side to move's accumulator, {@link #hidden()} values.
+   * @param other The other side's accumulator, {@link #hidden()} values.
    * @return The evaluation in centipawns from the side to move's point of view.
    */
-  public int evaluate(final int[] accumulators, final int mover, final int other) {
+  public int evaluate(final int[] mover, final int[] other) {
+    final int size = this.hidden;
     long sum = 0;
-    for (int i = 0; i < this.hidden; i++) {
-      final int value = Math.min(Math.max(accumulators[mover + i], 0), QA);
-      sum += value * value * this.outputWeights[i];
+    for (int i = 0; i < size; i++) {
+      final int value = Math.min(Math.max(mover[i], 0), QA);
+      sum += value * value * this.moverWeights[i];
     }
-    for (int i = 0; i < this.hidden; i++) {
-      final int value = Math.min(Math.max(accumulators[other + i], 0), QA);
-      sum += value * value * this.outputWeights[this.hidden + i];
+    for (int i = 0; i < size; i++) {
+      final int value = Math.min(Math.max(other[i], 0), QA);
+      sum += value * value * this.otherWeights[i];
     }
     return (int) ((sum / QA + this.outputBias) * SCALE / ((long) QA * QB));
   }

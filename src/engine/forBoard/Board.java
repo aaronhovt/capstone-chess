@@ -235,15 +235,21 @@ public final class Board {
   /** The number of values in one accumulator pair: White's accumulator followed by Black's. */
   private static final int ACCUMULATOR_PAIR = 2 * HIDDEN;
 
-  /** The initial number of accumulator pairs {@link #networkAccumulators} holds. */
+  /**
+   * The initial number of accumulators {@link #whiteAccumulators} and {@link #blackAccumulators}
+   * each hold.
+   */
   private static final int NETWORK_SLOT_CAPACITY = 8;
 
   /**
-   * The network accumulator pairs, one for the position the board was built in and one for each
-   * move applied since and not yet unmade, the pair of the current position at index
-   * {@link #networkDepth} * {@link #ACCUMULATOR_PAIR}. Grown by replacement when full.
+   * White's network accumulators, one for the position the board was built in and one for each
+   * move applied since and not yet unmade, the current position's at index {@link #networkDepth}.
+   * Grown by replacement when full.
    */
-  private int[] networkAccumulators = new int[NETWORK_SLOT_CAPACITY * ACCUMULATOR_PAIR];
+  private int[][] whiteAccumulators = new int[NETWORK_SLOT_CAPACITY][HIDDEN];
+
+  /** Black's network accumulators, indexed as {@link #whiteAccumulators} is. */
+  private int[][] blackAccumulators = new int[NETWORK_SLOT_CAPACITY][HIDDEN];
 
   /** The number of moves applied to this board and not yet unmade, not counting null moves. */
   private int networkDepth;
@@ -290,7 +296,7 @@ public final class Board {
     this.positionHistory = new long[POSITION_HISTORY_CAPACITY];
     this.positionHistory[0] = this.zobristHash;
     this.positionHistorySize = 1;
-    computeNetworkAccumulators(this.networkAccumulators, 0);
+    computeNetworkAccumulators(this.whiteAccumulators[0], this.blackAccumulators[0]);
   }
 
   /**
@@ -341,7 +347,7 @@ public final class Board {
     this.positionHistory = source.positionHistory.clone();
     this.positionHistorySize = source.positionHistorySize;
     refreshPlayers(source.currentPlayer.getAlliance());
-    computeNetworkAccumulators(this.networkAccumulators, 0);
+    computeNetworkAccumulators(this.whiteAccumulators[0], this.blackAccumulators[0]);
   }
 
   /**
@@ -1064,11 +1070,11 @@ public final class Board {
    * @return The evaluation in centipawns from the side to move's point of view.
    */
   public int evaluateNetwork() {
-    final int white = this.networkDepth * ACCUMULATOR_PAIR;
-    final int black = white + HIDDEN;
+    final int[] white = this.whiteAccumulators[this.networkDepth];
+    final int[] black = this.blackAccumulators[this.networkDepth];
     return this.currentPlayer.getAlliance().isWhite() ?
-            NETWORK.evaluate(this.networkAccumulators, white, black) :
-            NETWORK.evaluate(this.networkAccumulators, black, white);
+            NETWORK.evaluate(white, black) :
+            NETWORK.evaluate(black, white);
   }
 
   /**
@@ -1078,8 +1084,8 @@ public final class Board {
    * @return The accumulator pair.
    */
   public int[] getNetworkAccumulators() {
-    final int start = this.networkDepth * ACCUMULATOR_PAIR;
-    return Arrays.copyOfRange(this.networkAccumulators, start, start + ACCUMULATOR_PAIR);
+    return accumulatorPair(this.whiteAccumulators[this.networkDepth],
+            this.blackAccumulators[this.networkDepth]);
   }
 
   /**
@@ -1089,28 +1095,42 @@ public final class Board {
    * @return The accumulator pair.
    */
   public int[] computeNetworkAccumulators() {
-    final int[] accumulators = new int[ACCUMULATOR_PAIR];
-    computeNetworkAccumulators(accumulators, 0);
-    return accumulators;
+    final int[] white = new int[HIDDEN];
+    final int[] black = new int[HIDDEN];
+    computeNetworkAccumulators(white, black);
+    return accumulatorPair(white, black);
+  }
+
+  /**
+   * Returns White's and Black's accumulators joined into one array, White's first.
+   *
+   * @param white White's accumulator.
+   * @param black Black's accumulator.
+   * @return The accumulator pair, {@link #ACCUMULATOR_PAIR} values.
+   */
+  private static int[] accumulatorPair(final int[] white, final int[] black) {
+    final int[] pair = Arrays.copyOf(white, ACCUMULATOR_PAIR);
+    System.arraycopy(black, 0, pair, HIDDEN, HIDDEN);
+    return pair;
   }
 
   /**
    * Writes the network accumulators of the current position, computed from its pieces, into the
-   * given array.
+   * given accumulators.
    *
-   * @param accumulators The array to write into.
-   * @param offset The index of White's first value; Black's accumulator follows it.
+   * @param white White's accumulator, written.
+   * @param black Black's accumulator, written.
    */
-  private void computeNetworkAccumulators(final int[] accumulators, final int offset) {
-    NETWORK.reset(accumulators, offset);
-    NETWORK.reset(accumulators, offset + HIDDEN);
+  private void computeNetworkAccumulators(final int[] white, final int[] black) {
+    NETWORK.reset(white);
+    NETWORK.reset(black);
     for (final Piece piece : this.boardConfig) {
       if (piece != null) {
-        final boolean white = piece.getPieceAllegiance().isWhite();
+        final boolean pieceWhite = piece.getPieceAllegiance().isWhite();
         final int type = piece.getPieceType().ordinal();
         final int square = piece.getPiecePosition();
-        NETWORK.add(accumulators, offset, Network.featureIndex(true, white, type, square));
-        NETWORK.add(accumulators, offset + HIDDEN, Network.featureIndex(false, white, type, square));
+        NETWORK.add(white, Network.featureIndex(true, pieceWhite, type, square));
+        NETWORK.add(black, Network.featureIndex(false, pieceWhite, type, square));
       }
     }
   }
@@ -1125,11 +1145,11 @@ public final class Board {
    * @param captured The piece the move captures, or null.
    */
   private void updateNetworkAccumulators(final int move, final Piece moved, final Piece captured) {
-    final int from = this.networkDepth * ACCUMULATOR_PAIR;
-    final int to = from + ACCUMULATOR_PAIR;
-    if (to + ACCUMULATOR_PAIR > this.networkAccumulators.length) {
-      this.networkAccumulators = Arrays.copyOf(this.networkAccumulators,
-              this.networkAccumulators.length * 2);
+    final int from = this.networkDepth;
+    final int to = from + 1;
+    if (to == this.whiteAccumulators.length) {
+      this.whiteAccumulators = grownAccumulators(this.whiteAccumulators);
+      this.blackAccumulators = grownAccumulators(this.blackAccumulators);
     }
     final int origin = MoveCode.origin(move);
     final int destination = MoveCode.destination(move);
@@ -1139,25 +1159,42 @@ public final class Board {
     final int placedType = promotionType != null ? promotionType.ordinal() : movedType;
     for (int side = 0; side < 2; side++) {
       final boolean perspectiveWhite = side == 0;
-      final int offset = side * HIDDEN;
+      final int[][] accumulators = perspectiveWhite ? this.whiteAccumulators :
+              this.blackAccumulators;
+      final int[] source = accumulators[from];
+      final int[] target = accumulators[to];
       final int removed = Network.featureIndex(perspectiveWhite, white, movedType, origin);
       final int added = Network.featureIndex(perspectiveWhite, white, placedType, destination);
       if (MoveCode.isCastle(move)) {
         final int rookType = Piece.PieceType.ROOK.ordinal();
-        NETWORK.castle(this.networkAccumulators, from + offset, to + offset, removed,
+        NETWORK.castle(source, target, removed,
                 Network.featureIndex(perspectiveWhite, white, rookType,
                         castleRookOrigin(origin, destination)), added,
                 Network.featureIndex(perspectiveWhite, white, rookType,
                         castleRookDestination(origin, destination)));
       } else if (captured != null) {
-        NETWORK.capture(this.networkAccumulators, from + offset, to + offset, removed,
+        NETWORK.capture(source, target, removed,
                 Network.featureIndex(perspectiveWhite, !white, captured.getPieceType().ordinal(),
                         captured.getPiecePosition()), added);
       } else {
-        NETWORK.move(this.networkAccumulators, from + offset, to + offset, removed, added);
+        NETWORK.move(source, target, removed, added);
       }
     }
     this.networkDepth++;
+  }
+
+  /**
+   * Returns the given accumulators followed by as many newly allocated ones.
+   *
+   * @param accumulators The accumulators to keep, each {@link #HIDDEN} values.
+   * @return The accumulators, twice as many.
+   */
+  private static int[][] grownAccumulators(final int[][] accumulators) {
+    final int[][] grown = Arrays.copyOf(accumulators, accumulators.length * 2);
+    for (int slot = accumulators.length; slot < grown.length; slot++) {
+      grown[slot] = new int[HIDDEN];
+    }
+    return grown;
   }
 
   /**
