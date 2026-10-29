@@ -244,15 +244,34 @@ public final class Board {
   /**
    * White's network accumulators, one for the position the board was built in and one for each
    * move applied since and not yet unmade, the current position's at index {@link #networkDepth}.
-   * Grown by replacement when full.
+   * Only the slots up to {@link #networkComputedDepth} hold their position's values. Grown by
+   * replacement when full, together with the arrays below.
    */
   private int[][] whiteAccumulators = new int[NETWORK_SLOT_CAPACITY][HIDDEN];
 
   /** Black's network accumulators, indexed as {@link #whiteAccumulators} is. */
   private int[][] blackAccumulators = new int[NETWORK_SLOT_CAPACITY][HIDDEN];
 
+  /**
+   * The packed move that leads to the position of each accumulator slot, indexed as
+   * {@link #whiteAccumulators} is. Slot 0 has none.
+   */
+  private int[] networkMoves = new int[NETWORK_SLOT_CAPACITY];
+
+  /** The moved piece, as it stood before the move, of each move in {@link #networkMoves}. */
+  private Piece[] networkMovedPieces = new Piece[NETWORK_SLOT_CAPACITY];
+
+  /** The piece captured by each move in {@link #networkMoves}, or null. */
+  private Piece[] networkCapturedPieces = new Piece[NETWORK_SLOT_CAPACITY];
+
   /** The number of moves applied to this board and not yet unmade, not counting null moves. */
   private int networkDepth;
+
+  /**
+   * The highest accumulator slot up to which every slot holds the accumulators of its position,
+   * never greater than {@link #networkDepth}.
+   */
+  private int networkComputedDepth;
 
   /** The piece types of the back rank in the starting position, from the a-file to the h-file. */
   private static final Piece.PieceType[] BACK_RANK = {
@@ -780,7 +799,7 @@ public final class Board {
   /**
    * Applies the given packed move to this board in place: relocates the pieces and updates the
    * bitboards, Zobrist hash, en passant pawn, halfmove clock, players, repetition history, ply
-   * count and network accumulators. The move is reversed by
+   * count, and records it for the network accumulators. The move is reversed by
    * {@link #unmakeMove(int)}, and moves and null moves applied by any of the board's methods must
    * be reversed in the opposite order to the one they were applied in. After this move
    * {@link #getTransitionMove()} returns null and {@link #getTransitionCode()} returns the move.
@@ -812,7 +831,7 @@ public final class Board {
       this.halfMoveClock = moved.getPieceType() == Piece.PieceType.PAWN ||
               this.capturedPieces[depth] != null ? 0 : this.halfMoveClock + 1;
     }
-    updateNetworkAccumulators(move, moved, this.capturedPieces[depth]);
+    recordNetworkMove(move, moved, this.capturedPieces[depth]);
     movePieces(move, moved, this.capturedPieces[depth]);
 
     this.enPassantPawn = MoveCode.isPawnJump(move) ? (Pawn) this.boardConfig[destination] : null;
@@ -843,6 +862,9 @@ public final class Board {
     }
     this.mutationDepth--;
     this.networkDepth--;
+    if (this.networkComputedDepth > this.networkDepth) {
+      this.networkComputedDepth = this.networkDepth;
+    }
     final int depth = this.mutationDepth;
     final Piece moved = this.priorMovedPieces[depth];
     restorePieces(move, moved, this.capturedPieces[depth], this.priorCastleRooks[depth]);
@@ -1070,6 +1092,9 @@ public final class Board {
    * @return The evaluation in centipawns from the side to move's point of view.
    */
   public int evaluateNetwork() {
+    if (this.networkComputedDepth < this.networkDepth) {
+      refreshNetworkAccumulators();
+    }
     final int[] white = this.whiteAccumulators[this.networkDepth];
     final int[] black = this.blackAccumulators[this.networkDepth];
     return this.currentPlayer.getAlliance().isWhite() ?
@@ -1084,6 +1109,9 @@ public final class Board {
    * @return The accumulator pair.
    */
   public int[] getNetworkAccumulators() {
+    if (this.networkComputedDepth < this.networkDepth) {
+      refreshNetworkAccumulators();
+    }
     return accumulatorPair(this.whiteAccumulators[this.networkDepth],
             this.blackAccumulators[this.networkDepth]);
   }
@@ -1136,21 +1164,47 @@ public final class Board {
   }
 
   /**
-   * Writes the network accumulators of the position the given move leads to into the next slot,
-   * from those of the current position and the pieces the move moves, and advances
-   * {@link #networkDepth} to it. Called before the move's pieces are moved.
+   * Records the given move in the next accumulator slot and advances {@link #networkDepth} to it,
+   * leaving the slot's accumulators to be computed when they are read.
    *
    * @param move The move being applied.
    * @param moved The piece on the move's origin square.
    * @param captured The piece the move captures, or null.
    */
-  private void updateNetworkAccumulators(final int move, final Piece moved, final Piece captured) {
-    final int from = this.networkDepth;
-    final int to = from + 1;
-    if (to == this.whiteAccumulators.length) {
-      this.whiteAccumulators = grownAccumulators(this.whiteAccumulators);
-      this.blackAccumulators = grownAccumulators(this.blackAccumulators);
+  private void recordNetworkMove(final int move, final Piece moved, final Piece captured) {
+    final int slot = this.networkDepth + 1;
+    if (slot == this.whiteAccumulators.length) {
+      growNetworkSlots();
     }
+    this.networkMoves[slot] = move;
+    this.networkMovedPieces[slot] = moved;
+    this.networkCapturedPieces[slot] = captured;
+    this.networkDepth = slot;
+  }
+
+  /**
+   * Computes the accumulators of every slot above {@link #networkComputedDepth} up to
+   * {@link #networkDepth}, each from the slot below it, and advances
+   * {@link #networkComputedDepth} to {@link #networkDepth}.
+   */
+  private void refreshNetworkAccumulators() {
+    for (int slot = this.networkComputedDepth + 1; slot <= this.networkDepth; slot++) {
+      updateNetworkAccumulators(slot);
+    }
+    this.networkComputedDepth = this.networkDepth;
+  }
+
+  /**
+   * Writes the network accumulators of the given slot from those of the slot below it and the
+   * move recorded for the slot.
+   *
+   * @param to The slot to write, greater than zero.
+   */
+  private void updateNetworkAccumulators(final int to) {
+    final int from = to - 1;
+    final int move = this.networkMoves[to];
+    final Piece moved = this.networkMovedPieces[to];
+    final Piece captured = this.networkCapturedPieces[to];
     final int origin = MoveCode.origin(move);
     final int destination = MoveCode.destination(move);
     final boolean white = moved.getPieceAllegiance().isWhite();
@@ -1180,7 +1234,16 @@ public final class Board {
         NETWORK.move(source, target, removed, added);
       }
     }
-    this.networkDepth++;
+  }
+
+  /** Doubles the number of accumulator slots, keeping the slots in use. */
+  private void growNetworkSlots() {
+    this.whiteAccumulators = grownAccumulators(this.whiteAccumulators);
+    this.blackAccumulators = grownAccumulators(this.blackAccumulators);
+    final int length = this.whiteAccumulators.length;
+    this.networkMoves = Arrays.copyOf(this.networkMoves, length);
+    this.networkMovedPieces = Arrays.copyOf(this.networkMovedPieces, length);
+    this.networkCapturedPieces = Arrays.copyOf(this.networkCapturedPieces, length);
   }
 
   /**
