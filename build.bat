@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 rem Compiles the engine and packages the runnable jars. Run "build" for every target or
 rem "build <target>" for one of uci, gui, perft, tactical, eval, bench, book, match,
-rem compare, all, or clean.
+rem stats, datagen, compare, all, or clean.
 
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
