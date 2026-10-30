@@ -2030,23 +2030,25 @@ public class AlphaBeta implements MoveStrategy {
               Piece.PieceType.PAWN :
               board.getPiece(MoveCode.destination(move)).getPieceType());
 
-      board.makeMove(move);
-
-      final boolean legal = !moverInCheck(board, move, testedOrigins);
-      final boolean givesCheck = legal && board.currentPlayer().isInCheck();
-      final boolean prunedByExchange = seeScore < SEE_PRUNING_THRESHOLD && !givesCheck;
-      final boolean prunedByDelta = !givesCheck && !promotion &&
-              standPat + seeScore + deltaMargin <= alpha;
-
-      if (!legal || prunedByExchange || prunedByDelta) {
+      // A capture that gives check is never pruned. A pruned capture is skipped before it is made,
+      // legal or not, so whether it gives check is answered without making it.
+      final boolean prunedByExchange = seeScore < SEE_PRUNING_THRESHOLD;
+      final boolean prunedByDelta = !promotion && standPat + seeScore + deltaMargin <= alpha;
+      if ((prunedByExchange || prunedByDelta) && !AttackDetector.givesCheck(board, move)) {
         if (COLLECT_STATISTICS) {
-          if (!legal) {
-            statistics().captureIllegal();
-          } else if (prunedByExchange) {
+          if (prunedByExchange) {
             statistics().captureExchangePruned();
           } else {
             statistics().captureDeltaPruned();
           }
+        }
+        continue;
+      }
+
+      board.makeMove(move);
+      if (moverInCheck(board, move, testedOrigins)) {
+        if (COLLECT_STATISTICS) {
+          statistics().captureIllegal();
         }
         board.unmakeMove(move);
         continue;
