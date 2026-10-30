@@ -143,27 +143,28 @@ public class StaticExchangeEvaluator {
   private int swapOffValue(final Board board, final int targetSquare,
                            final int capturedValue, final int attackerValue,
                            final int firstAttackerSquare, final Alliance defendingSide) {
-    final int[] gain = new int[MAX_PIECES];
-    final int[] revealed = new int[MAX_PIECES];
     final long initialAttackers = AttackDetector.attackersOf(targetSquare, board);
     long available = initialAttackers & ~(1L << firstAttackerSquare);
+    int[] revealed = null;
     int revealedCount = 0;
 
     final int firstRevealed = revealedBehind(board, targetSquare, firstAttackerSquare);
     if (firstRevealed >= 0) {
       available |= 1L << firstRevealed;
+      revealed = new int[MAX_PIECES];
       revealed[revealedCount++] = firstRevealed;
     }
 
-    gain[0] = capturedValue;
-    int depth = 0;
+    // The balance is the material the first capturer has gained so far. Either side may stop
+    // after the other has captured: lower is the best balance the first capturer can stop on,
+    // upper the best its opponent can stop on.
+    int balance = capturedValue;
+    int lower = Integer.MIN_VALUE;
+    int upper = balance;
     int movedValue = attackerValue;
     Alliance side = defendingSide;
 
     while (true) {
-      depth++;
-      gain[depth] = movedValue - gain[depth - 1];
-
       final int attackerSquare = leastValuableAttacker(board, targetSquare, available,
               initialAttackers, revealed, revealedCount, side);
       if (attackerSquare < 0) {
@@ -174,18 +175,30 @@ public class StaticExchangeEvaluator {
       final int revealedSquare = revealedBehind(board, targetSquare, attackerSquare);
       if (revealedSquare >= 0) {
         available |= 1L << revealedSquare;
+        if (revealed == null) {
+          revealed = new int[MAX_PIECES];
+        }
         revealed[revealedCount++] = revealedSquare;
+      }
+
+      if (side == defendingSide) {
+        balance -= movedValue;
+        lower = Math.max(lower, balance);
+        if (lower >= upper) {
+          return upper;
+        }
+      } else {
+        balance += movedValue;
+        upper = Math.min(upper, balance);
+        if (upper <= lower) {
+          return lower;
+        }
       }
       movedValue = getPieceValue(board.getPiece(attackerSquare).getPieceType());
       side = side.isWhite() ? Alliance.BLACK : Alliance.WHITE;
     }
 
-    while (depth > 1) {
-      depth--;
-      gain[depth - 1] = -Math.max(-gain[depth - 1], gain[depth]);
-    }
-
-    return gain[0];
+    return Math.max(lower, Math.min(upper, balance));
   }
 
   /**
@@ -218,7 +231,8 @@ public class StaticExchangeEvaluator {
    * @param targetSquare The square the exchange takes place on.
    * @param available The squares of the attackers still available, as one bit per tile.
    * @param initialAttackers The squares of the attackers present at the start, as one bit per tile.
-   * @param revealed The squares of the revealed sliders, in the order they were revealed.
+   * @param revealed The squares of the revealed sliders, in the order they were revealed, or null
+   *                 if revealedCount is zero.
    * @param revealedCount The number of entries of revealed in use.
    * @param side The alliance of the attacking side.
    * @return The square of the least valuable available attacker of that alliance, or -1 if there
