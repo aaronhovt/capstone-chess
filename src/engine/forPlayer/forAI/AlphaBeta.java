@@ -1354,6 +1354,31 @@ public class AlphaBeta implements MoveStrategy {
   }
 
   /**
+   * Writes the move with the given transposition table code into the first entry of a ply's
+   * generated move buffer, and a key that refers to it into the first entry of its ordering key
+   * buffer, if the side to move has that move among its pseudo-legal moves. Either way, other
+   * entries of the generated move buffer may be overwritten.
+   *
+   * @param board The current board position.
+   * @param moveCode The transposition table code of the move.
+   * @param generated The ply's generated move buffer.
+   * @param orderKeys The ply's ordering key buffer.
+   * @return True if the move was written, false if the side to move has no move with that code.
+   */
+  private static boolean placeTableMove(final Board board, final short moveCode,
+                                        final int[] generated, final long[] orderKeys) {
+    final int count = MoveGenerator.generateFrom(board, board.currentPlayer().getAlliance(),
+            MoveCode.origin(moveCode), generated);
+    final int index = indexOfMoveCode(generated, count, moveCode);
+    if (index < 0) {
+      return false;
+    }
+    generated[0] = generated[index];
+    orderKeys[0] = 0L;
+    return true;
+  }
+
+  /**
    * Scores a position in which the side to move has no legal moves. A checkmate scores
    * {@link #MATE_VALUE} against the mated side, reduced by the ply at which it occurs so that
    * shorter mates outrank longer ones, and a stalemate scores as a draw.
@@ -1695,7 +1720,6 @@ public class AlphaBeta implements MoveStrategy {
     final short[] quietsSearched = searchedQuiets.get()[ply];
     int quietCount = 0;
 
-    final int moveCount = writeOrderKeys(board, ply);
     final NegamaxBuffers buffers = negamaxBuffers.get();
     final int[] generatedMoves = buffers.generated()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
@@ -1703,19 +1727,26 @@ public class AlphaBeta implements MoveStrategy {
     final long testedOrigins = testedOrigins(board, inCheckAtNode);
 
     // The transposition table move is searched first and the other moves follow in ascending key
-    // order. The keys are still in generation order here, so the move's index is its key's index.
-    boolean ttMoveFirst = false;
-    if (ttMoveCode != TranspositionTable.NO_MOVE) {
-      final int ttIndex = indexOfMoveCode(generatedMoves, moveCount, ttMoveCode);
-      if (ttIndex >= 0) {
+    // order. Most nodes that have the move cut off on it, so the other moves are generated and
+    // keyed only when the search moves past it, and until then it is the only move in the buffers.
+    final boolean ttMoveFirst = ttMoveCode != TranspositionTable.NO_MOVE &&
+            placeTableMove(board, ttMoveCode, generatedMoves, orderKeys);
+    int moveCount = ttMoveFirst ? 1 : writeOrderKeys(board, ply);
+    boolean othersKeyed = !ttMoveFirst;
+
+    for (int moveIndex = 0; moveIndex < moveCount || !othersKeyed; moveIndex++) {
+      if (!othersKeyed && moveIndex == 1) {
+        moveCount = writeOrderKeys(board, ply);
+        othersKeyed = true;
+        // The keys are still in generation order here, so the move's index is its key's index.
+        final int ttIndex = indexOfMoveCode(generatedMoves, moveCount, ttMoveCode);
         final long ttKey = orderKeys[ttIndex];
         orderKeys[ttIndex] = orderKeys[0];
         orderKeys[0] = ttKey;
-        ttMoveFirst = true;
+        if (moveIndex == moveCount) {
+          break;
+        }
       }
-    }
-
-    for (int moveIndex = 0; moveIndex < moveCount; moveIndex++) {
       // Most nodes cut off within their first few moves, so those are selected one at a time and
       // the keys left after them are sorted only when the search reaches them.
       if (moveIndex < SELECTED_MOVES) {

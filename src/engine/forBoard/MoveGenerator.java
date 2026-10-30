@@ -118,21 +118,65 @@ public final class MoveGenerator {
     int count = 0;
     for (long remaining = own; remaining != 0L; remaining &= remaining - 1) {
       final int square = Long.numberOfTrailingZeros(remaining);
-      final Piece piece = board.getPiece(square);
-      count = switch (piece.getPieceType()) {
-        case PAWN -> addPawnMoves(board, (Pawn) piece, own, occupied, quiescence, moves, count);
-        case KNIGHT -> addSteps(KNIGHT_TARGETS[square], square, own, occupied, quiescence, moves,
-                count);
-        case BISHOP -> addSlides(BISHOP_RAYS[square], square, own, occupied, quiescence, moves,
-                count);
-        case ROOK -> addSlides(ROOK_RAYS[square], square, own, occupied, quiescence, moves, count);
-        case QUEEN -> addSlides(QUEEN_RAYS[square], square, own, occupied, quiescence, moves,
-                count);
-        case KING -> addSteps(KING_TARGETS[square], square, own, occupied, quiescence, moves,
-                count);
-      };
+      count = addPieceMoves(board, board.getPiece(square), square, own, occupied, quiescence,
+              moves, count);
     }
     return quiescence ? count : addCastles(board, side, moves, count);
+  }
+
+  /**
+   * Writes the pseudo-legal moves of the given side's piece on the given square into the given
+   * array, from index zero, followed by the side's castling moves if that piece is its king. Each
+   * is a move {@link #generate} writes. A square that does not hold one of the side's pieces has
+   * no moves.
+   *
+   * @param board The board to generate on.
+   * @param side The side whose moves are generated.
+   * @param square The square of the piece whose moves are generated.
+   * @param moves The array to write into, of length at least {@link #MAX_MOVES}.
+   * @return The number of moves written.
+   */
+  public static int generateFrom(final Board board, final Alliance side, final int square,
+                                 final int[] moves) {
+    final long own = board.getOccupancy(side);
+    if ((own & (1L << square)) == 0L) {
+      return 0;
+    }
+    final Piece piece = board.getPiece(square);
+    final int count = addPieceMoves(board, piece, square, own, board.getOccupancy(), false,
+            moves, 0);
+    return piece.getPieceType() == Piece.PieceType.KING ? addCastles(board, side, moves, count)
+            : count;
+  }
+
+  /**
+   * Appends the moves of one piece, other than castling.
+   *
+   * @param board The board to generate on.
+   * @param piece The piece whose moves are appended.
+   * @param square The square the piece stands on.
+   * @param own The squares of the moving side's pieces.
+   * @param occupied The occupied squares.
+   * @param quiescence Whether to append only the moves {@link #generateQuiescence} describes.
+   * @param moves The array to append to.
+   * @param count The number of moves already in the array.
+   * @return The number of moves in the array afterwards.
+   */
+  private static int addPieceMoves(final Board board, final Piece piece, final int square,
+                                   final long own, final long occupied, final boolean quiescence,
+                                   final int[] moves, final int count) {
+    return switch (piece.getPieceType()) {
+      case PAWN -> addPawnMoves(board, (Pawn) piece, own, occupied, quiescence, moves, count);
+      case KNIGHT -> addSteps(KNIGHT_TARGETS[square], square, own, occupied, quiescence, moves,
+              count);
+      case BISHOP -> addSlides(BISHOP_RAYS[square], square, own, occupied, quiescence, moves,
+              count);
+      case ROOK -> addSlides(ROOK_RAYS[square], square, own, occupied, quiescence, moves, count);
+      case QUEEN -> addSlides(QUEEN_RAYS[square], square, own, occupied, quiescence, moves,
+              count);
+      case KING -> addSteps(KING_TARGETS[square], square, own, occupied, quiescence, moves,
+              count);
+    };
   }
 
   /**
