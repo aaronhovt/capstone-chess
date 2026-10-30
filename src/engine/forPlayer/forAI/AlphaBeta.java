@@ -1381,18 +1381,16 @@ public class AlphaBeta implements MoveStrategy {
   /**
    * Scores a position in which the side to move has no legal moves. A checkmate scores
    * {@link #MATE_VALUE} against the mated side, reduced by the ply at which it occurs so that
-   * shorter mates outrank longer ones, and a stalemate scores as a draw.
+   * shorter mates outrank longer ones, and a stalemate scores as a draw. The caller must already
+   * know that the side to move has no legal moves.
    *
-   * @param board The terminal board position.
+   * @param inCheck Whether the side to move is in check.
    * @param ply The current search ply, counted from the root.
    * @return The terminal score from the point of view of the side to move, negative when it is
    *         mated.
    */
-  private double terminalScore(final Board board, final int ply) {
-    if (!board.currentPlayer().isInCheckMate()) {
-      return 0;
-    }
-    return -(MATE_VALUE - ply);
+  private static double terminalScore(final boolean inCheck, final int ply) {
+    return inCheck ? -(MATE_VALUE - ply) : 0;
   }
 
   /**
@@ -1891,7 +1889,7 @@ public class AlphaBeta implements MoveStrategy {
     // loop can fire until three legal moves have been counted, so this can only mean the
     // position has no legal move.
     if (movesSearched == 0) {
-      return terminalScore(board, ply);
+      return terminalScore(inCheckAtNode, ply);
     }
 
     byte nodeType = TranspositionTable.EXACT;
