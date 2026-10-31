@@ -6,8 +6,9 @@ import engine.forPiece.Piece;
 /**
  * AttackDetector answers whether a given square is attacked by a given side. It reads the board's
  * bitboards: the squares a knight, a king or a pawn would attack the square from are each held as
- * a precomputed mask, and the squares a slider would attack it from are found by walking each ray
- * out of the square to its first occupied square.
+ * a precomputed mask, and the squares a slider would attack it from are looked up in a table per
+ * square, indexed by multiplying the occupied squares that could block it by a fixed magic number
+ * and keeping the top bits of the product.
  * <p>
  * A sliding piece attacks a square when it stands on one of the rays out of that square with
  * nothing in between. A knight or a king attacks a square when it stands on a square the same
@@ -83,6 +84,98 @@ public final class AttackDetector {
    */
   private static final long[][] BEYOND = computeBeyond();
 
+  /**
+   * The squares whose occupancy decides which squares a rook on each square attacks, being its
+   * rays without the square at the far end of each, indexed by square.
+   */
+  private static final long[] ROOK_MASKS = computeMasks(ORTHOGONAL_RAYS);
+
+  /**
+   * The squares whose occupancy decides which squares a bishop on each square attacks, being its
+   * rays without the square at the far end of each, indexed by square.
+   */
+  private static final long[] BISHOP_MASKS = computeMasks(DIAGONAL_RAYS);
+
+  /**
+   * The multipliers that map every occupancy of each square's {@link #ROOK_MASKS} entry to an
+   * index into its part of {@link #ROOK_TABLE}, no two occupancies with different attacks sharing
+   * an index, indexed by square.
+   */
+  private static final long[] ROOK_MAGICS = {
+      0x0080018840015420L, 0x0540100420014002L, 0x0100110008402004L, 0x0900100100200408L,
+      0x2A00200200080410L, 0x6080040002008001L, 0x4280020000800100L, 0x0180004100002480L,
+      0x0020800232400280L, 0x0189402010004001L, 0x0008802000801008L, 0x8082001008204204L,
+      0x0022000A00201004L, 0x0804802400020080L, 0x2114001001080204L, 0x0001800500004080L,
+      0x8040208000400080L, 0x4110820022420300L, 0x0000808010002002L, 0x0000090010002100L,
+      0x0000808004000802L, 0x0002008002040080L, 0x08E0040001100208L, 0x8288060000A24C03L,
+      0x8800802080004000L, 0x8090500040002000L, 0x9020010100104020L, 0x200A001200200840L,
+      0x020C000808004080L, 0x0002000200100804L, 0x0001002100141200L, 0x0080014200209904L,
+      0x0080814001800024L, 0x8410002000404002L, 0x0220A00082803000L, 0x0000080080801000L,
+      0x8404008008080040L, 0x4006000402000810L, 0x0801020804005001L, 0x4400800040800100L,
+      0x044018C221808000L, 0x1021500320044000L, 0x3006048020120041L, 0x1270008008008010L,
+      0x2054000800808004L, 0x40C1000804010002L, 0x05800208410400B0L, 0x0640508061160004L,
+      0x202040118000A280L, 0x0020084008802080L, 0x0008204080120200L, 0x4101A30210000900L,
+      0x090500C800045100L, 0x000200E4000E8080L, 0x0030500102884400L, 0x1900404401008200L,
+      0x8010800010204109L, 0x2020108900244001L, 0x9000084011002001L, 0x1042442100C81001L,
+      0x1409000210040801L, 0x0112000811041016L, 0x197A100802008104L, 0x0928840102815422L
+  };
+
+  /**
+   * The multipliers that map every occupancy of each square's {@link #BISHOP_MASKS} entry to an
+   * index into its part of {@link #BISHOP_TABLE}, no two occupancies with different attacks
+   * sharing an index, indexed by square.
+   */
+  private static final long[] BISHOP_MAGICS = {
+      0x21120C2C08020020L, 0x0002102101010003L, 0x20040104210CA000L, 0xBC04040088400808L,
+      0x0241104100000001L, 0x2131140240401400L, 0x000844306C1000A0L, 0x6014808080904004L,
+      0x00412120022A0040L, 0x0800600811404281L, 0x0000100404803800L, 0xC020180600420000L,
+      0x0106011040842800L, 0x1000811008040014L, 0x1100020104024020L, 0x90080088A4100200L,
+      0x0040809202080128L, 0x004800206800C080L, 0x0008004108010112L, 0x400800040125A040L,
+      0x1214006C80A00604L, 0x0202004040502400L, 0x005080A402011048L, 0x00020A0D80A40100L,
+      0x08A010282064110CL, 0x1101206008280100L, 0x8080208010008080L, 0x0940802018020120L,
+      0x0021004004004040L, 0x0202830012010480L, 0x000C240088860106L, 0x080212000821010AL,
+      0x0050042000120200L, 0x4101042080100100L, 0x1008140482100300L, 0x4000020081080080L,
+      0x00A4010012440040L, 0x0401C0A5000A0062L, 0x0010010044020240L, 0x2091234200010510L,
+      0x0004044440820401L, 0x00004C0220002880L, 0x8000108401001000L, 0x0000314208000380L,
+      0x0820180104001441L, 0x111020020C100820L, 0x1410238304108502L, 0xC008090402804C30L,
+      0x0C0041041040001BL, 0x2003A88230108021L, 0x0040050041100980L, 0x0010000308480208L,
+      0x2020009002022800L, 0x0608081090208004L, 0x0684080898088000L, 0x0204100202002818L,
+      0x00C0410808420200L, 0x2014010048020802L, 0x100C0C0042080420L, 0x010808812C840408L,
+      0x0009000110221202L, 0x0C00004248010104L, 0x0000125001110C10L, 0x22082004C20D4100L
+  };
+
+  /**
+   * The right shift that leaves a rook index from a masked occupancy times its magic,
+   * indexed by square.
+   */
+  private static final int[] ROOK_SHIFTS = computeShifts(ROOK_MASKS);
+
+  /**
+   * The right shift that leaves a bishop index from a masked occupancy times its magic,
+   * indexed by square.
+   */
+  private static final int[] BISHOP_SHIFTS = computeShifts(BISHOP_MASKS);
+
+  /**
+   * The start of each square's part of {@link #ROOK_TABLE}, indexed by square, followed by the
+   * table's length.
+   */
+  private static final int[] ROOK_OFFSETS = computeOffsets(ROOK_MASKS);
+
+  /**
+   * The start of each square's part of {@link #BISHOP_TABLE}, indexed by square, followed by the
+   * table's length.
+   */
+  private static final int[] BISHOP_OFFSETS = computeOffsets(BISHOP_MASKS);
+
+  /** The squares a rook attacks, for every square and every occupancy of its mask. */
+  private static final long[] ROOK_TABLE = computeTable(ORTHOGONAL_RAYS, ROOK_MASKS, ROOK_MAGICS,
+          ROOK_SHIFTS, ROOK_OFFSETS);
+
+  /** The squares a bishop attacks, for every square and every occupancy of its mask. */
+  private static final long[] BISHOP_TABLE = computeTable(DIAGONAL_RAYS, BISHOP_MASKS,
+          BISHOP_MAGICS, BISHOP_SHIFTS, BISHOP_OFFSETS);
+
   /** The squares from which a knight attacks each square, indexed by square. */
   private static final long[] KNIGHT_ATTACKERS =
           computeStepAttackers(KNIGHT_FILE_STEPS, KNIGHT_RANK_STEPS);
@@ -126,9 +219,7 @@ public final class AttackDetector {
     final long queens = board.getPieces(attackerAlliance, Piece.PieceType.QUEEN);
     final long diagonalSliders = board.getPieces(attackerAlliance, Piece.PieceType.BISHOP) | queens;
     final long orthogonalSliders = board.getPieces(attackerAlliance, Piece.PieceType.ROOK) | queens;
-    final long occupancy = board.getOccupancy();
-    return sliderBears(DIAGONAL_RAYS, DIAGONAL_LINES, square, occupancy, diagonalSliders) ||
-            sliderBears(ORTHOGONAL_RAYS, ORTHOGONAL_LINES, square, occupancy, orthogonalSliders);
+    return sliderBears(square, board.getOccupancy(), diagonalSliders, orthogonalSliders);
   }
 
   /**
@@ -185,8 +276,7 @@ public final class AttackDetector {
       occupancy &= ~(1L << board.getEnPassantPawn().getPiecePosition());
     }
 
-    return sliderBears(DIAGONAL_RAYS, DIAGONAL_LINES, kingSquare, occupancy, diagonalSliders) ||
-            sliderBears(ORTHOGONAL_RAYS, ORTHOGONAL_LINES, kingSquare, occupancy, orthogonalSliders);
+    return sliderBears(kingSquare, occupancy, diagonalSliders, orthogonalSliders);
   }
 
   /**
@@ -236,8 +326,8 @@ public final class AttackDetector {
                     board.getPieces(Alliance.BLACK, Piece.PieceType.KNIGHT))) |
             (KING_ATTACKERS[square] & (board.getPieces(Alliance.WHITE, Piece.PieceType.KING) |
                     board.getPieces(Alliance.BLACK, Piece.PieceType.KING))) |
-            (nearestOnRays(DIAGONAL_RAYS, square, occupancy) & diagonalSliders) |
-            (nearestOnRays(ORTHOGONAL_RAYS, square, occupancy) & orthogonalSliders);
+            (bishopAttacks(square, occupancy) & diagonalSliders) |
+            (rookAttacks(square, occupancy) & orthogonalSliders);
   }
 
   /**
@@ -311,7 +401,8 @@ public final class AttackDetector {
    * @return The attacked squares, as one bit per tile.
    */
   public static long bishopAttacks(final int square, final long occupancy) {
-    return slideAttacks(DIAGONAL_RAYS, square, occupancy);
+    return BISHOP_TABLE[BISHOP_OFFSETS[square] + (int) (((occupancy & BISHOP_MASKS[square]) *
+            BISHOP_MAGICS[square]) >>> BISHOP_SHIFTS[square])];
   }
 
   /**
@@ -323,7 +414,8 @@ public final class AttackDetector {
    * @return The attacked squares, as one bit per tile.
    */
   public static long rookAttacks(final int square, final long occupancy) {
-    return slideAttacks(ORTHOGONAL_RAYS, square, occupancy);
+    return ROOK_TABLE[ROOK_OFFSETS[square] + (int) (((occupancy & ROOK_MASKS[square]) *
+            ROOK_MAGICS[square]) >>> ROOK_SHIFTS[square])];
   }
 
   /**
@@ -353,55 +445,22 @@ public final class AttackDetector {
   }
 
   /**
-   * Returns the nearest occupied square on each of the given rays out of the given square.
+   * Determines whether any of the given diagonal sliders stands on a diagonal out of the given
+   * square, or any of the given orthogonal sliders on a rank or file out of it, with nothing in
+   * between.
    *
-   * @param rays The rays out of each square, indexed by square and then by direction.
-   * @param square The square the rays lead out of.
+   * @param square The square the lines lead out of.
    * @param occupancy The occupied squares, as one bit per tile.
-   * @return The nearest occupied square on each ray, as one bit per tile.
+   * @param diagonalSliders The squares of the bishops and queens looked for, as one bit per tile.
+   * @param orthogonalSliders The squares of the rooks and queens looked for, as one bit per tile.
+   * @return True if such a slider bears on the square, false otherwise.
    */
-  private static long nearestOnRays(final long[][] rays, final int square, final long occupancy) {
-    long nearest = 0L;
-    final long[] squareRays = rays[square];
-    for (int direction = 0; direction < squareRays.length; direction++) {
-      final long blockers = squareRays[direction] & occupancy;
-      if (blockers != 0L) {
-        nearest |= 1L << (direction < DECREASING_DIRECTIONS ?
-                63 - Long.numberOfLeadingZeros(blockers) : Long.numberOfTrailingZeros(blockers));
-      }
-    }
-    return nearest;
-  }
-
-  /**
-   * Determines whether any of the given sliders stands at the near end of one of the given rays
-   * out of the given square, with nothing in between.
-   *
-   * @param rays The rays out of each square, indexed by square and then by direction.
-   * @param lines Every square on those rays out of each square, indexed by square.
-   * @param square The square the rays lead out of.
-   * @param occupancy The occupied squares, as one bit per tile.
-   * @param sliders The squares of the sliders looked for, as one bit per tile.
-   * @return True if such a slider bears along one of the rays, false otherwise.
-   */
-  private static boolean sliderBears(final long[][] rays, final long[] lines, final int square,
-                                     final long occupancy, final long sliders) {
-    if ((lines[square] & sliders) == 0L) {
-      return false;
-    }
-    final long[] squareRays = rays[square];
-    for (int direction = 0; direction < squareRays.length; direction++) {
-      final long blockers = squareRays[direction] & occupancy;
-      if (blockers == 0L) {
-        continue;
-      }
-      final int nearest = direction < DECREASING_DIRECTIONS ?
-              63 - Long.numberOfLeadingZeros(blockers) : Long.numberOfTrailingZeros(blockers);
-      if ((sliders & (1L << nearest)) != 0L) {
-        return true;
-      }
-    }
-    return false;
+  private static boolean sliderBears(final int square, final long occupancy,
+                                     final long diagonalSliders, final long orthogonalSliders) {
+    return ((DIAGONAL_LINES[square] & diagonalSliders) != 0L &&
+            (bishopAttacks(square, occupancy) & diagonalSliders) != 0L) ||
+            ((ORTHOGONAL_LINES[square] & orthogonalSliders) != 0L &&
+                    (rookAttacks(square, occupancy) & orthogonalSliders) != 0L);
   }
 
   /**
@@ -532,6 +591,88 @@ public final class AttackDetector {
       }
     }
     return beyond;
+  }
+
+  /**
+   * Computes, for every square, the given rays out of it without the square at the far end of
+   * each, which is attacked whether or not it is occupied.
+   *
+   * @param rays The rays out of each square, indexed by square and then by direction.
+   * @return The masks, indexed by square, as one bit per tile.
+   */
+  private static long[] computeMasks(final long[][] rays) {
+    final long[] masks = new long[BoardUtils.NUM_TILES];
+    for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
+      for (int direction = 0; direction < rays[square].length; direction++) {
+        final long ray = rays[square][direction];
+        final long farthest = direction < DECREASING_DIRECTIONS ? Long.lowestOneBit(ray)
+                : Long.highestOneBit(ray);
+        masks[square] |= ray & ~farthest;
+      }
+    }
+    return masks;
+  }
+
+  /**
+   * Computes, for every square, the right shift that keeps as many top bits of a product as the
+   * square's mask has squares.
+   *
+   * @param masks The masks, indexed by square.
+   * @return The shifts, indexed by square.
+   */
+  private static int[] computeShifts(final long[] masks) {
+    final int[] shifts = new int[BoardUtils.NUM_TILES];
+    for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
+      shifts[square] = Long.SIZE - Long.bitCount(masks[square]);
+    }
+    return shifts;
+  }
+
+  /**
+   * Computes where each square's part of an attack table starts, each part holding one entry per
+   * occupancy of the square's mask.
+   *
+   * @param masks The masks, indexed by square.
+   * @return The start of each square's part, indexed by square, followed by the table's length.
+   */
+  private static int[] computeOffsets(final long[] masks) {
+    final int[] offsets = new int[BoardUtils.NUM_TILES + 1];
+    for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
+      offsets[square + 1] = offsets[square] + (1 << Long.bitCount(masks[square]));
+    }
+    return offsets;
+  }
+
+  /**
+   * Computes the attack table for a slider moving along the given rays, filling the entry each
+   * occupancy of each square's mask indexes with the squares the slider attacks from that square.
+   *
+   * @param rays The rays out of each square, indexed by square and then by direction.
+   * @param masks The masks, indexed by square.
+   * @param magics The magic multipliers, indexed by square.
+   * @param shifts The right shifts, indexed by square.
+   * @param offsets The start of each square's part of the table, followed by the table's length.
+   * @return The attack table.
+   * @throws IllegalStateException If a magic multiplier indexes the same entry from two
+   *         occupancies with different attacks.
+   */
+  private static long[] computeTable(final long[][] rays, final long[] masks, final long[] magics,
+                                     final int[] shifts, final int[] offsets) {
+    final long[] table = new long[offsets[BoardUtils.NUM_TILES]];
+    for (int square = 0; square < BoardUtils.NUM_TILES; square++) {
+      final long mask = masks[square];
+      long subset = 0L;
+      do {
+        final long attacks = slideAttacks(rays, square, subset);
+        final int index = offsets[square] + (int) ((subset * magics[square]) >>> shifts[square]);
+        if (table[index] != 0L && table[index] != attacks) {
+          throw new IllegalStateException("The magic for square " + square + " collides.");
+        }
+        table[index] = attacks;
+        subset = (subset - mask) & mask;
+      } while (subset != 0L);
+    }
+    return table;
   }
 
   /**
