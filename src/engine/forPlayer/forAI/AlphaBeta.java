@@ -1505,6 +1505,85 @@ public class AlphaBeta implements MoveStrategy {
   }
 
   /**
+   * Returns whether late move pruning or quiet move futility skips every quiet move that does not
+   * give check from this point of a main search node's move loop until the node returns, whatever
+   * order the remaining moves are taken in. A quiet move here is one that neither captures nor
+   * promotes. The arguments are the node's values at this point of its move loop.
+   *
+   * @param depth The remaining search depth at the node.
+   * @param movesSearched The number of legal moves already searched at the node.
+   * @param inCheckAtNode Whether the side to move at the node is in check.
+   * @param alpha The alpha bound of the node, as narrowed by the transposition table.
+   * @param beta The beta bound of the node, as narrowed by the transposition table.
+   * @param currentAlpha The best score found so far at the node, or alpha if none is better.
+   * @param staticEval The static evaluation of the node.
+   * @return True if every quiet move that does not give check is skipped from here on.
+   */
+  private static boolean quietMovesPrunedFromHere(final int depth, final int movesSearched,
+                                                  final boolean inCheckAtNode, final double alpha,
+                                                  final double beta, final double currentAlpha,
+                                                  final double staticEval) {
+    if (inCheckAtNode) {
+      return false;
+    }
+    return lateMovePruningActive(depth, movesSearched, alpha)
+            || (depth <= QUIET_FUTILITY_DEPTH
+                && movesSearched > 0
+                && currentAlpha - staticEval >= depth * QUIET_FUTILITY_MARGIN
+                && beta <= MATE_THRESHOLD);
+  }
+
+  /**
+   * Returns whether late move pruning skips every quiet move that does not give check at a main
+   * search node that is not in check. A quiet move here is one that neither captures nor promotes.
+   *
+   * @param depth The remaining search depth at the node.
+   * @param movesSearched The number of legal moves already searched at the node.
+   * @param alpha The alpha bound of the node, as narrowed by the transposition table.
+   * @return True if late move pruning skips those moves.
+   */
+  private static boolean lateMovePruningActive(final int depth, final int movesSearched,
+                                               final double alpha) {
+    return depth <= LATE_MOVE_PRUNING_DEPTH
+            && movesSearched >= 3 + depth * depth
+            && alpha > -MATE_THRESHOLD;
+  }
+
+  /**
+   * Removes from the ordering keys between the given index and the given count those of quiet
+   * moves that do not give check, keeping the other keys in their order from the given index on.
+   * A quiet move here is one that neither captures nor promotes.
+   *
+   * @param board The current board position.
+   * @param generated The ply's generated move buffer the keys refer to.
+   * @param keys The ply's ordering keys.
+   * @param from The index of the first key to filter.
+   * @param count The number of leading entries of keys that hold a key.
+   * @param lateMoves Whether the removed moves are counted as late move skips rather than as
+   *                  futile move skips, when {@link #COLLECT_STATISTICS} is set.
+   * @return The number of leading entries of keys that hold a key afterwards.
+   */
+  private static int dropQuietNonChecks(final Board board, final int[] generated,
+                                        final long[] keys, final int from, final int count,
+                                        final boolean lateMoves) {
+    int kept = from;
+    for (int i = from; i < count; i++) {
+      final int move = generated[moveIndexOf(keys[i])];
+      if (MoveCode.isCapture(move) || MoveCode.promotionType(move) != null
+              || AttackDetector.givesCheck(board, move)) {
+        keys[kept++] = keys[i];
+      } else if (COLLECT_STATISTICS) {
+        if (lateMoves) {
+          statistics().lateMoveSkip();
+        } else {
+          statistics().futileMoveSkip();
+        }
+      }
+    }
+    return kept;
+  }
+
+  /**
    * Returns whether the static evaluation of a node is higher than that of the last node before it
    * on the search path with the same side to move and not in check, looking back two plies and
    * then four. A node with no such earlier node counts as improving.
@@ -1744,6 +1823,10 @@ public class AlphaBeta implements MoveStrategy {
             placeTableMove(board, ttMoveCode, generatedMoves, orderKeys);
     int moveCount = ttMoveFirst ? 1 : writeOrderKeys(state, board, ply);
     boolean othersKeyed = !ttMoveFirst;
+    final boolean quietPruning = !inCheckAtNode
+            && (depth <= LATE_MOVE_PRUNING_DEPTH || depth <= QUIET_FUTILITY_DEPTH);
+    boolean keysSorted = false;
+    boolean quietsDropped = false;
 
     for (int moveIndex = 0; moveIndex < moveCount || !othersKeyed; moveIndex++) {
       if (!othersKeyed && moveIndex == 1) {
@@ -1759,13 +1842,30 @@ public class AlphaBeta implements MoveStrategy {
         }
       }
       // Most nodes cut off within their first few moves, so those are selected one at a time and
-      // the keys left after them are sorted only when the search reaches them.
-      if (moveIndex < SELECTED_MOVES) {
-        if (moveIndex > 0 || !ttMoveFirst) {
-          selectSmallestKey(orderKeys, moveIndex, moveCount);
+      // the keys left after them are sorted only when the search reaches them. Once every quiet
+      // move left that does not give check is going to be skipped, the order among those moves
+      // cannot matter, so their keys are dropped and only the keys left are put in order.
+      if (quietPruning && !quietsDropped && quietMovesPrunedFromHere(depth, movesSearched,
+              inCheckAtNode, alpha, beta, currentAlpha, staticEval)) {
+        moveCount = dropQuietNonChecks(board, generatedMoves, orderKeys, moveIndex, moveCount,
+                lateMovePruningActive(depth, movesSearched, alpha));
+        quietsDropped = true;
+        if (!keysSorted) {
+          Arrays.sort(orderKeys, moveIndex, moveCount);
+          keysSorted = true;
         }
-      } else if (moveIndex == SELECTED_MOVES) {
-        Arrays.sort(orderKeys, moveIndex, moveCount);
+        if (moveIndex == moveCount) {
+          break;
+        }
+      } else if (!keysSorted) {
+        if (moveIndex < SELECTED_MOVES) {
+          if (moveIndex > 0 || !ttMoveFirst) {
+            selectSmallestKey(orderKeys, moveIndex, moveCount);
+          }
+        } else {
+          Arrays.sort(orderKeys, moveIndex, moveCount);
+          keysSorted = true;
+        }
       }
       final long orderKey = orderKeys[moveIndex];
       final int move = generatedMoves[moveIndexOf(orderKey)];
