@@ -74,8 +74,11 @@ public class AlphaBeta implements MoveStrategy {
   /** The depth of the deepest iteration the most recent search finished. */
   private volatile int lastDepth;
 
-  /** Thread-local search statistics for tracking per-thread performance metrics. */
-  private final ThreadLocal<SearchStats> threadStats = new ThreadLocal<>();
+  /**
+   * The search state of each thread that searches for this engine. A thread's state is created on
+   * its first search and kept for the life of the engine.
+   */
+  private final ThreadLocal<ThreadState> threadStates = ThreadLocal.withInitial(ThreadState::new);
 
   /** The number of search threads, including the thread that calls the search. */
   private final int threadCount;
@@ -115,36 +118,47 @@ public class AlphaBeta implements MoveStrategy {
    */
   private static final int MAX_TRACKED_QUIETS = 64;
 
-  /**
-   * The {@link TranspositionTable#moveCode codes} of the quiet moves searched so far at each ply,
-   * held so that a cutoff can penalize the quiet moves that were searched before it. A ply's
-   * entries are meaningful only up to the count kept by the node searching at that ply.
-   */
-  private final ThreadLocal<short[][]> searchedQuiets = ThreadLocal.withInitial(() ->
-          new short[MAX_SEARCH_DEPTH][MAX_TRACKED_QUIETS]);
+  /** The state one thread searches with, which no other thread reads or writes. */
+  private static final class ThreadState {
+    /**
+     * The statistics of the search the thread is running, replaced at the start of each main
+     * search and of each helper iteration.
+     */
+    SearchStats stats;
 
-  /**
-   * The static evaluation of the node at each ply from the point of view of its side to move, or
-   * NaN for a node in check. A ply's entry is meaningful only for the node on the current search
-   * path at that ply, which writes it before it searches any move.
-   */
-  private final ThreadLocal<double[]> staticEvals = ThreadLocal.withInitial(() ->
-          new double[MAX_SEARCH_DEPTH]);
+    /**
+     * The {@link TranspositionTable#moveCode codes} of the quiet moves searched so far at each
+     * ply, held so that a cutoff can penalize the quiet moves that were searched before it. A
+     * ply's entries are meaningful only up to the count kept by the node searching at that ply.
+     */
+    final short[][] searchedQuiets = new short[MAX_SEARCH_DEPTH][MAX_TRACKED_QUIETS];
 
-  /**
-   * The arrays a quiescence node at each ply writes its moves, their static exchange scores and
-   * their ordering keys into. A ply's entries are meaningful only while the node at that ply is
-   * searching its moves.
-   */
-  private final ThreadLocal<QuiescenceBuffers> quiescenceBuffers =
-          ThreadLocal.withInitial(QuiescenceBuffers::new);
+    /**
+     * The static evaluation of the node at each ply from the point of view of its side to move,
+     * or NaN for a node in check. A ply's entry is meaningful only for the node on the current
+     * search path at that ply, which writes it before it searches any move.
+     */
+    final double[] staticEvals = new double[MAX_SEARCH_DEPTH];
 
-  /**
-   * The arrays a node of the main search at each ply generates and orders its moves in. A ply's
-   * entries are meaningful only while the node at that ply is searching its moves.
-   */
-  private final ThreadLocal<NegamaxBuffers> negamaxBuffers =
-          ThreadLocal.withInitial(NegamaxBuffers::new);
+    /**
+     * The arrays a quiescence node at each ply writes its moves, their static exchange scores and
+     * their ordering keys into. A ply's entries are meaningful only while the node at that ply is
+     * searching its moves.
+     */
+    final QuiescenceBuffers quiescenceBuffers = new QuiescenceBuffers();
+
+    /**
+     * The arrays a node of the main search at each ply generates and orders its moves in. A ply's
+     * entries are meaningful only while the node at that ply is searching its moves.
+     */
+    final NegamaxBuffers negamaxBuffers = new NegamaxBuffers();
+
+    /**
+     * Killer moves table storing the {@link TranspositionTable#moveCode codes} of good non-capture
+     * moves for each search ply, with {@link TranspositionTable#NO_MOVE} where none is held.
+     */
+    final short[][] killers = new short[2][MAX_SEARCH_DEPTH];
+  }
 
   /**
    * The per ply arrays of the main search, indexed by ply and then by move.
@@ -178,13 +192,6 @@ public class AlphaBeta implements MoveStrategy {
               new long[MAX_SEARCH_DEPTH][MoveGenerator.MAX_MOVES]);
     }
   }
-
-  /**
-   * Killer moves table storing the {@link TranspositionTable#moveCode codes} of good non-capture
-   * moves for each search ply, with {@link TranspositionTable#NO_MOVE} where none is held.
-   */
-  private final ThreadLocal<short[][]> killerMoves = ThreadLocal.withInitial(() ->
-          new short[2][MAX_SEARCH_DEPTH]);
 
   /**
    * Countermove table holding, for each origin and destination square of an opponent move at
@@ -442,16 +449,17 @@ public class AlphaBeta implements MoveStrategy {
    * bad captures; captures are ordered by static exchange score. The keys are distinct, and
    * {@link #moveIndexOf} and {@link #exchangeScoreOf} read a key's move and exchange score.
    *
+   * @param state The state of the calling thread.
    * @param board The current board position.
    * @param ply The current search ply.
    * @return The number of moves written.
    */
-  private int writeOrderKeys(final Board board, final int ply) {
-    final NegamaxBuffers buffers = negamaxBuffers.get();
+  private int writeOrderKeys(final ThreadState state, final Board board, final int ply) {
+    final NegamaxBuffers buffers = state.negamaxBuffers;
     final int[] generated = buffers.generated()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
     final int count = MoveGenerator.generate(board, board.currentPlayer().getAlliance(), generated);
-    final short[][] killers = killerMoves.get();
+    final short[][] killers = state.killers;
     final int counter = counterMoveOf(board);
     final int historySide = historySideOf(board);
 
@@ -759,7 +767,7 @@ public class AlphaBeta implements MoveStrategy {
     final List<Future<?>> helpers = startHelperSearches(board, searchDepth);
 
     final SearchStats stats = new SearchStats();
-    this.threadStats.set(stats);
+    this.threadStates.get().stats = stats;
 
     try {
       for (int currentDepth = 1; currentDepth <= searchDepth && !searchStopped; currentDepth++) {
@@ -941,7 +949,7 @@ public class AlphaBeta implements MoveStrategy {
 
     for (int depth = 1 + (helperId % 2); depth <= searchDepth && !searchStopped; depth++) {
       final SearchStats stats = new SearchStats();
-      this.threadStats.set(stats);
+      this.threadStates.get().stats = stats;
       try {
         bestMove = searchRoot(board, depth, -Double.MAX_VALUE, Double.MAX_VALUE, bestMove).move();
       } finally {
@@ -1167,11 +1175,11 @@ public class AlphaBeta implements MoveStrategy {
       statistics().aspirationStarted();
     }
     for (int attempt = 0; attempt < 2; attempt++) {
-      final long attemptStart = COLLECT_STATISTICS ? threadStats.get().boardsEvaluated : 0;
+      final long attemptStart = COLLECT_STATISTICS ? threadStates.get().stats.boardsEvaluated : 0;
       final RootResult result = searchRoot(board, depth, alpha, beta, previousBestMove);
       if (COLLECT_STATISTICS) {
         final boolean settled = this.searchStopped;
-        statistics().aspirationAttempt(threadStats.get().boardsEvaluated - attemptStart,
+        statistics().aspirationAttempt(threadStates.get().stats.boardsEvaluated - attemptStart,
                 !settled && result.score() <= alpha, !settled && result.score() >= beta);
       }
 
@@ -1190,10 +1198,11 @@ public class AlphaBeta implements MoveStrategy {
 
     if (COLLECT_STATISTICS) {
       statistics().aspirationFullWindow();
-      final long attemptStart = threadStats.get().boardsEvaluated;
+      final long attemptStart = threadStates.get().stats.boardsEvaluated;
       final RootResult result =
               searchRoot(board, depth, -Double.MAX_VALUE, Double.MAX_VALUE, previousBestMove);
-      statistics().aspirationAttempt(threadStats.get().boardsEvaluated - attemptStart, false, false);
+      statistics().aspirationAttempt(threadStates.get().stats.boardsEvaluated - attemptStart,
+              false, false);
       return result;
     }
     return searchRoot(board, depth, -Double.MAX_VALUE, Double.MAX_VALUE, previousBestMove);
@@ -1237,7 +1246,8 @@ public class AlphaBeta implements MoveStrategy {
       }
     }
 
-    staticEvals.get()[0] = board.currentPlayer().isInCheck() ? Double.NaN :
+    final ThreadState state = threadStates.get();
+    state.staticEvals[0] = board.currentPlayer().isInCheck() ? Double.NaN :
             evaluateForSideToMove(board);
 
     int bestMove = MoveCode.NONE;
@@ -1258,11 +1268,12 @@ public class AlphaBeta implements MoveStrategy {
       double score;
       try {
         if (firstMove) {
-          score = -negamax(board, depth - 1, -beta, -bestScore, 1, true);
+          score = -negamax(state, board, depth - 1, -beta, -bestScore, 1, true);
         } else {
-          score = -negamax(board, depth - 1, -(bestScore + ZERO_WINDOW), -bestScore, 1, true);
+          score = -negamax(state, board, depth - 1, -(bestScore + ZERO_WINDOW), -bestScore, 1,
+                  true);
           if (score > bestScore && score < beta) {
-            score = -negamax(board, depth - 1, -beta, -bestScore, 1, true);
+            score = -negamax(state, board, depth - 1, -beta, -bestScore, 1, true);
           }
         }
       } finally {
@@ -1585,6 +1596,7 @@ public class AlphaBeta implements MoveStrategy {
    * of this engine. Scores, bounds and the returned value are all from the point of view of the
    * side to move.
    *
+   * @param state The state of the calling thread.
    * @param board The current board position.
    * @param depth The remaining search depth.
    * @param alpha The alpha bound.
@@ -1593,9 +1605,9 @@ public class AlphaBeta implements MoveStrategy {
    * @param nullMoveAllowed Whether a null move may be played at this node.
    * @return The score of the position for the side to move.
    */
-  private double negamax(final Board board, int depth, double alpha, double beta, int ply,
-                         boolean nullMoveAllowed) {
-    SearchStats stats = threadStats.get();
+  private double negamax(final ThreadState state, final Board board, int depth, double alpha,
+                         double beta, int ply, boolean nullMoveAllowed) {
+    SearchStats stats = state.stats;
     stats.boardsEvaluated++;
     if (COLLECT_STATISTICS) {
       statistics().negamaxEntered(depth);
@@ -1607,10 +1619,10 @@ public class AlphaBeta implements MoveStrategy {
     if (ply > 0 && isDrawnByRule(board)) {
       return 0;
     } if (searchStopped) {
-      return depth <= 0 ? quiescenceSearch(board, alpha, beta, ply) :
+      return depth <= 0 ? quiescenceSearch(state, board, alpha, beta, ply) :
               evaluateForSideToMove(board);
     } if (depth <= 0) {
-      return quiescenceSearch(board, alpha, beta, ply);
+      return quiescenceSearch(state, board, alpha, beta, ply);
     } if (ply >= MAX_PLY) {
       return evaluateForSideToMove(board);
     }
@@ -1643,7 +1655,7 @@ public class AlphaBeta implements MoveStrategy {
 
     final boolean inCheckAtNode = board.currentPlayer().isInCheck();
     final double staticEval = inCheckAtNode ? Double.NaN : evaluateForSideToMove(board);
-    final double[] evals = staticEvals.get();
+    final double[] evals = state.staticEvals;
     evals[ply] = staticEval;
     final boolean improving = !inCheckAtNode && isImproving(evals, ply, staticEval);
 
@@ -1654,7 +1666,7 @@ public class AlphaBeta implements MoveStrategy {
         if (COLLECT_STATISTICS) {
           statistics().razored();
         }
-        return quiescenceSearch(board, alpha, beta, ply);
+        return quiescenceSearch(state, board, alpha, beta, ply);
       }
     }
 
@@ -1678,13 +1690,14 @@ public class AlphaBeta implements MoveStrategy {
       }
       board.makeNullMove();
       try {
-        nullMoveScore = -negamax(board, depth - 1 - R, -beta, -(beta - ZERO_WINDOW), ply + 1, false);
+        nullMoveScore = -negamax(state, board, depth - 1 - R, -beta, -(beta - ZERO_WINDOW),
+                ply + 1, false);
       } finally {
         board.unmakeNullMove();
       }
       if (nullMoveScore >= beta) {
         final boolean verified = depth < NULL_MOVE_VERIFICATION_DEPTH
-                || negamax(board, depth - R, beta - ZERO_WINDOW, beta, ply, false) >= beta;
+                || negamax(state, board, depth - R, beta - ZERO_WINDOW, beta, ply, false) >= beta;
         if (COLLECT_STATISTICS && depth >= NULL_MOVE_VERIFICATION_DEPTH) {
           statistics().verification(!verified);
         }
@@ -1713,12 +1726,12 @@ public class AlphaBeta implements MoveStrategy {
     double currentAlpha = alpha;
     boolean firstMove = true;
     int bestFoundMove = MoveCode.NONE;
-    final short[][] killers = killerMoves.get();
+    final short[][] killers = state.killers;
     int movesSearched = 0;
-    final short[] quietsSearched = searchedQuiets.get()[ply];
+    final short[] quietsSearched = state.searchedQuiets[ply];
     int quietCount = 0;
 
-    final NegamaxBuffers buffers = negamaxBuffers.get();
+    final NegamaxBuffers buffers = state.negamaxBuffers;
     final int[] generatedMoves = buffers.generated()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
     final int historySide = historySideOf(board);
@@ -1729,12 +1742,12 @@ public class AlphaBeta implements MoveStrategy {
     // keyed only when the search moves past it, and until then it is the only move in the buffers.
     final boolean ttMoveFirst = ttMoveCode != TranspositionTable.NO_MOVE &&
             placeTableMove(board, ttMoveCode, generatedMoves, orderKeys);
-    int moveCount = ttMoveFirst ? 1 : writeOrderKeys(board, ply);
+    int moveCount = ttMoveFirst ? 1 : writeOrderKeys(state, board, ply);
     boolean othersKeyed = !ttMoveFirst;
 
     for (int moveIndex = 0; moveIndex < moveCount || !othersKeyed; moveIndex++) {
       if (!othersKeyed && moveIndex == 1) {
-        moveCount = writeOrderKeys(board, ply);
+        moveCount = writeOrderKeys(state, board, ply);
         othersKeyed = true;
         // The keys are still in generation order here, so the move's index is its key's index.
         final int ttIndex = indexOfMoveCode(generatedMoves, moveCount, ttMoveCode);
@@ -1805,7 +1818,7 @@ public class AlphaBeta implements MoveStrategy {
         }
 
         if (firstMove) {
-          currentValue = -negamax(board, newDepth, -beta, -currentAlpha, ply + 1, true);
+          currentValue = -negamax(state, board, newDepth, -beta, -currentAlpha, ply + 1, true);
         } else {
           int reduction = 0;
           if (depth >= 3 && movesSearched >= 4 && !capture && !inCheckAtNode) {
@@ -1824,8 +1837,8 @@ public class AlphaBeta implements MoveStrategy {
           if (COLLECT_STATISTICS) {
             statistics().zeroWindowSearch(reduction > 0);
           }
-          currentValue = -negamax(board, newDepth - reduction, -(currentAlpha + 0.1), -currentAlpha,
-                  ply + 1, true);
+          currentValue = -negamax(state, board, newDepth - reduction, -(currentAlpha + 0.1),
+                  -currentAlpha, ply + 1, true);
 
           // A reduced search that raises alpha is not evidence at this node's depth, so the move
           // is searched again against the same window at its unreduced depth before its score is
@@ -1835,7 +1848,7 @@ public class AlphaBeta implements MoveStrategy {
             if (COLLECT_STATISTICS) {
               statistics().reductionReSearch();
             }
-            currentValue = -negamax(board, newDepth, -(currentAlpha + 0.1), -currentAlpha,
+            currentValue = -negamax(state, board, newDepth, -(currentAlpha + 0.1), -currentAlpha,
                     ply + 1, true);
           }
 
@@ -1843,7 +1856,7 @@ public class AlphaBeta implements MoveStrategy {
             if (COLLECT_STATISTICS) {
               statistics().windowReSearch();
             }
-            currentValue = -negamax(board, newDepth, -beta, -currentAlpha, ply + 1, true);
+            currentValue = -negamax(state, board, newDepth, -beta, -currentAlpha, ply + 1, true);
           }
         }
       } finally {
@@ -1923,14 +1936,16 @@ public class AlphaBeta implements MoveStrategy {
    *
    * Scores, bounds and the returned value are all from the point of view of the side to move.
    *
+   * @param state The state of the calling thread.
    * @param board The current board position.
    * @param alpha The alpha bound.
    * @param beta The beta bound.
    * @param ply The current search ply.
    * @return The quiescence search score of the position for the side to move.
    */
-  private double quiescenceSearch(Board board, double alpha, double beta, int ply) {
-    SearchStats stats = threadStats.get();
+  private double quiescenceSearch(final ThreadState state, Board board, double alpha, double beta,
+                                  int ply) {
+    SearchStats stats = state.stats;
     stats.boardsEvaluated++;
     if (COLLECT_STATISTICS) {
       statistics().quiescenceEntered();
@@ -1976,7 +1991,7 @@ public class AlphaBeta implements MoveStrategy {
       if (COLLECT_STATISTICS) {
         statistics().quiescenceInCheck();
       }
-      return negamax(board, 1, alpha, beta, ply, true);
+      return negamax(state, board, 1, alpha, beta, ply, true);
     }
 
     final double originalAlpha = alpha;
@@ -1994,7 +2009,7 @@ public class AlphaBeta implements MoveStrategy {
     }
     if (standPat > alpha) alpha = standPat;
 
-    final QuiescenceBuffers buffers = quiescenceBuffers.get();
+    final QuiescenceBuffers buffers = state.quiescenceBuffers;
     final int[] captures = buffers.moves()[ply];
     final int[] captureSeeScores = buffers.exchangeScores()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
@@ -2057,7 +2072,7 @@ public class AlphaBeta implements MoveStrategy {
 
       double score;
       try {
-        score = -quiescenceSearch(board, -beta, -alpha, ply + 1);
+        score = -quiescenceSearch(state, board, -beta, -alpha, ply + 1);
       } finally {
         board.unmakeMove(move);
       }
