@@ -186,12 +186,18 @@ seeds can add to one file.
 the network to a blend of the search score and the game result and writes the quantised network
 every few epochs. `trainer/nnue.py` defines the network, its file format, and an integer reference
 evaluation that the engine's implementation reproduces exactly. `trainer/pack.py` packs the text
-into shuffled shards of fixed-size records for training sets too large to hold in memory, a format
-`train.py` does not read yet.
+into shuffled shards of fixed-size records for training sets too large to hold in memory, which
+`train.py` streams one shard at a time, holding out the positions of a separately packed file.
 
 ```
 python trainer/prepare.py data/training.txt data/training
 python trainer/train.py data/training data/nets/first
+```
+
+```
+python trainer/pack.py data/packed data/gen-4/chunk-4.txt data/gen-4/chunk-5.txt
+python trainer/pack.py data/packed-validation data/gen-4/validation-99.txt
+python trainer/train.py data/packed data/nets/fourth --validation-data data/packed-validation
 ```
 
 A trained network becomes the engine's by replacing `nets/default.nnue`, which the build packages
