@@ -31,11 +31,17 @@ public class EvaluationCache {
   /** The value a lookup returns when the position is not in the table. */
   private static final double MISS = Double.NaN;
 
-  /** The Zobrist hash held in each slot, combined with that slot's score bits by exclusive or. */
-  private final long[] keys;
+  /** The number of words each slot occupies. */
+  private static final int WORDS_PER_SLOT = 2;
 
-  /** The raw bits of the evaluation score held in each slot. */
-  private final long[] scores;
+  /** The offset within a slot of the Zobrist hash combined with the score bits by exclusive or. */
+  private static final int KEY = 0;
+
+  /** The offset within a slot of the raw bits of the evaluation score. */
+  private static final int SCORE = 1;
+
+  /** The words of every slot, all zero for a slot never written. */
+  private final long[] words;
 
   /** The number of successful cache lookups (hits). */
   private long hits = 0;
@@ -47,8 +53,7 @@ public class EvaluationCache {
    * Constructs a new empty EvaluationCache. The table is allocated at its full size and never grows.
    */
   public EvaluationCache() {
-    this.keys = new long[CAPACITY];
-    this.scores = new long[CAPACITY];
+    this.words = new long[CAPACITY * WORDS_PER_SLOT];
   }
 
   /**
@@ -59,11 +64,11 @@ public class EvaluationCache {
    * @param score The evaluation score to cache.
    */
   public void store(final long zobristHash, final double score) {
-    final int index = (int) zobristHash & INDEX_MASK;
+    final int base = ((int) zobristHash & INDEX_MASK) * WORDS_PER_SLOT;
     final long scoreBits = Double.doubleToRawLongBits(score);
 
-    this.scores[index] = scoreBits;
-    this.keys[index] = zobristHash ^ scoreBits;
+    this.words[base + SCORE] = scoreBits;
+    this.words[base + KEY] = zobristHash ^ scoreBits;
   }
 
   /**
@@ -74,9 +79,9 @@ public class EvaluationCache {
    * @return The cached evaluation score, or NaN if the position is not in the table.
    */
   public double probe(final long zobristHash) {
-    final int index = (int) zobristHash & INDEX_MASK;
-    final long key = this.keys[index];
-    final long score = this.scores[index];
+    final int base = ((int) zobristHash & INDEX_MASK) * WORDS_PER_SLOT;
+    final long key = this.words[base + KEY];
+    final long score = this.words[base + SCORE];
 
     if ((key ^ score) == zobristHash) {
       this.hits++;
@@ -106,8 +111,7 @@ public class EvaluationCache {
    * Discards every entry in the cache and resets hit and miss statistics to zero.
    */
   public void clear() {
-    Arrays.fill(this.keys, 0L);
-    Arrays.fill(this.scores, 0L);
+    Arrays.fill(this.words, 0L);
     resetStatistics();
   }
 
