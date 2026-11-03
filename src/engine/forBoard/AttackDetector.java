@@ -190,6 +190,16 @@ public final class AttackDetector {
   /** The squares from which a black pawn attacks each square, indexed by square. */
   private static final long[] BLACK_PAWN_ATTACKERS = computePawnAttackers(Alliance.BLACK);
 
+  /**
+   * The index in the array {@link #writeCheckSquares} fills of the pieces that would give a
+   * discovered check by leaving their square. The entries before it are indexed by piece type
+   * ordinal.
+   */
+  public static final int DISCOVERERS = Piece.PieceType.values().length;
+
+  /** The length of the array {@link #writeCheckSquares} fills. */
+  public static final int CHECK_SQUARES_LENGTH = DISCOVERERS + 1;
+
   /** Prevents instantiation, since this class holds only tables and static queries against them. */
   private AttackDetector() {
   }
@@ -277,6 +287,61 @@ public final class AttackDetector {
     }
 
     return sliderBears(kingSquare, occupancy, diagonalSliders, orthogonalSliders);
+  }
+
+  /**
+   * Writes into the given array, for the side to move, the squares from which a piece of each
+   * type would attack the opposing king, indexed by piece type ordinal, and at {@link #DISCOVERERS}
+   * the pieces that each stand alone between the opposing king and a bishop, rook or queen of the
+   * side to move bearing along the line through them. The array describes the position on the
+   * board when it is written, and {@link #givesCheck(Board, int, long[])} reads it.
+   *
+   * @param board The current board.
+   * @param squares The array to write, at least {@link #CHECK_SQUARES_LENGTH} long.
+   */
+  public static void writeCheckSquares(final Board board, final long[] squares) {
+    final Alliance mover = board.currentPlayer().getAlliance();
+    final Alliance opponent = mover.isWhite() ? Alliance.BLACK : Alliance.WHITE;
+    final int kingSquare =
+            Long.numberOfTrailingZeros(board.getPieces(opponent, Piece.PieceType.KING));
+    final long occupancy = board.getOccupancy();
+    final long diagonal = bishopAttacks(kingSquare, occupancy);
+    final long orthogonal = rookAttacks(kingSquare, occupancy);
+    squares[Piece.PieceType.PAWN.ordinal()] = mover.isWhite() ? WHITE_PAWN_ATTACKERS[kingSquare]
+            : BLACK_PAWN_ATTACKERS[kingSquare];
+    squares[Piece.PieceType.KNIGHT.ordinal()] = KNIGHT_ATTACKERS[kingSquare];
+    squares[Piece.PieceType.BISHOP.ordinal()] = diagonal;
+    squares[Piece.PieceType.ROOK.ordinal()] = orthogonal;
+    squares[Piece.PieceType.QUEEN.ordinal()] = diagonal | orthogonal;
+    squares[Piece.PieceType.KING.ordinal()] = KING_ATTACKERS[kingSquare];
+    final long queens = board.getPieces(mover, Piece.PieceType.QUEEN);
+    final long own = board.getOccupancy(mover);
+    squares[DISCOVERERS] = pinnedAlong(DIAGONAL_RAYS, DIAGONAL_LINES, kingSquare, occupancy, own,
+            board.getPieces(mover, Piece.PieceType.BISHOP) | queens) |
+            pinnedAlong(ORTHOGONAL_RAYS, ORTHOGONAL_LINES, kingSquare, occupancy, own,
+                    board.getPieces(mover, Piece.PieceType.ROOK) | queens);
+  }
+
+  /**
+   * Determines whether the given move would leave the opponent of the side making it in check,
+   * without making the move, giving the answer {@link #givesCheck(Board, int)} gives. A castling
+   * move, an en passant capture, a promotion and a move by a piece that could give a discovered
+   * check are answered by that method.
+   *
+   * @param board The board in the position before the move.
+   * @param move The packed move to test, one {@link MoveGenerator} generates in that position.
+   * @param checkSquares The array {@link #writeCheckSquares} wrote for that position.
+   * @return True if the move would give check, false otherwise.
+   */
+  public static boolean givesCheck(final Board board, final int move, final long[] checkSquares) {
+    final int origin = MoveCode.origin(move);
+    if (((checkSquares[DISCOVERERS] >>> origin) & 1L) != 0L
+            || (move & (MoveCode.CASTLE | MoveCode.EN_PASSANT)) != 0
+            || MoveCode.promotionType(move) != null) {
+      return givesCheck(board, move);
+    }
+    final int type = board.getPiece(origin).getPieceType().ordinal();
+    return ((checkSquares[type] >>> MoveCode.destination(move)) & 1L) != 0L;
   }
 
   /**

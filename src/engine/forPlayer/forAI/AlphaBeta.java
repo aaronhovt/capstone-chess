@@ -158,6 +158,12 @@ public class AlphaBeta implements MoveStrategy {
      * moves for each search ply, with {@link TranspositionTable#NO_MOVE} where none is held.
      */
     final short[][] killers = new short[2][MAX_SEARCH_DEPTH];
+
+    /**
+     * The array {@link AttackDetector#writeCheckSquares} writes for the node at each ply. A ply's
+     * entries are meaningful only while the node at that ply is searching its moves.
+     */
+    final long[][] checkSquares = new long[MAX_SEARCH_DEPTH][AttackDetector.CHECK_SQUARES_LENGTH];
   }
 
   /**
@@ -1561,16 +1567,17 @@ public class AlphaBeta implements MoveStrategy {
    * @param count The number of leading entries of keys that hold a key.
    * @param lateMoves Whether the removed moves are counted as late move skips rather than as
    *                  futile move skips, when {@link #COLLECT_STATISTICS} is set.
+   * @param checkSquares The array {@link AttackDetector#writeCheckSquares} wrote for the position.
    * @return The number of leading entries of keys that hold a key afterwards.
    */
   private static int dropQuietNonChecks(final Board board, final int[] generated,
                                         final long[] keys, final int from, final int count,
-                                        final boolean lateMoves) {
+                                        final boolean lateMoves, final long[] checkSquares) {
     int kept = from;
     for (int i = from; i < count; i++) {
       final int move = generated[moveIndexOf(keys[i])];
       if (MoveCode.isCapture(move) || MoveCode.promotionType(move) != null
-              || AttackDetector.givesCheck(board, move)) {
+              || AttackDetector.givesCheck(board, move, checkSquares)) {
         keys[kept++] = keys[i];
       } else if (COLLECT_STATISTICS) {
         if (lateMoves) {
@@ -1815,6 +1822,8 @@ public class AlphaBeta implements MoveStrategy {
     final long[] orderKeys = buffers.orderKeys()[ply];
     final int historySide = historySideOf(board);
     final long testedOrigins = testedOrigins(board, inCheckAtNode);
+    final long[] checkSquares = state.checkSquares[ply];
+    AttackDetector.writeCheckSquares(board, checkSquares);
 
     // The transposition table move is searched first and the other moves follow in ascending key
     // order. Most nodes that have the move cut off on it, so the other moves are generated and
@@ -1848,7 +1857,7 @@ public class AlphaBeta implements MoveStrategy {
       if (quietPruning && !quietsDropped && quietMovesPrunedFromHere(depth, movesSearched,
               inCheckAtNode, alpha, beta, currentAlpha, staticEval)) {
         moveCount = dropQuietNonChecks(board, generatedMoves, orderKeys, moveIndex, moveCount,
-                lateMovePruningActive(depth, movesSearched, alpha));
+                lateMovePruningActive(depth, movesSearched, alpha), checkSquares);
         quietsDropped = true;
         if (!keysSorted) {
           Arrays.sort(orderKeys, moveIndex, moveCount);
@@ -1881,11 +1890,12 @@ public class AlphaBeta implements MoveStrategy {
       // A quiet move cannot find a shorter mate once a mate is the bound, so futility is not
       // applied against a winning mate bound. A pruned move is skipped before it is made, legal
       // or not, so whether it gives check is answered without making it.
+      final boolean givesCheck = AttackDetector.givesCheck(board, move, checkSquares);
       if (((isLateMovePrunable(move, depth, movesSearched, inCheckAtNode)
               && alpha > -MATE_THRESHOLD)
               || (isFutileQuietMove(move, depth, movesSearched, inCheckAtNode,
                       currentAlpha - staticEval) && currentAlpha < MATE_THRESHOLD))
-              && !AttackDetector.givesCheck(board, move)) {
+              && !givesCheck) {
         if (COLLECT_STATISTICS) {
           if (isLateMovePrunable(move, depth, movesSearched, inCheckAtNode)
                   && alpha > -MATE_THRESHOLD) {
@@ -1905,8 +1915,7 @@ public class AlphaBeta implements MoveStrategy {
         board.unmakeMove(move);
         continue;
       }
-
-      final boolean givesCheck = board.currentPlayer().isInCheck();
+      board.currentPlayer().recordInCheck(givesCheck);
 
       double currentValue;
       try {
@@ -2116,6 +2125,10 @@ public class AlphaBeta implements MoveStrategy {
     final int captureCount = MoveGenerator.generateQuiescence(board,
             board.currentPlayer().getAlliance(), captures);
     final long testedOrigins = captureCount == 0 ? 0L : testedOrigins(board, false);
+    final long[] checkSquares = state.checkSquares[ply];
+    if (captureCount > 0) {
+      AttackDetector.writeCheckSquares(board, checkSquares);
+    }
 
     // The static exchange score is resolved once per capture here. Each evaluator call walks every
     // piece on the board, so reading it from inside a comparator costs O(n log n) board scans per
@@ -2147,7 +2160,8 @@ public class AlphaBeta implements MoveStrategy {
       // legal or not, so whether it gives check is answered without making it.
       final boolean prunedByExchange = seeScore < SEE_PRUNING_THRESHOLD;
       final boolean prunedByDelta = !promotion && standPat + seeScore + deltaMargin <= alpha;
-      if ((prunedByExchange || prunedByDelta) && !AttackDetector.givesCheck(board, move)) {
+      final boolean givesCheck = AttackDetector.givesCheck(board, move, checkSquares);
+      if ((prunedByExchange || prunedByDelta) && !givesCheck) {
         if (COLLECT_STATISTICS) {
           if (prunedByExchange) {
             statistics().captureExchangePruned();
@@ -2166,6 +2180,7 @@ public class AlphaBeta implements MoveStrategy {
         board.unmakeMove(move);
         continue;
       }
+      board.currentPlayer().recordInCheck(givesCheck);
       if (COLLECT_STATISTICS) {
         statistics().captureSearched();
       }
