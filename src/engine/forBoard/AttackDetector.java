@@ -369,6 +369,37 @@ public final class AttackDetector {
   }
 
   /**
+   * Returns the squares on which a move of the given side that is neither a king move nor an en
+   * passant capture must land to answer a check against that side's king: the square of the one
+   * opposing piece giving check and the squares between it and the king. Empty when two opposing
+   * pieces give check, so that only a king move can answer it. The side must be in check.
+   *
+   * @param board The current board.
+   * @param side The side in check.
+   * @return The squares, as one bit per tile.
+   */
+  public static long evasionTargets(final Board board, final Alliance side) {
+    final Alliance opponent = side.isWhite() ? Alliance.BLACK : Alliance.WHITE;
+    final int kingSquare =
+            Long.numberOfTrailingZeros(board.getPieces(side, Piece.PieceType.KING));
+    final long checkers = attackersOf(kingSquare, board) & board.getOccupancy(opponent);
+    if ((checkers & (checkers - 1L)) != 0L) {
+      return 0L;
+    }
+    final int checkerSquare = Long.numberOfTrailingZeros(checkers);
+    final long occupancy = board.getOccupancy();
+    if ((ORTHOGONAL_LINES[kingSquare] & checkers) != 0L) {
+      return checkers |
+              (rookAttacks(kingSquare, occupancy) & rookAttacks(checkerSquare, occupancy));
+    }
+    if ((DIAGONAL_LINES[kingSquare] & checkers) != 0L) {
+      return checkers |
+              (bishopAttacks(kingSquare, occupancy) & bishopAttacks(checkerSquare, occupancy));
+    }
+    return checkers;
+  }
+
+  /**
    * Returns every piece of either alliance that bears on the given square on the given board.
    * Whatever occupies the square is disregarded. A slider is included only when nothing stands
    * between it and the square.

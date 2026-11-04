@@ -364,6 +364,12 @@ public class AlphaBeta implements MoveStrategy {
   private static final long BAD_CAPTURE_RANK = 2;
 
   /**
+   * The evasion targets passed for a node whose side to move is not in check, under which every
+   * generated move is kept.
+   */
+  private static final long ANY_SQUARE = -1L;
+
+  /**
    * The number of leading moves of a main search node that are each selected from the remaining
    * ordering keys before the keys left after them are sorted.
    */
@@ -453,18 +459,34 @@ public class AlphaBeta implements MoveStrategy {
    * ply's row of the ordering key buffer. Ascending key order is search order: good captures
    * first, then killer moves, the countermove and the other quiet moves by history score, then
    * bad captures; captures are ordered by static exchange score. The keys are distinct, and
-   * {@link #moveIndexOf} and {@link #exchangeScoreOf} read a key's move and exchange score.
+   * {@link #moveIndexOf} and {@link #exchangeScoreOf} read a key's move and exchange score. When
+   * the side to move is in check, only the moves that {@link #answersCheck} keeps are written.
    *
    * @param state The state of the calling thread.
    * @param board The current board position.
    * @param ply The current search ply.
+   * @param evasionTargets The {@link AttackDetector#evasionTargets} of the side to move when it is
+   *                       in check, and {@link #ANY_SQUARE} when it is not.
    * @return The number of moves written.
    */
-  private int writeOrderKeys(final ThreadState state, final Board board, final int ply) {
+  private int writeOrderKeys(final ThreadState state, final Board board, final int ply,
+                             final long evasionTargets) {
     final NegamaxBuffers buffers = state.negamaxBuffers;
     final int[] generated = buffers.generated()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
-    final int count = MoveGenerator.generate(board, board.currentPlayer().getAlliance(), generated);
+    final Alliance side = board.currentPlayer().getAlliance();
+    int count = MoveGenerator.generate(board, side, generated);
+    if (evasionTargets != ANY_SQUARE) {
+      final long king = board.getPieces(side, Piece.PieceType.KING);
+      int kept = 0;
+      for (int i = 0; i < count; i++) {
+        final int move = generated[i];
+        if (answersCheck(move, king, evasionTargets)) {
+          generated[kept++] = move;
+        }
+      }
+      count = kept;
+    }
     final short[][] killers = state.killers;
     final int counter = counterMoveOf(board);
     final int historySide = historySideOf(board);
@@ -500,6 +522,23 @@ public class AlphaBeta implements MoveStrategy {
       orderKeys[i] = (tier << ORDER_TIER_SHIFT) | (secondary << ORDER_INDEX_BITS) | i;
     }
     return count;
+  }
+
+  /**
+   * Determines whether a move of a side in check can answer the check: a king move, an en passant
+   * capture, or a move that lands on one of the given evasion targets. A move this rejects is
+   * illegal. A move this keeps may still be illegal if it is one of those three kinds or moves a
+   * pinned piece.
+   *
+   * @param move The packed move.
+   * @param king The square of the moving side's king, as one bit per tile.
+   * @param evasionTargets The {@link AttackDetector#evasionTargets} of the moving side.
+   * @return True if the move can answer the check, false if it cannot.
+   */
+  private static boolean answersCheck(final int move, final long king,
+                                      final long evasionTargets) {
+    return ((king >>> MoveCode.origin(move)) & 1L) != 0L || MoveCode.isEnPassant(move)
+            || ((evasionTargets >>> MoveCode.destination(move)) & 1L) != 0L;
   }
 
   /**
@@ -1373,21 +1412,30 @@ public class AlphaBeta implements MoveStrategy {
   /**
    * Writes the move with the given transposition table code into the first entry of a ply's
    * generated move buffer, and a key that refers to it into the first entry of its ordering key
-   * buffer, if the side to move has that move among its pseudo-legal moves. Either way, other
-   * entries of the generated move buffer may be overwritten.
+   * buffer, if the side to move has that move among its pseudo-legal moves and, when that side is
+   * in check, {@link #answersCheck} keeps it. Either way, other entries of the generated move
+   * buffer may be overwritten.
    *
    * @param board The current board position.
    * @param moveCode The transposition table code of the move.
    * @param generated The ply's generated move buffer.
    * @param orderKeys The ply's ordering key buffer.
-   * @return True if the move was written, false if the side to move has no move with that code.
+   * @param evasionTargets The {@link AttackDetector#evasionTargets} of the side to move when it is
+   *                       in check, and {@link #ANY_SQUARE} when it is not.
+   * @return True if the move was written, false if it was not.
    */
   private static boolean placeTableMove(final Board board, final short moveCode,
-                                        final int[] generated, final long[] orderKeys) {
-    final int count = MoveGenerator.generateFrom(board, board.currentPlayer().getAlliance(),
-            MoveCode.origin(moveCode), generated);
+                                        final int[] generated, final long[] orderKeys,
+                                        final long evasionTargets) {
+    final Alliance side = board.currentPlayer().getAlliance();
+    final int count = MoveGenerator.generateFrom(board, side, MoveCode.origin(moveCode),
+            generated);
     final int index = indexOfMoveCode(generated, count, moveCode);
     if (index < 0) {
+      return false;
+    }
+    if (evasionTargets != ANY_SQUARE && !answersCheck(generated[index],
+            board.getPieces(side, Piece.PieceType.KING), evasionTargets)) {
       return false;
     }
     generated[0] = generated[index];
@@ -1630,17 +1678,14 @@ public class AlphaBeta implements MoveStrategy {
 
   /**
    * Returns the origins from which a move of the side to move can leave that side's own king in
-   * check: every square when that side is in check, and otherwise the king's square and the
-   * squares of the side's pinned pieces. An en passant capture can as well, from any origin.
+   * check: the king's square and the squares of the side's pinned pieces. An en passant capture
+   * can as well, from any origin. When the side is in check, this holds only for the moves
+   * {@link #answersCheck} keeps.
    *
    * @param board The board in the position before the move.
-   * @param inCheck Whether the side to move is in check.
    * @return The origins, as one bit per tile.
    */
-  private static long testedOrigins(final Board board, final boolean inCheck) {
-    if (inCheck) {
-      return -1L;
-    }
+  private static long testedOrigins(final Board board) {
     final Alliance side = board.currentPlayer().getAlliance();
     return AttackDetector.pinnedPieces(board, side) |
             board.getPieces(side, Piece.PieceType.KING);
@@ -1821,7 +1866,9 @@ public class AlphaBeta implements MoveStrategy {
     final int[] generatedMoves = buffers.generated()[ply];
     final long[] orderKeys = buffers.orderKeys()[ply];
     final int historySide = historySideOf(board);
-    final long testedOrigins = testedOrigins(board, inCheckAtNode);
+    final long testedOrigins = testedOrigins(board);
+    final long evasionTargets = inCheckAtNode ?
+            AttackDetector.evasionTargets(board, board.currentPlayer().getAlliance()) : ANY_SQUARE;
     final long[] checkSquares = state.checkSquares[ply];
     AttackDetector.writeCheckSquares(board, checkSquares);
 
@@ -1829,8 +1876,8 @@ public class AlphaBeta implements MoveStrategy {
     // order. Most nodes that have the move cut off on it, so the other moves are generated and
     // keyed only when the search moves past it, and until then it is the only move in the buffers.
     final boolean ttMoveFirst = ttMoveCode != TranspositionTable.NO_MOVE &&
-            placeTableMove(board, ttMoveCode, generatedMoves, orderKeys);
-    int moveCount = ttMoveFirst ? 1 : writeOrderKeys(state, board, ply);
+            placeTableMove(board, ttMoveCode, generatedMoves, orderKeys, evasionTargets);
+    int moveCount = ttMoveFirst ? 1 : writeOrderKeys(state, board, ply, evasionTargets);
     boolean othersKeyed = !ttMoveFirst;
     final boolean quietPruning = !inCheckAtNode
             && (depth <= LATE_MOVE_PRUNING_DEPTH || depth <= QUIET_FUTILITY_DEPTH);
@@ -1839,7 +1886,7 @@ public class AlphaBeta implements MoveStrategy {
 
     for (int moveIndex = 0; moveIndex < moveCount || !othersKeyed; moveIndex++) {
       if (!othersKeyed && moveIndex == 1) {
-        moveCount = writeOrderKeys(state, board, ply);
+        moveCount = writeOrderKeys(state, board, ply, evasionTargets);
         othersKeyed = true;
         // The keys are still in generation order here, so the move's index is its key's index.
         final int ttIndex = indexOfMoveCode(generatedMoves, moveCount, ttMoveCode);
@@ -2124,7 +2171,7 @@ public class AlphaBeta implements MoveStrategy {
     final long[] orderKeys = buffers.orderKeys()[ply];
     final int captureCount = MoveGenerator.generateQuiescence(board,
             board.currentPlayer().getAlliance(), captures);
-    final long testedOrigins = captureCount == 0 ? 0L : testedOrigins(board, false);
+    final long testedOrigins = captureCount == 0 ? 0L : testedOrigins(board);
     final long[] checkSquares = state.checkSquares[ply];
     if (captureCount > 0) {
       AttackDetector.writeCheckSquares(board, checkSquares);
