@@ -231,6 +231,9 @@ def main():
                         help="weight of the game result in the target, default 0.25")
     parser.add_argument("--hidden", type=int, default=nnue.HIDDEN,
                         help=f"accumulator size, default {nnue.HIDDEN}")
+    parser.add_argument("--buckets", type=int, default=nnue.BUCKETS,
+                        help=f"output buckets chosen by piece count, a divisor of "
+                             f"{nnue.MAX_PIECES}, default {nnue.BUCKETS}")
     parser.add_argument("--validation", type=float, default=0.01,
                         help="share of the arrays held out without --validation-data, default 0.01")
     parser.add_argument("--validation-data",
@@ -241,6 +244,10 @@ def main():
     parser.add_argument("--resume", action="store_true", help="continue from out/checkpoint.pt")
     arguments = parser.parse_args()
 
+    try:
+        nnue.check_buckets(arguments.buckets)
+    except ValueError as error:
+        parser.error(str(error))
     torch.manual_seed(arguments.seed)
     os.makedirs(arguments.out, exist_ok=True)
     compute = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -264,7 +271,7 @@ def main():
     steps_per_epoch = training.steps(arguments.batch)
     total_steps = steps_per_epoch * arguments.epochs
 
-    network = nnue.Network(arguments.hidden).to(compute)
+    network = nnue.Network(arguments.hidden, arguments.buckets).to(compute)
     optimizer = torch.optim.Adam(network.parameters(), lr=arguments.lr)
     first_epoch = 1
     step_number = 0
@@ -277,7 +284,8 @@ def main():
         step_number = checkpoint["step"]
 
     print(f"{training.count:,} training positions {source}, {held_out_count:,} held out, "
-          f"training on {compute}, hidden {arguments.hidden}, batch {arguments.batch}, "
+          f"training on {compute}, hidden {arguments.hidden}, buckets {arguments.buckets}, "
+          f"batch {arguments.batch}, "
           f"{steps_per_epoch} steps per epoch, wdl {arguments.wdl}, "
           f"lr {arguments.lr} to {arguments.lr * arguments.final_lr}", flush=True)
 
@@ -310,7 +318,8 @@ def main():
             log.write(line + "\n")
             log.flush()
             torch.save({"network": network.state_dict(), "optimizer": optimizer.state_dict(),
-                        "epoch": epoch, "step": step_number, "hidden": arguments.hidden},
+                        "epoch": epoch, "step": step_number, "hidden": arguments.hidden,
+                        "buckets": arguments.buckets},
                        checkpoint_path)
             if epoch % arguments.save_every == 0 or epoch == arguments.epochs:
                 path = os.path.join(arguments.out, f"epoch-{epoch}.nnue")

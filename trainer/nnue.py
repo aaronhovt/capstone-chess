@@ -3,6 +3,10 @@ an integer reference evaluation that the engine's implementation must reproduce 
 
 Architecture: 768 inputs -> HIDDEN accumulator per perspective (one weight matrix shared by both
 perspectives) -> SCReLU -> the side to move's accumulator followed by the other side's -> 1 output.
+The output weights and bias come in a number of buckets that divides 32, and the number of pieces on
+the board, kings included, chooses the bucket of a position:
+
+    bucket = min(max(pieces - 2, 0) // (32 // buckets), buckets - 1)
 
 Input features. Each piece sets one feature in each perspective's accumulator. For a perspective p
 and a piece of colour c, type t and square s:
@@ -19,22 +23,27 @@ view of the side to move.
 Quantised file (all values little-endian):
 
     bytes 0-3   magic "CCNN"
-    int32       format version, 1
+    int32       format version, 2
     int32       input size, 768
     int32       hidden size, HIDDEN
     int32       QA
     int32       QB
     int32       SCALE
+    int32       output buckets, BUCKETS
     int16       feature weights, 768 rows of HIDDEN, row = feature index, each round(w * QA)
     int16       feature biases, HIDDEN, each round(b * QA)
-    int16       output weights, 2 * HIDDEN, the side to move's HIDDEN first, each round(w * QB)
-    int32       output bias, round(b * QA * QB)
+    int16       output weights, BUCKETS rows of 2 * HIDDEN in bucket order, each the side to
+                move's HIDDEN first, each round(w * QB)
+    int32       output biases, BUCKETS, each round(b * QA * QB)
+
+Version 1 files have no bucket count field and one bucket, and are read as well.
 
 Integer evaluation (see evaluate_quantised): each accumulator is the feature bias plus the sum of
 the rows of its active features. With v = clamp(accumulator, 0, QA) for each of the 2 * HIDDEN
-values, sum = sum of v * v * output weight, each product fitting in 32 bits and the sum needing
-64; then
-eval = (sum / QA + output bias) * SCALE / (QA * QB), where both divisions truncate toward zero.
+values, sum = sum of v * v * the position's bucket's output weight, each product fitting in 32 bits
+and the sum needing 64; then
+eval = (sum / QA + the bucket's output bias) * SCALE / (QA * QB), where both divisions truncate
+toward zero.
 """
 
 import struct
@@ -44,6 +53,7 @@ import torch
 
 INPUTS = 768
 HIDDEN = 256
+BUCKETS = 1
 QA = 255
 QB = 1024
 SCALE = 400
@@ -56,9 +66,28 @@ PAD = INPUTS
 WEIGHT_CLIP = 1.98
 
 MAGIC = b"CCNN"
-VERSION = 1
+VERSION = 2
+SINGLE_BUCKET_VERSION = 1
+
+# The most pieces a position holds; the number of buckets must divide it.
+MAX_PIECES = 32
 
 PIECE_TYPES = "pnbrqk"
+
+
+def check_buckets(buckets):
+    """Raises ValueError unless buckets is a positive number that divides MAX_PIECES."""
+    if buckets <= 0 or MAX_PIECES % buckets != 0:
+        raise ValueError(f"the number of buckets must divide {MAX_PIECES}, found {buckets}")
+
+
+def output_bucket(pieces, buckets):
+    """Returns the output bucket of a piece count, kings included, as an int or, given a long
+    tensor of counts, as a long tensor."""
+    per_bucket = MAX_PIECES // buckets
+    if isinstance(pieces, torch.Tensor):
+        return ((pieces - 2).clamp(min=0) // per_bucket).clamp(max=buckets - 1)
+    return min(max(pieces - 2, 0) // per_bucket, buckets - 1)
 
 
 def white_features(placement):
@@ -96,13 +125,15 @@ def black_features(white):
 class Network(torch.nn.Module):
     """The evaluation network in floating point, for training."""
 
-    def __init__(self, hidden=HIDDEN):
+    def __init__(self, hidden=HIDDEN, buckets=BUCKETS):
         super().__init__()
+        check_buckets(buckets)
         self.hidden = hidden
+        self.buckets = buckets
         self.feature_weights = torch.nn.EmbeddingBag(INPUTS + 1, hidden, mode="sum",
                                                      padding_idx=PAD)
         self.feature_bias = torch.nn.Parameter(torch.zeros(hidden))
-        self.output = torch.nn.Linear(2 * hidden, 1)
+        self.output = torch.nn.Linear(2 * hidden, buckets)
         with torch.no_grad():
             self.feature_weights.weight.uniform_(-0.05, 0.05)
             self.feature_weights.weight[PAD].zero_()
@@ -118,7 +149,8 @@ class Network(torch.nn.Module):
         mover = torch.where(white_to_move[:, None], white_accumulator, black_accumulator)
         other = torch.where(white_to_move[:, None], black_accumulator, white_accumulator)
         hidden = torch.clamp(torch.cat([mover, other], dim=1), 0.0, 1.0) ** 2
-        return self.output(hidden).squeeze(1)
+        bucket = output_bucket((white != PAD).sum(1), self.buckets)
+        return self.output(hidden).gather(1, bucket[:, None]).squeeze(1)
 
     def clip_weights(self):
         """Clips every weight to the range its quantised form can hold."""
@@ -131,16 +163,16 @@ def quantise(network):
     """Returns the network's quantised parameters as numpy arrays.
 
     The arrays are the feature weights (768 x hidden, int16), feature biases (int16), output
-    weights (2 * hidden, int16) and output bias (int64 scalar).
+    weights (buckets x 2 * hidden, int16) and output biases (buckets, int64).
     """
     feature_weights = network.feature_weights.weight.detach().cpu().double().numpy()[:INPUTS]
     feature_bias = network.feature_bias.detach().cpu().double().numpy()
-    output_weights = network.output.weight.detach().cpu().double().numpy()[0]
-    output_bias = float(network.output.bias.detach().cpu().double().numpy()[0])
+    output_weights = network.output.weight.detach().cpu().double().numpy()
+    output_bias = network.output.bias.detach().cpu().double().numpy()
     return (np.round(feature_weights * QA).astype(np.int16),
             np.round(feature_bias * QA).astype(np.int16),
             np.round(output_weights * QB).astype(np.int16),
-            np.int64(round(output_bias * QA * QB)))
+            np.round(output_bias * QA * QB).astype(np.int64))
 
 
 def write_network(path, network):
@@ -148,37 +180,49 @@ def write_network(path, network):
     feature_weights, feature_bias, output_weights, output_bias = quantise(network)
     with open(path, "wb") as file:
         file.write(MAGIC)
-        file.write(struct.pack("<6i", VERSION, INPUTS, network.hidden, QA, QB, SCALE))
+        file.write(struct.pack("<7i", VERSION, INPUTS, network.hidden, QA, QB, SCALE,
+                               network.buckets))
         file.write(feature_weights.astype("<i2").tobytes())
         file.write(feature_bias.astype("<i2").tobytes())
         file.write(output_weights.astype("<i2").tobytes())
-        file.write(struct.pack("<i", int(output_bias)))
+        file.write(output_bias.astype("<i4").tobytes())
 
 
 def read_network(path):
-    """Reads a quantised file and returns its parameters as quantise returns them.
+    """Reads a quantised file of either version and returns its parameters as quantise returns
+    them, with one bucket for a version 1 file.
 
-    Raises ValueError if the file is not a network file of this format.
+    Raises ValueError if the file is not a network file of a format this module reads.
     """
     with open(path, "rb") as file:
         data = file.read()
     if data[:4] != MAGIC:
         raise ValueError(f"{path} is not a network file")
     version, inputs, hidden, qa, qb, scale = struct.unpack_from("<6i", data, 4)
-    if (version, inputs, qa, qb, scale) != (VERSION, INPUTS, QA, QB, SCALE):
-        raise ValueError(f"{path} has version {version}, inputs {inputs}, QA {qa}, QB {qb}, "
-                         f"scale {scale}, which this trainer does not read")
-    offset = 28
+    if version == SINGLE_BUCKET_VERSION:
+        buckets = 1
+        offset = 28
+    elif version == VERSION:
+        (buckets,) = struct.unpack_from("<i", data, 28)
+        offset = 32
+    else:
+        raise ValueError(f"{path} has version {version}, which this module does not read")
+    if (inputs, qa, qb, scale) != (INPUTS, QA, QB, SCALE):
+        raise ValueError(f"{path} has inputs {inputs}, QA {qa}, QB {qb}, scale {scale}, which "
+                         f"this module does not read")
+    check_buckets(buckets)
     feature_weights = np.frombuffer(data, "<i2", INPUTS * hidden, offset).reshape(INPUTS, hidden)
     offset += INPUTS * hidden * 2
     feature_bias = np.frombuffer(data, "<i2", hidden, offset)
     offset += hidden * 2
-    output_weights = np.frombuffer(data, "<i2", 2 * hidden, offset)
-    offset += 2 * hidden * 2
-    (output_bias,) = struct.unpack_from("<i", data, offset)
-    if offset + 4 != len(data):
-        raise ValueError(f"{path} is {len(data)} bytes, expected {offset + 4}")
-    return feature_weights, feature_bias, output_weights, np.int64(output_bias)
+    output_weights = np.frombuffer(data, "<i2", buckets * 2 * hidden, offset).reshape(buckets,
+                                                                                    2 * hidden)
+    offset += buckets * 2 * hidden * 2
+    output_bias = np.frombuffer(data, "<i4", buckets, offset).astype(np.int64)
+    offset += buckets * 4
+    if offset != len(data):
+        raise ValueError(f"{path} is {len(data)} bytes, expected {offset}")
+    return feature_weights, feature_bias, output_weights, output_bias
 
 
 def truncating_divide(numerator, denominator):
@@ -196,6 +240,9 @@ def evaluate_quantised(parameters, fen):
     hidden = feature_bias.shape[0]
     fields = fen.split()
     white = np.array(white_features(fields[0]), dtype=np.int64)
+    bucket = output_bucket(len(white), output_weights.shape[0])
+    output_weights = output_weights[bucket]
+    output_bias = output_bias[bucket]
     black = black_features(white)
     white_accumulator = feature_bias.astype(np.int64) + feature_weights[white].astype(np.int64).sum(0)
     black_accumulator = feature_bias.astype(np.int64) + feature_weights[black].astype(np.int64).sum(0)

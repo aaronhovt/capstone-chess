@@ -1097,9 +1097,10 @@ public final class Board {
     }
     final int[] white = this.whiteAccumulators[this.networkDepth];
     final int[] black = this.blackAccumulators[this.networkDepth];
+    final int pieceCount = Long.bitCount(this.whiteOccupancy | this.blackOccupancy);
     return this.currentPlayer.getAlliance().isWhite() ?
-            NETWORK.evaluate(white, black) :
-            NETWORK.evaluate(black, white);
+            NETWORK.evaluate(white, black, pieceCount) :
+            NETWORK.evaluate(black, white, pieceCount);
   }
 
   /**

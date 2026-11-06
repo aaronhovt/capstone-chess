@@ -10,7 +10,9 @@ import java.nio.file.Path;
 /**
  * The Network class holds the weights of the evaluation network and computes its output from a
  * pair of accumulators. The network has 768 inputs, an accumulator of {@link #hidden()} values for
- * each side computed from one shared weight matrix, a squared clipped ReLU, and one output.
+ * each side computed from one shared weight matrix, a squared clipped ReLU, and one output. The
+ * output weights and bias come in {@link #buckets()} sets, and the number of pieces on the board
+ * chooses the set an evaluation uses.
  * <p>
  * Each piece sets one input in each side's accumulator, given by {@link #featureIndex}. An
  * accumulator is the feature bias plus the feature weight rows of the pieces on the board, and is
@@ -44,11 +46,23 @@ public final class Network {
   /** The four bytes every network file starts with. */
   private static final int MAGIC = 'C' | 'C' << 8 | 'N' << 16 | 'N' << 24;
 
-  /** The network file format this class reads. */
-  private static final int VERSION = 1;
+  /** The network file format with one set of output weights. */
+  private static final int SINGLE_BUCKET_VERSION = 1;
 
-  /** The number of bytes before the weights: the magic and six int32 fields. */
-  private static final int HEADER_BYTES = 28;
+  /** The network file format that gives the number of output buckets. */
+  private static final int BUCKETED_VERSION = 2;
+
+  /** The number of bytes before the weights in a single bucket file: the magic and six int32 fields. */
+  private static final int SINGLE_BUCKET_HEADER_BYTES = 28;
+
+  /** The number of bytes before the weights in a bucketed file: the magic and seven int32 fields. */
+  private static final int BUCKETED_HEADER_BYTES = 32;
+
+  /** The most pieces a board holds; the bucket count must divide it. */
+  private static final int MAX_PIECES = 32;
+
+  /** The number of pieces, the two kings, below which no bucket starts. */
+  private static final int MIN_PIECES = 2;
 
   /** The number of inputs each colour's pieces occupy. */
   private static final int COLOUR_INPUTS = 384;
@@ -71,14 +85,25 @@ public final class Network {
   /** The feature biases, {@link #hidden} values. */
   private final int[] featureBias;
 
-  /** The output weights applied to the side to move's accumulator, {@link #hidden} values. */
-  private final int[] moverWeights;
+  /** The number of sets of output weights and biases. */
+  private final int buckets;
 
-  /** The output weights applied to the other side's accumulator, {@link #hidden} values. */
-  private final int[] otherWeights;
+  /** The output bucket of each piece count from 0 to {@link Long#SIZE}. */
+  private final int[] bucketOfPieceCount;
 
-  /** The output bias, in units of QA * QB. */
-  private final int outputBias;
+  /**
+   * The output weights applied to the side to move's accumulator, {@link #hidden} values per
+   * bucket.
+   */
+  private final int[][] moverWeights;
+
+  /**
+   * The output weights applied to the other side's accumulator, {@link #hidden} values per bucket.
+   */
+  private final int[][] otherWeights;
+
+  /** The output bias of each bucket, in units of QA * QB. */
+  private final int[] outputBias;
 
   /**
    * Constructs a network from the contents of a network file.
@@ -88,7 +113,7 @@ public final class Network {
    */
   private Network(final byte[] data) {
     final ByteBuffer buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-    if (data.length < HEADER_BYTES || buffer.getInt() != MAGIC) {
+    if (data.length < SINGLE_BUCKET_HEADER_BYTES || buffer.getInt() != MAGIC) {
       throw new IllegalArgumentException("Not a network file.");
     }
     final int version = buffer.getInt();
@@ -97,24 +122,49 @@ public final class Network {
     final int qa = buffer.getInt();
     final int qb = buffer.getInt();
     final int scale = buffer.getInt();
-    if (version != VERSION || inputs != INPUTS || qa != QA || qb != QB || scale != SCALE
-            || this.hidden <= 0) {
-      throw new IllegalArgumentException("Unsupported network: version " + version + ", inputs " +
-              inputs + ", hidden " + this.hidden + ", QA " + qa + ", QB " + qb + ", scale " + scale + ".");
+    final int headerBytes;
+    if (version == SINGLE_BUCKET_VERSION) {
+      headerBytes = SINGLE_BUCKET_HEADER_BYTES;
+      this.buckets = 1;
+    } else if (version == BUCKETED_VERSION && data.length >= BUCKETED_HEADER_BYTES) {
+      headerBytes = BUCKETED_HEADER_BYTES;
+      this.buckets = buffer.getInt();
+    } else {
+      throw new IllegalArgumentException("Unsupported network file version " + version + ".");
     }
-    final long expected = HEADER_BYTES + 2L * (INPUTS * (long) this.hidden + 3L * this.hidden) + 4;
+    if (inputs != INPUTS || qa != QA || qb != QB || scale != SCALE || this.hidden <= 0 ||
+            this.buckets <= 0 || MAX_PIECES % this.buckets != 0) {
+      throw new IllegalArgumentException("Unsupported network: version " + version + ", inputs " +
+              inputs + ", hidden " + this.hidden + ", QA " + qa + ", QB " + qb + ", scale " + scale +
+              ", buckets " + this.buckets + ".");
+    }
+    final int piecesPerBucket = MAX_PIECES / this.buckets;
+    this.bucketOfPieceCount = new int[Long.SIZE + 1];
+    for (int pieceCount = 0; pieceCount <= Long.SIZE; pieceCount++) {
+      this.bucketOfPieceCount[pieceCount] =
+              Math.min(Math.max(pieceCount - MIN_PIECES, 0) / piecesPerBucket, this.buckets - 1);
+    }
+    final long expected = headerBytes + 2L * (INPUTS * (long) this.hidden + this.hidden +
+            2L * this.buckets * this.hidden) + 4L * this.buckets;
     if (data.length != expected) {
-      throw new IllegalArgumentException("A network of hidden size " + this.hidden + " is " +
-              expected + " bytes, found " + data.length + ".");
+      throw new IllegalArgumentException("A network of hidden size " + this.hidden + " and " +
+              this.buckets + " buckets is " + expected + " bytes, found " + data.length + ".");
     }
     this.featureWeights = new int[INPUTS][];
     for (int feature = 0; feature < INPUTS; feature++) {
       this.featureWeights[feature] = readShorts(buffer, this.hidden);
     }
     this.featureBias = readShorts(buffer, this.hidden);
-    this.moverWeights = readShorts(buffer, this.hidden);
-    this.otherWeights = readShorts(buffer, this.hidden);
-    this.outputBias = buffer.getInt();
+    this.moverWeights = new int[this.buckets][];
+    this.otherWeights = new int[this.buckets][];
+    for (int bucket = 0; bucket < this.buckets; bucket++) {
+      this.moverWeights[bucket] = readShorts(buffer, this.hidden);
+      this.otherWeights[bucket] = readShorts(buffer, this.hidden);
+    }
+    this.outputBias = new int[this.buckets];
+    for (int bucket = 0; bucket < this.buckets; bucket++) {
+      this.outputBias[bucket] = buffer.getInt();
+    }
   }
 
   /**
@@ -179,6 +229,27 @@ public final class Network {
    */
   public int hidden() {
     return this.hidden;
+  }
+
+  /**
+   * Returns the number of sets of output weights and biases.
+   *
+   * @return The number of output buckets.
+   */
+  public int buckets() {
+    return this.buckets;
+  }
+
+  /**
+   * Returns the output bucket an evaluation uses: the number of pieces beyond the two kings,
+   * divided by the number of piece counts each bucket covers, and capped at the last bucket.
+   *
+   * @param pieceCount The number of pieces on the board, kings included, from 0 to
+   *                   {@link Long#SIZE}.
+   * @return The bucket, from 0 to {@link #buckets()} - 1.
+   */
+  public int bucket(final int pieceCount) {
+    return this.bucketOfPieceCount[pieceCount];
   }
 
   /**
@@ -285,19 +356,24 @@ public final class Network {
    *
    * @param mover The side to move's accumulator, {@link #hidden()} values.
    * @param other The other side's accumulator, {@link #hidden()} values.
+   * @param pieceCount The number of pieces on the board, kings included, which chooses the output
+   *                   bucket.
    * @return The evaluation in centipawns from the side to move's point of view.
    */
-  public int evaluate(final int[] mover, final int[] other) {
+  public int evaluate(final int[] mover, final int[] other, final int pieceCount) {
+    final int bucket = bucket(pieceCount);
+    final int[] moverOutput = this.moverWeights[bucket];
+    final int[] otherOutput = this.otherWeights[bucket];
     final int size = this.hidden;
     long sum = 0;
     for (int i = 0; i < size; i++) {
       final int value = Math.min(Math.max(mover[i], 0), QA);
-      sum += value * value * this.moverWeights[i];
+      sum += value * value * moverOutput[i];
     }
     for (int i = 0; i < size; i++) {
       final int value = Math.min(Math.max(other[i], 0), QA);
-      sum += value * value * this.otherWeights[i];
+      sum += value * value * otherOutput[i];
     }
-    return (int) ((sum / QA + this.outputBias) * SCALE / ((long) QA * QB));
+    return (int) ((sum / QA + this.outputBias[bucket]) * SCALE / ((long) QA * QB));
   }
 }
