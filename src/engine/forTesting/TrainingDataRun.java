@@ -2,6 +2,7 @@ package engine.forTesting;
 
 import engine.forBoard.Board;
 import engine.forBoard.Move;
+import engine.forNetwork.VectorModule;
 import engine.forPlayer.forAI.AlphaBeta;
 
 import java.io.BufferedWriter;
@@ -121,6 +122,7 @@ public final class TrainingDataRun {
    */
   public static void main(final String[] args)
           throws IOException, InterruptedException, ExecutionException {
+    VectorModule.relaunchIfMissing(TrainingDataRun.class, args);
     int games = DEFAULT_GAMES;
     int workers = DEFAULT_WORKERS;
     long nodes = DEFAULT_NODES;

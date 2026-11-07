@@ -2,6 +2,7 @@ package engine.forTesting;
 
 import com.sun.management.ThreadMXBean;
 import engine.forBoard.Board;
+import engine.forNetwork.VectorModule;
 import engine.forPlayer.forAI.BoardEvaluator;
 import engine.forPlayer.forAI.EndgameBoardEvaluator;
 import engine.forPlayer.forAI.MiddlegameBoardEvaluator;
@@ -271,6 +272,7 @@ public class EvaluationBench {
    * @param args The command line arguments, as described by the usage text.
    */
   public static void main(final String[] args) {
+    VectorModule.relaunchIfMissing(EvaluationBench.class, args);
     int batches = NO_BATCH_COUNT;
     boolean verbose = false;
     for (final String argument : args) {

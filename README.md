@@ -78,15 +78,15 @@ The suite targets compile only. Each one prints the command that runs what it ju
 example:
 
 ```
-java -cp "out\tactical" engine.forTesting.TacticalSuite
+java --add-modules jdk.incubator.vector -cp "out\tactical" engine.forTesting.TacticalSuite
 ```
 
 On a platform without the batch script, compile an entry point directly. `javac` follows the source
 path from there, so no file list is needed.
 
 ```
-javac --release 25 -nowarn -cp "lib/*" -sourcepath src -d out/gui src/engine/engineDriver.java
-java -cp "out/gui:lib/*" engine.engineDriver
+javac --release 25 --add-modules jdk.incubator.vector -nowarn -cp "lib/*" -sourcepath src -d out/gui src/engine/engineDriver.java
+java --add-modules jdk.incubator.vector -cp "out/gui:lib/*" engine.engineDriver
 ```
 
 Substitute another entry point for a different target: `src/engine/forUCI/UciEngine.java` for the UCI
@@ -94,6 +94,11 @@ engine, or any of the suite classes in `src/engine/forTesting`. Only the interfa
 the classpath; the engine and the suites need nothing beyond their own output directory. Run from
 the repository root, they read the evaluation network from `nets/default.nnue`. The build script
 copies the network into each output directory instead.
+
+The evaluation network's arithmetic uses the incubating Vector API, so `javac` and `java` both need
+`--add-modules jdk.incubator.vector`, and `java` prints a warning about the incubator module when it
+starts. Every entry point run without the option starts Java again with it, at the cost of a
+second JVM start, so `java -jar` works on both jars as it is.
 
 ## Validation Tooling
 

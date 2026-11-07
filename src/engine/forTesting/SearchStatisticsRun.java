@@ -2,6 +2,7 @@ package engine.forTesting;
 
 import engine.forBoard.Board;
 import engine.forBoard.Move;
+import engine.forNetwork.VectorModule;
 import engine.forPlayer.forAI.AlphaBeta;
 import engine.forPlayer.forAI.SearchStatistics;
 
@@ -98,6 +99,7 @@ public final class SearchStatisticsRun {
    */
   public static void main(final String[] args)
           throws IOException, InterruptedException, ExecutionException {
+    VectorModule.relaunchIfMissing(SearchStatisticsRun.class, args);
     System.setProperty(SearchStatistics.PROPERTY, "true");
     if (!SearchStatistics.isCollecting()) {
       System.err.println("The search was loaded before counting could be turned on.");

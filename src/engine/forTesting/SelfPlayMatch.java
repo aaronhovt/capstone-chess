@@ -2,6 +2,7 @@ package engine.forTesting;
 
 import engine.forBoard.Board;
 import engine.forBoard.Move;
+import engine.forNetwork.VectorModule;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -188,6 +189,7 @@ public class SelfPlayMatch {
    * @param args The command line arguments, as described by the usage text.
    */
   public static void main(final String[] args) {
+    VectorModule.relaunchIfMissing(SelfPlayMatch.class, args);
     final Settings settings;
     try {
       settings = Settings.read(args);

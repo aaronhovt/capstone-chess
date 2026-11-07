@@ -3,6 +3,7 @@ package engine.forTesting;
 import engine.Alliance;
 import engine.forBoard.Board;
 import engine.forBoard.Move;
+import engine.forNetwork.VectorModule;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -67,6 +68,7 @@ public class OpeningBook {
    * @param args The command line arguments, as described by the usage text.
    */
   public static void main(final String[] args) {
+    VectorModule.relaunchIfMissing(OpeningBook.class, args);
     String path = DEFAULT_BOOK_PATH;
     for (final String argument : args) {
       if (HELP_FLAG.equals(argument)) {

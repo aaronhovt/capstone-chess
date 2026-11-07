@@ -247,10 +247,10 @@ public final class Board {
    * Only the slots up to {@link #networkComputedDepth} hold their position's values. Grown by
    * replacement when full, together with the arrays below.
    */
-  private int[][] whiteAccumulators = new int[NETWORK_SLOT_CAPACITY][HIDDEN];
+  private short[][] whiteAccumulators = new short[NETWORK_SLOT_CAPACITY][HIDDEN];
 
   /** Black's network accumulators, indexed as {@link #whiteAccumulators} is. */
-  private int[][] blackAccumulators = new int[NETWORK_SLOT_CAPACITY][HIDDEN];
+  private short[][] blackAccumulators = new short[NETWORK_SLOT_CAPACITY][HIDDEN];
 
   /**
    * The packed move that leads to the position of each accumulator slot, indexed as
@@ -1095,8 +1095,8 @@ public final class Board {
     if (this.networkComputedDepth < this.networkDepth) {
       refreshNetworkAccumulators();
     }
-    final int[] white = this.whiteAccumulators[this.networkDepth];
-    final int[] black = this.blackAccumulators[this.networkDepth];
+    final short[] white = this.whiteAccumulators[this.networkDepth];
+    final short[] black = this.blackAccumulators[this.networkDepth];
     final int pieceCount = Long.bitCount(this.whiteOccupancy | this.blackOccupancy);
     return this.currentPlayer.getAlliance().isWhite() ?
             NETWORK.evaluate(white, black, pieceCount) :
@@ -1124,8 +1124,8 @@ public final class Board {
    * @return The accumulator pair.
    */
   public int[] computeNetworkAccumulators() {
-    final int[] white = new int[HIDDEN];
-    final int[] black = new int[HIDDEN];
+    final short[] white = new short[HIDDEN];
+    final short[] black = new short[HIDDEN];
     computeNetworkAccumulators(white, black);
     return accumulatorPair(white, black);
   }
@@ -1137,9 +1137,12 @@ public final class Board {
    * @param black Black's accumulator.
    * @return The accumulator pair, {@link #ACCUMULATOR_PAIR} values.
    */
-  private static int[] accumulatorPair(final int[] white, final int[] black) {
-    final int[] pair = Arrays.copyOf(white, ACCUMULATOR_PAIR);
-    System.arraycopy(black, 0, pair, HIDDEN, HIDDEN);
+  private static int[] accumulatorPair(final short[] white, final short[] black) {
+    final int[] pair = new int[ACCUMULATOR_PAIR];
+    for (int i = 0; i < HIDDEN; i++) {
+      pair[i] = white[i];
+      pair[HIDDEN + i] = black[i];
+    }
     return pair;
   }
 
@@ -1150,7 +1153,7 @@ public final class Board {
    * @param white White's accumulator, written.
    * @param black Black's accumulator, written.
    */
-  private void computeNetworkAccumulators(final int[] white, final int[] black) {
+  private void computeNetworkAccumulators(final short[] white, final short[] black) {
     NETWORK.reset(white);
     NETWORK.reset(black);
     for (final Piece piece : this.boardConfig) {
@@ -1214,10 +1217,10 @@ public final class Board {
     final int placedType = promotionType != null ? promotionType.ordinal() : movedType;
     for (int side = 0; side < 2; side++) {
       final boolean perspectiveWhite = side == 0;
-      final int[][] accumulators = perspectiveWhite ? this.whiteAccumulators :
+      final short[][] accumulators = perspectiveWhite ? this.whiteAccumulators :
               this.blackAccumulators;
-      final int[] source = accumulators[from];
-      final int[] target = accumulators[to];
+      final short[] source = accumulators[from];
+      final short[] target = accumulators[to];
       final int removed = Network.featureIndex(perspectiveWhite, white, movedType, origin);
       final int added = Network.featureIndex(perspectiveWhite, white, placedType, destination);
       if (MoveCode.isCastle(move)) {
@@ -1253,10 +1256,10 @@ public final class Board {
    * @param accumulators The accumulators to keep, each {@link #HIDDEN} values.
    * @return The accumulators, twice as many.
    */
-  private static int[][] grownAccumulators(final int[][] accumulators) {
-    final int[][] grown = Arrays.copyOf(accumulators, accumulators.length * 2);
+  private static short[][] grownAccumulators(final short[][] accumulators) {
+    final short[][] grown = Arrays.copyOf(accumulators, accumulators.length * 2);
     for (int slot = accumulators.length; slot < grown.length; slot++) {
-      grown[slot] = new int[HIDDEN];
+      grown[slot] = new short[HIDDEN];
     }
     return grown;
   }

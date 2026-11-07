@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 /**
  * The Network class holds the weights of the evaluation network and computes its output from a
@@ -20,9 +21,15 @@ import java.nio.file.Path;
  * <p>
  * The weights are read from the quantised file the trainer writes (trainer/nnue.py describes the
  * format), and the evaluation is integer arithmetic that reproduces trainer/nnue.py's
- * evaluate_quantised exactly. The default network is read once, from the classpath resource
- * {@value #DEFAULT_NETWORK} or, failing that, the file of that name under the working directory,
- * and is shared read-only by every board and thread.
+ * evaluate_quantised exactly. Accumulators hold 16-bit values, and a network whose accumulator
+ * values could fall outside that range on some board is rejected when it is read. The default
+ * network is read once, from the classpath resource {@value #DEFAULT_NETWORK} or, failing that,
+ * the file of that name under the working directory, and is shared read-only by every board and
+ * thread.
+ * <p>
+ * The arithmetic uses the Vector API, so java must be started with
+ * {@code --add-modules jdk.incubator.vector}; {@link VectorModule#relaunchIfMissing} does that for
+ * a program started without it.
  *
  * @author Aaron Ho
  */
@@ -80,10 +87,10 @@ public final class Network {
   private final int hidden;
 
   /** The feature weights, {@link #INPUTS} rows of {@link #hidden} values, indexed by feature. */
-  private final int[][] featureWeights;
+  private final short[][] featureWeights;
 
   /** The feature biases, {@link #hidden} values. */
-  private final int[] featureBias;
+  private final short[] featureBias;
 
   /** The number of sets of output weights and biases. */
   private final int buckets;
@@ -106,12 +113,24 @@ public final class Network {
   private final int[] outputBias;
 
   /**
+   * The number of products of a clipped value squared and an output weight an int can hold the
+   * sum of.
+   */
+  private final int productsPerLane;
+
+  /**
    * Constructs a network from the contents of a network file.
    *
    * @param data The bytes of the file.
    * @throws IllegalArgumentException If the bytes are not a network file this class reads.
+   * @throws IllegalStateException If the module {@value VectorModule#NAME} is not in the boot
+   *                               layer.
    */
   private Network(final byte[] data) {
+    if (!VectorModule.isPresent()) {
+      throw new IllegalStateException("The evaluation network needs the module " +
+              VectorModule.NAME + ". Start java with --add-modules " + VectorModule.NAME + ".");
+    }
     final ByteBuffer buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
     if (data.length < SINGLE_BUCKET_HEADER_BYTES || buffer.getInt() != MAGIC) {
       throw new IllegalArgumentException("Not a network file.");
@@ -138,6 +157,10 @@ public final class Network {
               inputs + ", hidden " + this.hidden + ", QA " + qa + ", QB " + qb + ", scale " + scale +
               ", buckets " + this.buckets + ".");
     }
+    if (this.hidden % VectorArithmetic.LANES != 0) {
+      throw new IllegalArgumentException("A hidden size of " + this.hidden + " is not a multiple " +
+              "of the " + VectorArithmetic.LANES + " values the arithmetic handles at once.");
+    }
     final int piecesPerBucket = MAX_PIECES / this.buckets;
     this.bucketOfPieceCount = new int[Long.SIZE + 1];
     for (int pieceCount = 0; pieceCount <= Long.SIZE; pieceCount++) {
@@ -150,21 +173,72 @@ public final class Network {
       throw new IllegalArgumentException("A network of hidden size " + this.hidden + " and " +
               this.buckets + " buckets is " + expected + " bytes, found " + data.length + ".");
     }
-    this.featureWeights = new int[INPUTS][];
+    this.featureWeights = new short[INPUTS][];
     for (int feature = 0; feature < INPUTS; feature++) {
       this.featureWeights[feature] = readShorts(buffer, this.hidden);
     }
     this.featureBias = readShorts(buffer, this.hidden);
     this.moverWeights = new int[this.buckets][];
     this.otherWeights = new int[this.buckets][];
+    int largestOutputWeight = 1;
     for (int bucket = 0; bucket < this.buckets; bucket++) {
-      this.moverWeights[bucket] = readShorts(buffer, this.hidden);
-      this.otherWeights[bucket] = readShorts(buffer, this.hidden);
+      this.moverWeights[bucket] = readShortsAsInts(buffer, this.hidden);
+      this.otherWeights[bucket] = readShortsAsInts(buffer, this.hidden);
+      for (int i = 0; i < this.hidden; i++) {
+        largestOutputWeight = Math.max(largestOutputWeight,
+                Math.max(Math.abs(this.moverWeights[bucket][i]),
+                        Math.abs(this.otherWeights[bucket][i])));
+      }
     }
     this.outputBias = new int[this.buckets];
     for (int bucket = 0; bucket < this.buckets; bucket++) {
       this.outputBias[bucket] = buffer.getInt();
     }
+    this.productsPerLane = Integer.MAX_VALUE / (QA * QA * largestOutputWeight);
+    final int largestAccumulator = largestAccumulatorMagnitude();
+    if (largestAccumulator > Short.MAX_VALUE) {
+      throw new IllegalArgumentException("An accumulator value of this network can reach " +
+              largestAccumulator + ", beyond the 16-bit range the accumulators hold.");
+    }
+  }
+
+  /**
+   * Returns a bound on the magnitude of every accumulator value: the largest, over the hidden
+   * units, of the unit's bias magnitude plus the {@value #MAX_PIECES} largest magnitudes of its
+   * feature weights.
+   *
+   * @return The bound.
+   */
+  private int largestAccumulatorMagnitude() {
+    final int[] magnitudes = new int[INPUTS];
+    int largest = 0;
+    for (int unit = 0; unit < this.hidden; unit++) {
+      for (int feature = 0; feature < INPUTS; feature++) {
+        magnitudes[feature] = Math.abs(this.featureWeights[feature][unit]);
+      }
+      Arrays.sort(magnitudes);
+      int bound = Math.abs(this.featureBias[unit]);
+      for (int rank = 0; rank < MAX_PIECES; rank++) {
+        bound += magnitudes[INPUTS - 1 - rank];
+      }
+      largest = Math.max(largest, bound);
+    }
+    return largest;
+  }
+
+  /**
+   * Reads the next values of a buffer as 16-bit integers, advancing its position past them.
+   *
+   * @param buffer The buffer to read, in little-endian order.
+   * @param count The number of values to read.
+   * @return The values.
+   */
+  private static short[] readShorts(final ByteBuffer buffer, final int count) {
+    final short[] values = new short[count];
+    for (int i = 0; i < count; i++) {
+      values[i] = buffer.getShort();
+    }
+    return values;
   }
 
   /**
@@ -174,7 +248,7 @@ public final class Network {
    * @param count The number of values to read.
    * @return The values, widened to ints.
    */
-  private static int[] readShorts(final ByteBuffer buffer, final int count) {
+  private static int[] readShortsAsInts(final ByteBuffer buffer, final int count) {
     final int[] values = new int[count];
     for (int i = 0; i < count; i++) {
       values[i] = buffer.getShort();
@@ -272,7 +346,7 @@ public final class Network {
    *
    * @param accumulator The accumulator, {@link #hidden()} values.
    */
-  public void reset(final int[] accumulator) {
+  public void reset(final short[] accumulator) {
     System.arraycopy(this.featureBias, 0, accumulator, 0, this.hidden);
   }
 
@@ -282,12 +356,8 @@ public final class Network {
    * @param accumulator The accumulator, {@link #hidden()} values.
    * @param feature The feature index.
    */
-  public void add(final int[] accumulator, final int feature) {
-    final int[] row = this.featureWeights[feature];
-    final int size = this.hidden;
-    for (int i = 0; i < size; i++) {
-      accumulator[i] += row[i];
-    }
+  public void add(final short[] accumulator, final int feature) {
+    VectorArithmetic.add(accumulator, this.featureWeights[feature]);
   }
 
   /**
@@ -298,14 +368,10 @@ public final class Network {
    * @param removed The feature index removed.
    * @param added The feature index added.
    */
-  public void move(final int[] source, final int[] destination, final int removed,
+  public void move(final short[] source, final short[] destination, final int removed,
                    final int added) {
-    final int[] removedRow = this.featureWeights[removed];
-    final int[] addedRow = this.featureWeights[added];
-    final int size = this.hidden;
-    for (int i = 0; i < size; i++) {
-      destination[i] = source[i] - removedRow[i] + addedRow[i];
-    }
+    VectorArithmetic.move(source, destination, this.featureWeights[removed],
+            this.featureWeights[added]);
   }
 
   /**
@@ -317,15 +383,10 @@ public final class Network {
    * @param alsoRemoved The second feature index removed.
    * @param added The feature index added.
    */
-  public void capture(final int[] source, final int[] destination, final int removed,
+  public void capture(final short[] source, final short[] destination, final int removed,
                       final int alsoRemoved, final int added) {
-    final int[] removedRow = this.featureWeights[removed];
-    final int[] alsoRemovedRow = this.featureWeights[alsoRemoved];
-    final int[] addedRow = this.featureWeights[added];
-    final int size = this.hidden;
-    for (int i = 0; i < size; i++) {
-      destination[i] = source[i] - removedRow[i] - alsoRemovedRow[i] + addedRow[i];
-    }
+    VectorArithmetic.capture(source, destination, this.featureWeights[removed],
+            this.featureWeights[alsoRemoved], this.featureWeights[added]);
   }
 
   /**
@@ -338,17 +399,11 @@ public final class Network {
    * @param added The first feature index added.
    * @param alsoAdded The second feature index added.
    */
-  public void castle(final int[] source, final int[] destination, final int removed,
+  public void castle(final short[] source, final short[] destination, final int removed,
                      final int alsoRemoved, final int added, final int alsoAdded) {
-    final int[] removedRow = this.featureWeights[removed];
-    final int[] alsoRemovedRow = this.featureWeights[alsoRemoved];
-    final int[] addedRow = this.featureWeights[added];
-    final int[] alsoAddedRow = this.featureWeights[alsoAdded];
-    final int size = this.hidden;
-    for (int i = 0; i < size; i++) {
-      destination[i] = source[i] - removedRow[i] - alsoRemovedRow[i] + addedRow[i]
-              + alsoAddedRow[i];
-    }
+    VectorArithmetic.castle(source, destination, this.featureWeights[removed],
+            this.featureWeights[alsoRemoved], this.featureWeights[added],
+            this.featureWeights[alsoAdded]);
   }
 
   /**
@@ -360,20 +415,11 @@ public final class Network {
    *                   bucket.
    * @return The evaluation in centipawns from the side to move's point of view.
    */
-  public int evaluate(final int[] mover, final int[] other, final int pieceCount) {
+  public int evaluate(final short[] mover, final short[] other, final int pieceCount) {
     final int bucket = bucket(pieceCount);
-    final int[] moverOutput = this.moverWeights[bucket];
-    final int[] otherOutput = this.otherWeights[bucket];
-    final int size = this.hidden;
-    long sum = 0;
-    for (int i = 0; i < size; i++) {
-      final int value = Math.min(Math.max(mover[i], 0), QA);
-      sum += value * value * moverOutput[i];
-    }
-    for (int i = 0; i < size; i++) {
-      final int value = Math.min(Math.max(other[i], 0), QA);
-      sum += value * value * otherOutput[i];
-    }
+    final long sum = VectorArithmetic.squaredClippedProducts(mover, other,
+            this.moverWeights[bucket], this.otherWeights[bucket], (short) QA,
+            this.productsPerLane);
     return (int) ((sum / QA + this.outputBias[bucket]) * SCALE / ((long) QA * QB));
   }
 }

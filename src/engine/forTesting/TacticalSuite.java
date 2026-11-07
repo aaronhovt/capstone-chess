@@ -3,6 +3,7 @@ package engine.forTesting;
 import engine.forBoard.Board;
 import engine.forBoard.BoardUtils;
 import engine.forBoard.Move;
+import engine.forNetwork.VectorModule;
 import engine.forPlayer.forAI.AlphaBeta;
 
 import java.io.OutputStream;
@@ -180,6 +181,7 @@ public class TacticalSuite {
    * @param args The command line arguments, as described by the usage text.
    */
   public static void main(final String[] args) {
+    VectorModule.relaunchIfMissing(TacticalSuite.class, args);
     int depthOverride = NO_DEPTH_OVERRIDE;
     int workerThreads = DEFAULT_WORKER_THREADS;
     Set<Category> categories = EnumSet.allOf(Category.class);

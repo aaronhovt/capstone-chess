@@ -2,6 +2,7 @@ package engine.forUCI;
 
 import engine.forBoard.Board;
 import engine.forBoard.Move;
+import engine.forNetwork.VectorModule;
 import engine.forPlayer.forAI.AlphaBeta;
 import engine.forTesting.FenParser;
 import engine.forTesting.Perft;
@@ -106,12 +107,15 @@ public class UciEngine {
 
   /**
    * Runs the command loop on standard input. Standard output is captured as the protocol channel
-   * and then redirected to standard error before any command is read.
+   * and then redirected to standard error before any command is read. Started without the module
+   * {@value VectorModule#NAME}, runs the engine in a new Java process that has it, as
+   * {@link VectorModule#relaunchIfMissing} describes.
    *
    * @param args The command line arguments, which are ignored.
    * @throws IOException If standard input cannot be read.
    */
   public static void main(final String[] args) throws IOException {
+    VectorModule.relaunchIfMissing(UciEngine.class, args);
     final PrintStream protocol = new PrintStream(new FileOutputStream(FileDescriptor.out), true);
     System.setOut(System.err);
     try (BufferedReader input = new BufferedReader(new InputStreamReader(System.in))) {

@@ -1,6 +1,7 @@
 package engine.forTesting;
 
 import engine.forBoard.Board;
+import engine.forNetwork.VectorModule;
 import engine.forPlayer.forAI.BoardEvaluator;
 import engine.forPlayer.forAI.EndgameBoardEvaluator;
 import engine.forPlayer.forAI.MiddlegameBoardEvaluator;
@@ -138,6 +139,7 @@ public class EvaluationSuite {
    * @param args The command line arguments, as described by the usage text.
    */
   public static void main(final String[] args) {
+    VectorModule.relaunchIfMissing(EvaluationSuite.class, args);
     boolean verbose = false;
     for (final String argument : args) {
       if (VERBOSE_FLAG.equals(argument)) {

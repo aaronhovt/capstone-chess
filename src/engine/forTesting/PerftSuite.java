@@ -2,6 +2,7 @@ package engine.forTesting;
 
 import engine.forBoard.Board;
 import engine.forBoard.ZobristHashing;
+import engine.forNetwork.VectorModule;
 
 import java.util.List;
 import java.util.Map;
@@ -114,6 +115,7 @@ public class PerftSuite {
    * @param args The command line arguments, as described by the usage text.
    */
   public static void main(final String[] args) {
+    VectorModule.relaunchIfMissing(PerftSuite.class, args);
     if (args.length > 0 && DIVIDE_COMMAND.equalsIgnoreCase(args[0])) {
       runDivide(args);
       return;

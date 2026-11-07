@@ -19,6 +19,10 @@ set "GUI_MAIN=engine.engineDriver"
 set "MATCH_MAIN=engine.forTesting.SelfPlayMatch"
 set "CONT=  "
 
+rem The network's arithmetic uses this incubator module, which javac and java resolve only when
+rem --add-modules names it.
+set "VECTOR_MODULE=jdk.incubator.vector"
+
 rem The jar tool writes each archive to a temporary file first. Keeping temporary files under the
 rem output directory lets an antivirus exception on the repo cover them. A revision built by
 rem "build compare" that lacks these lines inherits them.
@@ -219,7 +223,7 @@ call :buildSuite "match" "%MATCH_MAIN%" "src\engine\forTesting\SelfPlayMatch.jav
 echo [compare] engine A is !BASE_LABEL!
 echo [compare] engine B is !TEST_LABEL!
 echo [compare] the engines run under !JAVA_LINE!
-java -cp "%OUT%\match" %MATCH_MAIN% --engine-a "java -jar !BASE_JAR!" --engine-b "java -jar !TEST_JAR!" !MATCH_ARGS!
+java --add-modules %VECTOR_MODULE% -cp "%OUT%\match" %MATCH_MAIN% --engine-a "java --add-modules %VECTOR_MODULE% -jar !BASE_JAR!" --engine-b "java --add-modules %VECTOR_MODULE% -jar !TEST_JAR!" !MATCH_ARGS!
 if errorlevel 1 exit /b 1
 goto :done
 
@@ -288,7 +292,7 @@ exit /b 0
 rem %1 is the output subdirectory, %2 is the entry point source file.
 if exist "%OUT%\%~1" rmdir /s /q "%OUT%\%~1"
 mkdir "%OUT%\%~1"
-"%JDK_BIN%javac" --release %RELEASE% -nowarn -cp "lib\*" -sourcepath src -d "%OUT%\%~1" "%~2"
+"%JDK_BIN%javac" --release %RELEASE% --add-modules %VECTOR_MODULE% -nowarn -cp "lib\*" -sourcepath src -d "%OUT%\%~1" "%~2"
 if errorlevel 1 (
     echo Compilation of %~2 failed. This build targets Java %RELEASE%, so javac must report that version or later.
     exit /b 1
@@ -353,5 +357,5 @@ rem %1 is the output subdirectory, %2 is the main class, %3 is the entry point s
 echo [%~1] compiling
 call :compile "%~1" "%~3" || exit /b 1
 call :copyNetwork "%~1" || exit /b 1
-echo [%~1] run from this directory with: java -cp "%OUT%\%~1" %~2
+echo [%~1] run from this directory with: java --add-modules %VECTOR_MODULE% -cp "%OUT%\%~1" %~2
 exit /b 0

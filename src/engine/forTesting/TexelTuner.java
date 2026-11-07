@@ -1,5 +1,6 @@
 package engine.forTesting;
 
+import engine.forNetwork.VectorModule;
 import engine.forPlayer.forAI.EndgameBoardEvaluator;
 import engine.forPlayer.forAI.EvaluationWeights;
 import engine.forPlayer.forAI.MiddlegameBoardEvaluator;
@@ -218,6 +219,7 @@ public class TexelTuner {
    * @throws Exception If the file cannot be read or a worker fails.
    */
   public static void main(final String[] args) throws Exception {
+    VectorModule.relaunchIfMissing(TexelTuner.class, args);
     Path file = null;
     double k = Double.NaN;
     int limit = Integer.MAX_VALUE;
