@@ -239,12 +239,13 @@ starts no iteration once that share has passed, scaled up while the best move ke
 down once it has held for several iterations, and stops outright at a fixed multiple of it.
 
 Evaluation is a network of 768 inputs, one for each piece type of each colour on each square,
-feeding an accumulator of 256 values for each side, a squared clipped ReLU, and one output. The
-accumulators are updated as moves are made and unmade, and the network is computed in integer
-arithmetic. The network in `nets/` was trained on 71 million positions from the self-play games of
-an earlier network, itself trained on the games of the hand-tuned evaluators. Endings in which one
-side has only its king against enough material to mate are scored by a mop-up rule that drives the
-bare king to the edge, and positions drawn by material are scored zero.
+feeding an accumulator of 512 values for each side, a squared clipped ReLU, and one output, whose
+weights come in eight sets chosen by the number of pieces on the board. The accumulators are updated
+as moves are made and unmade, and the network is computed in integer arithmetic. The network in
+`nets/` was trained on 963 million positions from the self-play games of the second network, which
+was trained on the games of the first, itself trained on the games of the hand-tuned evaluators.
+Endings in which one side has only its king against enough material to mate are scored by a mop-up
+rule that drives the bare king to the edge, and positions drawn by material are scored zero.
 
 In two gauntlets totalling 3,408 games at 60 seconds plus 0.6 seconds a move, played single-threaded
 against Leorik 2.4, 2.5, and 3.0 and Weiss 1.1, 1.2, and 1.4, revision ebc5c2b rated 3126 ± 10 on the
