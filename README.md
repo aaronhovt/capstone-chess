@@ -2,7 +2,7 @@
 
 A chess engine written in Java. It began as a STEM Academy capstone project at Essex High School
 between January 2023 and May 2025 and has been developed continuously since. The repository holds
-24,212 lines of Java and Javadoc across 57 source files and carries three front ends: a Swing
+22,598 lines of Java and Javadoc across 59 source files and carries three front ends: a Swing
 interface for playing the engine by hand, a UCI adapter that lets another program drive it, and a
 testing package that validates move generation, search, and evaluation. It also holds the PyTorch
 trainer for the engine's evaluation network.
@@ -46,6 +46,9 @@ It answers `uci`, `isready`, `ucinewgame`, `setoption`, `position`, `go`, and `q
 command accepts `startpos` or `fen` with an optional `moves` list, and `go` accepts `depth`, `nodes`,
 and `movetime` limits as well as the `wtime`, `btime`, `winc`, `binc`, and `movestogo` clock.
 `Hash` and `Threads` are exposed as options.
+
+Each jar started without `--add-modules jdk.incubator.vector` starts Java again with it, so both
+start faster as `java --add-modules jdk.incubator.vector -jar <jar>`.
 
 A release documents one build. The repository moves ahead of it between releases, so build from
 source to run current code.
@@ -213,15 +216,15 @@ into a virtual environment at the repository root.
 
 | Package | Lines | Responsibility |
 | --- | --- | --- |
-| `engine` | 345 | The alliance type and the entry point that opens the interface. |
-| `engine.forBoard` | 3,287 | Board state with piece bitboards, the move class and packed int moves, the int move generator, attack detection, make and unmake, Zobrist hashing, and the evaluation network's accumulators, kept as moves are made and unmade. |
-| `engine.forPiece` | 1,154 | The piece types and the squares each one attacks and moves to. |
-| `engine.forPlayer` | 372 | Per-colour move lists and check, mate, and castling state. |
-| `engine.forPlayer.forAI` | 8,538 | Search, transposition table, evaluation cache, the mop-up scoring of bare king endings, static exchange evaluation, and search statistics, along with the hand-tuned middlegame, endgame, and tapered evaluators, their weights, and their pawn structure caches, which only the testing tools still use. |
-| `engine.forNetwork` | 300 | The evaluation network: reading its weights from the trainer's file format and computing its output from a pair of accumulators. |
-| `engine.forGUI` | 1,080 | The Swing interface: the board view, move history, search report strip, and game setup dialog. |
-| `engine.forTesting` | 8,634 | Perft, tactical, evaluation, and bench suites, FEN parsing and writing, the opening book, the self-play harness with its match statistics and adjudication, the search statistics and training data runs, and the Texel tuner. |
-| `engine.forUCI` | 502 | The UCI adapter. |
+| `engine` | 295 | The alliance type and the entry point that opens the interface. |
+| `engine.forBoard` | 3,365 | Board state with piece bitboards, the move class and packed int moves, the int move generator, attack detection with magic bitboard tables for the sliding pieces, make and unmake, Zobrist hashing, and the evaluation network's accumulators, kept as moves are made and unmade. |
+| `engine.forPiece` | 1,045 | The piece types and the squares each one attacks and moves to. |
+| `engine.forPlayer` | 346 | Per-colour move lists and check, mate, and castling state. |
+| `engine.forPlayer.forAI` | 7,512 | Search, transposition table, evaluation cache, the mop-up scoring of bare king endings, static exchange evaluation, and search statistics, along with the hand-tuned middlegame, endgame, and tapered evaluators, their weights, and their pawn structure caches, which only the testing tools still use. |
+| `engine.forNetwork` | 627 | The evaluation network: reading its weights from the trainer's file format, updating its 16-bit accumulators and computing its output from a pair of them with the Vector API, and starting Java again with the Vector API module when it is missing. |
+| `engine.forGUI` | 953 | The Swing interface: the board view, move history, search report strip, and game setup dialog. |
+| `engine.forTesting` | 7,990 | Perft, tactical, evaluation, and bench suites, FEN parsing and writing, the opening book, the self-play harness with its match statistics and adjudication, the search statistics and training data runs, and the Texel tuner. |
+| `engine.forUCI` | 465 | The UCI adapter. |
 
 Outside the source tree, `art/` holds the piece artwork, `book/` holds the opening book, `lib/` holds
 the Batik jars the interface renders the artwork with, `nets/` holds the evaluation network the jars
@@ -230,8 +233,9 @@ engine's speed from the logs of a move time match.
 
 ## Current Capability
 
-Move generation runs on bitboards, matches the published perft counts at the tested depths, and
-passes the hash consistency, make and unmake, FEN round trip, and network accumulator walks.
+Move generation runs on bitboards, with magic bitboard tables for the sliding pieces, matches the
+published perft counts at the tested depths, and passes the hash consistency, make and unmake, FEN
+round trip, and network accumulator walks.
 
 Search is a negamax alpha-beta with principal variation search, iterative deepening, aspiration
 windows, Lazy SMP across threads, a transposition table, quiescence search with delta pruning, null
@@ -246,16 +250,17 @@ down once it has held for several iterations, and stops outright at a fixed mult
 Evaluation is a network of 768 inputs, one for each piece type of each colour on each square,
 feeding an accumulator of 512 values for each side, a squared clipped ReLU, and one output, whose
 weights come in eight sets chosen by the number of pieces on the board. The accumulators are updated
-as moves are made and unmade, and the network is computed in integer arithmetic. The network in
-`nets/` was trained on 963 million positions from the self-play games of the second network, which
-was trained on the games of the first, itself trained on the games of the hand-tuned evaluators.
-Endings in which one side has only its king against enough material to mate are scored by a mop-up
-rule that drives the bare king to the edge, and positions drawn by material are scored zero.
+as moves are made and unmade, and the network is computed in integer arithmetic on 16-bit
+accumulators with the Vector API. The network in `nets/` was trained on 963 million positions from
+the self-play games of the second network, which was trained on the games of the first, itself
+trained on the games of the hand-tuned evaluators. Endings in which one side has only its king
+against enough material to mate are scored by a mop-up rule that drives the bare king to the edge,
+and positions drawn by material are scored zero.
 
-In two gauntlets totalling 3,408 games at 60 seconds plus 0.6 seconds a move, played single-threaded
-against Leorik 2.4, 2.5, and 3.0 and Weiss 1.1, 1.2, and 1.4, revision ebc5c2b rated 3126 ± 10 on the
-CCRL Blitz scale, fitted with Ordo using those six engines' CCRL Blitz ratings as anchors. Two of the
-anchors are rated above it and four below. The self-play harness measures the difference between two
+In a gauntlet of 2,408 games at 60 seconds plus 0.6 seconds a move, played single-threaded against
+Leorik 3.0 and 3.1, Weiss 2.0, and Seer 2.3.0, revision 56ed436 rated 3308 ± 10 on the CCRL Blitz
+scale, fitted with Ordo using those four engines' CCRL Blitz ratings as anchors. Leorik 3.0 is rated
+below it and the other three above. The self-play harness measures the difference between two
 revisions of this engine and nothing else, so it shows whether a change helped, while a gauntlet
 against rated engines is what says where the engine stands.
 
